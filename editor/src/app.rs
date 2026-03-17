@@ -86,7 +86,10 @@ impl eframe::App for EditorApp {
                         // Transform
                         if let Some(ref tf) = entity.components.transform {
                             ui.collapsing("Transform", |ui| {
-                                ui.label(format!("Position: ({:.1}, {:.1})", tf.position.x, tf.position.y));
+                                ui.label(format!(
+                                    "Position: ({:.1}, {:.1})",
+                                    tf.position.x, tf.position.y
+                                ));
                                 ui.label(format!("Scale: ({:.2}, {:.2})", tf.scale.x, tf.scale.y));
                                 ui.label(format!("Rotation: {:.1}°", tf.rotation.to_degrees()));
                             });
@@ -135,7 +138,8 @@ impl eframe::App for EditorApp {
             let available = ui.available_size();
 
             // Viewport placeholder
-            let (_response, painter) = ui.allocate_painter(available, egui::Sense::click_and_drag());
+            let (_response, painter) =
+                ui.allocate_painter(available, egui::Sense::click_and_drag());
 
             // Draw dark background
             painter.rect_filled(
@@ -148,7 +152,10 @@ impl eframe::App for EditorApp {
             painter.text(
                 painter.clip_rect().center(),
                 egui::Align2::CENTER_CENTER,
-                format!("GPU Viewport\n{:.2}s | Frame {}", self.time.global_time, self.time.frame_index),
+                format!(
+                    "GPU Viewport\n{:.2}s | Frame {}",
+                    self.time.global_time, self.time.frame_index
+                ),
                 egui::FontId::proportional(16.0),
                 egui::Color32::from_rgb(120, 120, 140),
             );

@@ -80,9 +80,8 @@ pub fn transform_system(world: &mut World, _time: &TimeState) {
             continue;
         }
         if let Some(tf) = &entity.components.transform {
-            entity.resolved.world_matrix = Mat4::from_2d(
-                tf.position, tf.scale, tf.rotation, tf.anchor,
-            );
+            entity.resolved.world_matrix =
+                Mat4::from_2d(tf.position, tf.scale, tf.rotation, tf.anchor);
         } else {
             entity.resolved.world_matrix = Mat4::identity();
         }

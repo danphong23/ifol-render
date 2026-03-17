@@ -3,7 +3,9 @@
 use serde::{Deserialize, Serialize};
 
 /// 2D vector.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(
+    Debug, Clone, Copy, Default, Serialize, Deserialize, bytemuck::Pod, bytemuck::Zeroable,
+)]
 #[repr(C)]
 pub struct Vec2 {
     pub x: f32,
@@ -11,7 +13,9 @@ pub struct Vec2 {
 }
 
 /// 3D vector.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(
+    Debug, Clone, Copy, Default, Serialize, Deserialize, bytemuck::Pod, bytemuck::Zeroable,
+)]
 #[repr(C)]
 pub struct Vec3 {
     pub x: f32,
@@ -20,7 +24,9 @@ pub struct Vec3 {
 }
 
 /// 4D vector.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(
+    Debug, Clone, Copy, Default, Serialize, Deserialize, bytemuck::Pod, bytemuck::Zeroable,
+)]
 #[repr(C)]
 pub struct Vec4 {
     pub x: f32,
@@ -42,10 +48,7 @@ impl Default for Mat4 {
 impl Mat4 {
     pub fn identity() -> Self {
         Self([
-            1.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 1.0,
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         ])
     }
 
@@ -59,10 +62,22 @@ impl Mat4 {
         let ty = position.y - anchor.x * scale.x * sin - anchor.y * scale.y * cos;
 
         Self([
-            scale.x * cos,  scale.x * sin, 0.0, 0.0,
-            -scale.y * sin, scale.y * cos, 0.0, 0.0,
-            0.0,            0.0,           1.0, 0.0,
-            tx,             ty,            0.0, 1.0,
+            scale.x * cos,
+            scale.x * sin,
+            0.0,
+            0.0,
+            -scale.y * sin,
+            scale.y * cos,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            tx,
+            ty,
+            0.0,
+            1.0,
         ])
     }
 }

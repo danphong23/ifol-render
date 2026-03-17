@@ -3,9 +3,9 @@
 //! Consumers provide a `SceneDescription` (JSON). The engine parses it into
 //! an internal `World` with entities and components.
 
-use serde::{Deserialize, Serialize};
 use crate::color::ColorSpace;
 use crate::ecs::{Entity, World};
+use serde::{Deserialize, Serialize};
 
 /// Top-level scene description — the API contract between consumers and the engine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,7 +25,9 @@ pub struct SceneDescription {
     pub shaders: Vec<ShaderDef>,
 }
 
-fn default_version() -> String { "1.0".into() }
+fn default_version() -> String {
+    "1.0".into()
+}
 
 /// Global render settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,7 +47,9 @@ pub struct RenderSettings {
     pub output_color_space: ColorSpace,
 }
 
-fn default_fps() -> f64 { 30.0 }
+fn default_fps() -> f64 {
+    30.0
+}
 
 /// A custom shader definition provided by the consumer.
 #[derive(Debug, Clone, Serialize, Deserialize)]

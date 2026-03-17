@@ -24,9 +24,9 @@ impl ResourceManager {
         key: &str,
         desc: &wgpu::TextureDescriptor,
     ) -> &wgpu::Texture {
-        self.texture_pool.entry(key.to_string()).or_insert_with(|| {
-            device.create_texture(desc)
-        })
+        self.texture_pool
+            .entry(key.to_string())
+            .or_insert_with(|| device.create_texture(desc))
     }
 
     /// Release a texture back to the pool.

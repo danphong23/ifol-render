@@ -70,10 +70,15 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Render { scene, fps, width, height, output } => {
+        Commands::Render {
+            scene,
+            fps,
+            width,
+            height,
+            output,
+        } => {
             log::info!("Rendering scene: {:?} at {fps}fps", scene);
-            let json = std::fs::read_to_string(&scene)
-                .expect("Failed to read scene file");
+            let json = std::fs::read_to_string(&scene).expect("Failed to read scene file");
 
             let scene_desc = ifol_render_core::scene::SceneDescription::from_json(&json)
                 .expect("Failed to parse scene JSON");
@@ -107,23 +112,28 @@ fn main() {
         }
 
         Commands::Info { scene } => {
-            let json = std::fs::read_to_string(&scene)
-                .expect("Failed to read scene file");
+            let json = std::fs::read_to_string(&scene).expect("Failed to read scene file");
             let desc = ifol_render_core::scene::SceneDescription::from_json(&json)
                 .expect("Failed to parse scene JSON");
 
             println!("Scene: v{}", desc.version);
-            println!("Resolution: {}x{}", desc.settings.width, desc.settings.height);
+            println!(
+                "Resolution: {}x{}",
+                desc.settings.width, desc.settings.height
+            );
             println!("FPS: {}", desc.settings.fps);
             println!("Duration: {}s", desc.settings.duration);
             println!("Entities: {}", desc.entities.len());
             println!("Custom shaders: {}", desc.shaders.len());
         }
 
-        Commands::Preview { scene, timestamp, output } => {
+        Commands::Preview {
+            scene,
+            timestamp,
+            output,
+        } => {
             log::info!("Preview at {timestamp}s → {:?}", output);
-            let json = std::fs::read_to_string(&scene)
-                .expect("Failed to read scene file");
+            let json = std::fs::read_to_string(&scene).expect("Failed to read scene file");
             let desc = ifol_render_core::scene::SceneDescription::from_json(&json)
                 .expect("Failed to parse scene JSON");
 
@@ -132,14 +142,15 @@ fn main() {
             time.seek(timestamp);
             ifol_render_core::ecs::pipeline::run(&mut world, &time);
 
-            let mut renderer = ifol_render_gpu::Renderer::new_headless(
-                &ifol_render_core::scene::RenderSettings {
-                    width: 1920, height: 1080, fps: 30.0,
+            let mut renderer =
+                ifol_render_gpu::Renderer::new_headless(&ifol_render_core::scene::RenderSettings {
+                    width: 1920,
+                    height: 1080,
+                    fps: 30.0,
                     duration: 0.0,
                     color_space: Default::default(),
                     output_color_space: Default::default(),
-                },
-            );
+                });
             let pixels = renderer.render_frame(&world, &time);
             std::fs::write(&output, &pixels).expect("Failed to write output");
             log::info!("Preview saved: {} bytes", pixels.len());

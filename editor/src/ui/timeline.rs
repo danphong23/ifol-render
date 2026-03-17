@@ -25,10 +25,8 @@ pub fn draw(ui: &mut egui::Ui, world: &World, time: &mut TimeState, playing: &mu
 
     // Timeline tracks
     let available = ui.available_size();
-    let (_response, painter) = ui.allocate_painter(
-        egui::Vec2::new(available.x, 60.0),
-        egui::Sense::click(),
-    );
+    let (_response, painter) =
+        ui.allocate_painter(egui::Vec2::new(available.x, 60.0), egui::Sense::click());
 
     let rect = painter.clip_rect();
     let total_duration = 30.0_f64; // TODO: from scene settings
@@ -41,7 +39,8 @@ pub fn draw(ui: &mut egui::Ui, world: &World, time: &mut TimeState, playing: &mu
     for (i, entity) in world.entities.iter().enumerate() {
         if let Some(ref tl) = entity.components.timeline {
             let x_start = rect.left() + (tl.start_time / total_duration) as f32 * rect.width();
-            let x_end = rect.left() + ((tl.start_time + tl.duration) / total_duration) as f32 * rect.width();
+            let x_end = rect.left()
+                + ((tl.start_time + tl.duration) / total_duration) as f32 * rect.width();
             let y = rect.top() + 4.0 + i as f32 * (track_height + 2.0);
 
             let clip_rect = egui::Rect::from_min_max(
@@ -70,7 +69,10 @@ pub fn draw(ui: &mut egui::Ui, world: &World, time: &mut TimeState, playing: &mu
     // Playhead
     let playhead_x = rect.left() + (time.global_time / total_duration) as f32 * rect.width();
     painter.line_segment(
-        [egui::Pos2::new(playhead_x, rect.top()), egui::Pos2::new(playhead_x, rect.bottom())],
+        [
+            egui::Pos2::new(playhead_x, rect.top()),
+            egui::Pos2::new(playhead_x, rect.bottom()),
+        ],
         egui::Stroke::new(2.0, egui::Color32::RED),
     );
 }

@@ -1,8 +1,8 @@
 //! ECS pipeline — runs all systems in the correct order.
 
+use super::systems;
 use crate::ecs::World;
 use crate::time::TimeState;
-use super::systems;
 
 /// Run all ECS systems for a single frame.
 pub fn run(world: &mut World, time: &TimeState) {

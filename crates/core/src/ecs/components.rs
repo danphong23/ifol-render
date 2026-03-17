@@ -1,8 +1,8 @@
 //! All component types available to entities.
 
-use serde::{Deserialize, Serialize};
 use crate::color::Color4;
 use crate::types::{Keyframe, Vec2};
+use serde::{Deserialize, Serialize};
 
 // ══════════════════════════════════════
 // Source Components
@@ -21,7 +21,9 @@ pub struct VideoSource {
     pub playback_rate: f64,
 }
 
-fn default_playback_rate() -> f64 { 1.0 }
+fn default_playback_rate() -> f64 {
+    1.0
+}
 
 /// Image file source.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,8 +48,12 @@ pub struct TextSource {
     pub italic: bool,
 }
 
-fn default_font() -> String { "Inter".into() }
-fn default_font_size() -> f32 { 48.0 }
+fn default_font() -> String {
+    "Inter".into()
+}
+fn default_font_size() -> f32 {
+    48.0
+}
 
 /// Solid color fill source.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,9 +92,15 @@ pub struct Transform {
     pub anchor: Vec2,
 }
 
-fn default_position() -> Vec2 { Vec2 { x: 0.0, y: 0.0 } }
-fn default_scale() -> Vec2 { Vec2 { x: 1.0, y: 1.0 } }
-fn default_anchor() -> Vec2 { Vec2 { x: 0.5, y: 0.5 } }
+fn default_position() -> Vec2 {
+    Vec2 { x: 0.0, y: 0.0 }
+}
+fn default_scale() -> Vec2 {
+    Vec2 { x: 1.0, y: 1.0 }
+}
+fn default_anchor() -> Vec2 {
+    Vec2 { x: 0.5, y: 0.5 }
+}
 
 impl Default for Transform {
     fn default() -> Self {
@@ -121,8 +133,12 @@ pub struct ColorAdjust {
     pub temperature: f32,
 }
 
-fn one() -> f32 { 1.0 }
-fn default_temperature() -> f32 { 6500.0 }
+fn one() -> f32 {
+    1.0
+}
+fn default_temperature() -> f32 {
+    6500.0
+}
 
 impl Default for ColorAdjust {
     fn default() -> Self {
@@ -145,7 +161,9 @@ pub struct Animation {
 impl Animation {
     /// Evaluate a property at the given time (relative to entity start).
     pub fn evaluate(&self, property: &str, time: f64) -> Option<f64> {
-        let relevant: Vec<&Keyframe> = self.keyframes.iter()
+        let relevant: Vec<&Keyframe> = self
+            .keyframes
+            .iter()
             .filter(|k| k.property == property)
             .collect();
 

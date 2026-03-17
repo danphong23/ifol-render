@@ -27,18 +27,25 @@ impl GpuEngine {
             .expect("Failed to find GPU adapter");
 
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("ifol-render device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::default(),
-            }, None)
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    label: Some("ifol-render device"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::default(),
+                    memory_hints: wgpu::MemoryHints::default(),
+                },
+                None,
+            )
             .await
             .expect("Failed to create GPU device");
 
         let output_texture = Some(device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Output"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -49,6 +56,14 @@ impl GpuEngine {
 
         log::info!("GPU engine initialized: {:?}", adapter.get_info().name);
 
-        Self { instance, adapter, device, queue, width, height, output_texture }
+        Self {
+            instance,
+            adapter,
+            device,
+            queue,
+            width,
+            height,
+            output_texture,
+        }
     }
 }

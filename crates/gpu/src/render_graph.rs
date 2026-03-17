@@ -42,7 +42,11 @@ impl RenderGraph {
         });
 
         for pass in &self.passes {
-            let mut ctx = PassContext { device, queue, encoder: &mut encoder };
+            let mut ctx = PassContext {
+                device,
+                queue,
+                encoder: &mut encoder,
+            };
             pass.execute(&mut ctx);
         }
 

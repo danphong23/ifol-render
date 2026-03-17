@@ -17,7 +17,10 @@ pub struct TimeState {
 
 impl TimeState {
     pub fn new(fps: f64) -> Self {
-        Self { fps, ..Default::default() }
+        Self {
+            fps,
+            ..Default::default()
+        }
     }
 
     /// Advance to the next frame.

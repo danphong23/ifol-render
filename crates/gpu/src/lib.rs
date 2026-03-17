@@ -8,9 +8,9 @@
 //! - **Render Passes**: Composite, text, effects
 
 pub mod engine;
+pub mod passes;
 pub mod render_graph;
 pub mod resource_manager;
-pub mod passes;
 
 use ifol_render_core::ecs::World;
 use ifol_render_core::scene::RenderSettings;
@@ -27,7 +27,8 @@ impl Renderer {
     /// Create a new headless renderer (for CLI/backend).
     pub fn new_headless(settings: &RenderSettings) -> Self {
         let engine = pollster::block_on(engine::GpuEngine::new_headless(
-            settings.width, settings.height,
+            settings.width,
+            settings.height,
         ));
         Self { engine }
     }
@@ -46,9 +47,9 @@ impl Renderer {
 
         // Clear to dark background
         for chunk in pixels.chunks_exact_mut(4) {
-            chunk[0] = 30;  // R
-            chunk[1] = 30;  // G
-            chunk[2] = 40;  // B
+            chunk[0] = 30; // R
+            chunk[1] = 30; // G
+            chunk[2] = 40; // B
             chunk[3] = 255; // A
         }
 

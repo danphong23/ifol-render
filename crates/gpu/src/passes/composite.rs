@@ -1,11 +1,13 @@
 //! Composite pass — draws textured quads with transform and opacity.
 
-use super::super::render_graph::{RenderPass, PassContext};
+use super::super::render_graph::{PassContext, RenderPass};
 
 pub struct CompositePass;
 
 impl RenderPass for CompositePass {
-    fn name(&self) -> &str { "composite" }
+    fn name(&self) -> &str {
+        "composite"
+    }
 
     fn execute(&self, _ctx: &mut PassContext) {
         // TODO: For each visible entity (sorted by layer):

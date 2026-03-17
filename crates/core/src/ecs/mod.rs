@@ -7,10 +7,10 @@ pub mod components;
 pub mod pipeline;
 pub mod systems;
 
-use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
-use crate::types::Mat4;
 use crate::time::EntityTime;
+use crate::types::Mat4;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Unique identifier for an entity.
 pub type EntityId = String;
@@ -100,12 +100,17 @@ impl World {
 
     /// Get an entity by ID.
     pub fn get(&self, id: &str) -> Option<&Entity> {
-        self.id_index.get(id).and_then(|&idx| self.entities.get(idx))
+        self.id_index
+            .get(id)
+            .and_then(|&idx| self.entities.get(idx))
     }
 
     /// Get a mutable entity by ID.
     pub fn get_mut(&mut self, id: &str) -> Option<&mut Entity> {
-        self.id_index.get(id).copied().and_then(|idx| self.entities.get_mut(idx))
+        self.id_index
+            .get(id)
+            .copied()
+            .and_then(|idx| self.entities.get_mut(idx))
     }
 
     /// Rebuild the ID index (call after deserialization).
@@ -118,7 +123,9 @@ impl World {
 
     /// Get entities sorted by layer order.
     pub fn sorted_by_layer(&self) -> Vec<&Entity> {
-        let mut sorted: Vec<&Entity> = self.entities.iter()
+        let mut sorted: Vec<&Entity> = self
+            .entities
+            .iter()
             .filter(|e| e.resolved.visible)
             .collect();
         sorted.sort_by_key(|e| e.resolved.layer);

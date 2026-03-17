@@ -37,65 +37,85 @@ pub struct Color4 {
 
 impl Default for Color4 {
     fn default() -> Self {
-        Self { r: 0.0, g: 0.0, b: 0.0, a: 1.0, space: ColorSpace::Srgb }
+        Self {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+            space: ColorSpace::Srgb,
+        }
     }
 }
 
 impl Color4 {
     pub fn new(r: f32, g: f32, b: f32, a: f32) -> Self {
-        Self { r, g, b, a, space: ColorSpace::Srgb }
+        Self {
+            r,
+            g,
+            b,
+            a,
+            space: ColorSpace::Srgb,
+        }
     }
 
     pub fn white() -> Self {
-        Self { r: 1.0, g: 1.0, b: 1.0, a: 1.0, space: ColorSpace::Srgb }
+        Self {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+            space: ColorSpace::Srgb,
+        }
     }
 
     /// Convert this color to the target color space.
-    pub fn to_space(&self, target: ColorSpace) -> Self {
+    pub fn to_space(self, target: ColorSpace) -> Self {
         if self.space == target {
-            return *self;
+            return self;
         }
 
         // Step 1: Convert to Linear sRGB (common intermediate)
-        let linear = self.to_linear();
+        let linear = self.into_linear();
 
         // Step 2: Convert from Linear sRGB to target
-        linear.from_linear(target)
+        linear.into_target(target)
     }
 
     /// Convert to Linear sRGB.
-    fn to_linear(&self) -> Self {
+    fn into_linear(self) -> Self {
         match self.space {
-            ColorSpace::LinearSrgb => *self,
-            ColorSpace::Srgb | ColorSpace::Rec709 => {
-                Self {
-                    r: srgb_to_linear(self.r),
-                    g: srgb_to_linear(self.g),
-                    b: srgb_to_linear(self.b),
-                    a: self.a,
-                    space: ColorSpace::LinearSrgb,
-                }
-            }
+            ColorSpace::LinearSrgb => self,
+            ColorSpace::Srgb | ColorSpace::Rec709 => Self {
+                r: srgb_to_linear(self.r),
+                g: srgb_to_linear(self.g),
+                b: srgb_to_linear(self.b),
+                a: self.a,
+                space: ColorSpace::LinearSrgb,
+            },
             // TODO: implement full matrix transforms for ACEScg, Rec2020, DisplayP3
-            _ => Self { space: ColorSpace::LinearSrgb, ..*self },
+            _ => Self {
+                space: ColorSpace::LinearSrgb,
+                ..self
+            },
         }
     }
 
     /// Convert from Linear sRGB to target space.
-    fn from_linear(&self, target: ColorSpace) -> Self {
+    fn into_target(self, target: ColorSpace) -> Self {
         match target {
-            ColorSpace::LinearSrgb => *self,
-            ColorSpace::Srgb | ColorSpace::Rec709 => {
-                Self {
-                    r: linear_to_srgb(self.r),
-                    g: linear_to_srgb(self.g),
-                    b: linear_to_srgb(self.b),
-                    a: self.a,
-                    space: target,
-                }
-            }
+            ColorSpace::LinearSrgb => self,
+            ColorSpace::Srgb | ColorSpace::Rec709 => Self {
+                r: linear_to_srgb(self.r),
+                g: linear_to_srgb(self.g),
+                b: linear_to_srgb(self.b),
+                a: self.a,
+                space: target,
+            },
             // TODO: implement full matrix transforms
-            _ => Self { space: target, ..*self },
+            _ => Self {
+                space: target,
+                ..self
+            },
         }
     }
 }
