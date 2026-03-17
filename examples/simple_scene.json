@@ -1,0 +1,89 @@
+{
+    "version": "1.0",
+    "settings": {
+        "width": 1920,
+        "height": 1080,
+        "fps": 30,
+        "duration": 10.0,
+        "colorSpace": "linearSrgb",
+        "outputColorSpace": "srgb"
+    },
+    "entities": [
+        {
+            "id": "background",
+            "components": {
+                "colorSource": {
+                    "color": { "r": 0.1, "g": 0.1, "b": 0.15, "a": 1.0 }
+                },
+                "timeline": {
+                    "startTime": 0.0,
+                    "duration": 10.0,
+                    "layer": 0
+                },
+                "transform": {
+                    "position": [960, 540],
+                    "scale": [1920, 1080]
+                }
+            }
+        },
+        {
+            "id": "main_video",
+            "components": {
+                "videoSource": {
+                    "path": "assets/sample.mp4",
+                    "trimStart": 0.0,
+                    "playbackRate": 1.0
+                },
+                "timeline": {
+                    "startTime": 0.0,
+                    "duration": 10.0,
+                    "layer": 1
+                },
+                "transform": {
+                    "position": [960, 540],
+                    "scale": [1.0, 1.0],
+                    "rotation": 0.0,
+                    "anchor": [0.5, 0.5]
+                },
+                "opacity": 1.0,
+                "color": {
+                    "brightness": 0.05,
+                    "contrast": 1.1,
+                    "saturation": 1.2,
+                    "temperature": 6500
+                }
+            }
+        },
+        {
+            "id": "title_text",
+            "components": {
+                "textSource": {
+                    "content": "Hello, ifol-render!",
+                    "font": "Inter",
+                    "fontSize": 64,
+                    "color": { "r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0 }
+                },
+                "timeline": {
+                    "startTime": 1.0,
+                    "duration": 4.0,
+                    "layer": 2
+                },
+                "transform": {
+                    "position": [960, 200],
+                    "scale": [1.0, 1.0]
+                },
+                "animation": {
+                    "keyframes": [
+                        { "time": 0.0, "property": "opacity", "value": 0.0, "easing": "easeOut" },
+                        { "time": 0.5, "property": "opacity", "value": 1.0, "easing": "linear" },
+                        { "time": 3.5, "property": "opacity", "value": 1.0, "easing": "easeIn" },
+                        { "time": 4.0, "property": "opacity", "value": 0.0, "easing": "linear" },
+                        { "time": 0.0, "property": "transform.position.y", "value": 220, "easing": "easeOut" },
+                        { "time": 0.5, "property": "transform.position.y", "value": 200, "easing": "linear" }
+                    ]
+                }
+            }
+        }
+    ],
+    "shaders": []
+}

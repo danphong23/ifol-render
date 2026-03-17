@@ -1,0 +1,19 @@
+[package]
+name = "ifol-render-editor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Standalone GUI editor for ifol-render — entity inspector, timeline, viewport."
+
+[[bin]]
+name = "ifol-editor"
+path = "src/main.rs"
+
+[dependencies]
+ifol-render-core = { path = "../crates/core" }
+ifol-render-gpu = { path = "../crates/gpu" }
+eframe = { workspace = true }
+egui = { workspace = true }
+env_logger = { workspace = true }
+log = { workspace = true }
+serde_json = { workspace = true }

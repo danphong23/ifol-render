@@ -1,0 +1,19 @@
+[package]
+name = "ifol-render-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WASM target for ifol-render — browser preview via WebGPU."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ifol-render-core = { path = "../core" }
+ifol-render-gpu = { path = "../gpu" }
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Window"] }
+js-sys = "0.3"
+serde-wasm-bindgen = "0.6"
+log = { workspace = true }
+wgpu = { workspace = true }

@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/gpu",
+    "crates/wasm",
+    "crates/cli",
+    "editor",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nicengi/ifol-render"
+description = "A standalone, extensible GPU rendering engine for video compositing, animation, and real-time graphics."
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Core
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+env_logger = "0.11"
+thiserror = "2"
+bytemuck = { version = "1", features = ["derive"] }
+
+# GPU
+wgpu = "24"
+pollster = "0.4"
+
+# Editor
+egui = "0.31"
+eframe = { version = "0.31", features = ["wgpu"] }
+egui_wgpu = "0.31"
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }

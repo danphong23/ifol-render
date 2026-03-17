@@ -1,0 +1,14 @@
+[package]
+name = "ifol-render-gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GPU rendering backend using wgpu for ifol-render."
+
+[dependencies]
+ifol-render-core = { path = "../core" }
+wgpu = { workspace = true }
+pollster = { workspace = true }
+bytemuck = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }
