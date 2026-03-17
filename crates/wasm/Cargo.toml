@@ -9,8 +9,7 @@ description = "WASM target for ifol-render — browser preview via WebGPU."
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-ifol-render-core = { path = "../core" }
-ifol-render-gpu = { path = "../gpu" }
+ifol-render-core = { path = "../../core" }
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Window"] }
 js-sys = "0.3"

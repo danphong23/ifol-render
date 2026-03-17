@@ -12,8 +12,8 @@ echo Usage: dev.bat [editor^|info^|preview^|build^|test]
 goto :eof
 
 :editor
-echo Starting ifol-render editor...
-cargo run -p ifol-render-editor
+echo Starting ifol-render studio...
+cargo run -p ifol-render-studio
 goto :eof
 
 :info

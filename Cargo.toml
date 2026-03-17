@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/core",
-    "crates/gpu",
+    "render",
+    "core",
+    "studio",
     "crates/wasm",
     "crates/cli",
-    "editor",
 ]
 
 [workspace.package]

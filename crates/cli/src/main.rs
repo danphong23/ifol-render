@@ -1,5 +1,7 @@
 //! ifol-render CLI — headless rendering and export.
 //!
+//! A third-party consumer that only depends on ifol-render-core.
+//!
 //! Usage:
 //!   ifol-render render --scene scene.json --fps 30 --output output.raw
 //!   ifol-render info --scene scene.json
@@ -77,14 +79,17 @@ fn main() {
 
             let mut world = scene_desc.into_world();
             let mut time = ifol_render_core::time::TimeState::new(fps);
-            let mut renderer = ifol_render_gpu::Renderer::new_headless(&settings);
+            // Use core's re-exported Renderer (no direct GPU dependency)
+            let mut renderer =
+                ifol_render_core::Renderer::new(settings.width, settings.height);
 
             let total_frames = (settings.duration * fps) as u64;
 
             for frame in 0..total_frames {
                 time.seek(frame as f64 / fps);
-                ifol_render_core::ecs::pipeline::run(&mut world, &time);
-                let pixels = renderer.render_frame(&world, &time);
+                let pixels = ifol_render_core::ecs::pipeline::render_frame(
+                    &mut world, &time, &settings, &mut renderer,
+                );
 
                 if output == "pipe:1" {
                     use std::io::Write;
@@ -133,11 +138,12 @@ fn main() {
             let mut world = desc.into_world();
             let mut time = ifol_render_core::time::TimeState::new(settings.fps);
             time.seek(timestamp);
-            ifol_render_core::ecs::pipeline::run(&mut world, &time);
 
-            let mut renderer = ifol_render_gpu::Renderer::new_headless(&settings);
+            // Use core's re-exported Renderer
+            let mut renderer =
+                ifol_render_core::Renderer::new(settings.width, settings.height);
 
-            // Load image sources
+            // Load image sources through core's re-exported API
             for entity in &world.entities {
                 if let Some(ref img) = entity.components.image_source {
                     if let Err(e) = renderer.load_image(&entity.id, &img.path) {
@@ -146,11 +152,13 @@ fn main() {
                 }
             }
 
-            let pixels = renderer.render_frame(&world, &time);
+            let pixels = ifol_render_core::ecs::pipeline::render_frame(
+                &mut world, &time, &settings, &mut renderer,
+            );
 
             let out_path = output.to_str().unwrap();
             if out_path.ends_with(".png") {
-                ifol_render_gpu::Renderer::save_png(
+                ifol_render_core::Renderer::save_png(
                     &pixels,
                     settings.width,
                     settings.height,

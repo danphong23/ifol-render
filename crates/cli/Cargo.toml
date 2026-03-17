@@ -10,8 +10,7 @@ name = "ifol-render"
 path = "src/main.rs"
 
 [dependencies]
-ifol-render-core = { path = "../core" }
-ifol-render-gpu = { path = "../gpu" }
+ifol-render-core = { path = "../../core" }
 clap = { workspace = true }
 env_logger = { workspace = true }
 log = { workspace = true }

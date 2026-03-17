@@ -1,0 +1,15 @@
+[package]
+name = "ifol-render-studio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Standalone GUI editor (studio) for ifol-render. Depends on core ONLY."
+
+[dependencies]
+ifol-render-core = { path = "../core" }
+eframe = { workspace = true }
+egui = "0.31"
+log = { workspace = true }
+env_logger = { workspace = true }
+serde_json = { workspace = true }
+rfd = "0.15"
