@@ -9,6 +9,7 @@ description = "Standalone GUI editor (studio) for ifol-render. Depends on core O
 ifol-render-core = { path = "../core" }
 eframe = { workspace = true }
 egui = "0.31"
+egui_tiles = "0.12"
 log = { workspace = true }
 env_logger = { workspace = true }
 serde_json = { workspace = true }

@@ -2,7 +2,8 @@
 //!
 //! A third-party consumer that only depends on ifol-render-core.
 
-mod app;
+pub mod app;
+pub mod panels;
 
 fn main() -> eframe::Result<()> {
     env_logger::init();
