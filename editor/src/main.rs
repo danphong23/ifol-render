@@ -4,9 +4,10 @@ mod app;
 mod ui;
 
 fn main() -> eframe::Result<()> {
-    // Only show warnings from our crates, suppress noisy wgpu Vulkan layer errors
+    // Suppress ALL wgpu/vulkan noise — only show our app logs
     env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("ifol=info,eframe=warn,wgpu=warn,wgpu_hal=warn,naga=warn"),
+        env_logger::Env::default()
+            .default_filter_or("ifol=info,wgpu=off,wgpu_hal=off,wgpu_core=off,naga=off"),
     )
     .init();
 
