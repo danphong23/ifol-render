@@ -12,6 +12,7 @@
 //! Consumers (editor/CLI) only need to import core.
 
 pub mod color;
+pub mod commands;
 pub mod ecs;
 pub mod scene;
 pub mod time;

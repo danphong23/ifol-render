@@ -7,8 +7,9 @@
 //!
 //! The studio does NOT know about the render crate. It calls core's pipeline API.
 
-use egui::{Color32, ColorImage, RichText, TextureHandle, TextureOptions, Vec2};
-use ifol_render_core::ecs::{components, World};
+use egui::{Color32, ColorImage, Key, Modifiers, RichText, TextureHandle, TextureOptions, Vec2};
+use ifol_render_core::commands::{CommandHistory, AddEntity, RemoveEntity, SetProperty, PropertyValue};
+use ifol_render_core::ecs::{components, Entity, World};
 use ifol_render_core::scene::RenderSettings;
 use ifol_render_core::time::TimeState;
 
@@ -40,6 +41,8 @@ pub struct EditorApp {
     zoom: f32,
     /// Persistent renderer — obtained through core's re-export.
     renderer: Option<ifol_render_core::Renderer>,
+    /// Command history for undo/redo.
+    commands: CommandHistory,
 }
 
 impl EditorApp {
@@ -113,6 +116,7 @@ impl EditorApp {
             status: "Ready".into(),
             zoom: 1.0,
             renderer: None,
+            commands: CommandHistory::new(),
         }
     }
 
@@ -239,6 +243,43 @@ impl eframe::App for EditorApp {
             ctx.request_repaint();
         }
 
+        // ── Keyboard shortcuts ──
+        ctx.input_mut(|input| {
+            // Space = play/pause
+            if input.consume_key(Modifiers::NONE, Key::Space) {
+                self.playing = !self.playing;
+            }
+            // Ctrl+Z = undo
+            if input.consume_key(Modifiers::CTRL, Key::Z) {
+                if let Some(desc) = self.commands.undo(&mut self.world) {
+                    self.status = format!("↩ Undo: {}", desc);
+                    self.dirty = true;
+                }
+            }
+            // Ctrl+Y = redo
+            if input.consume_key(Modifiers::CTRL, Key::Y) {
+                if let Some(desc) = self.commands.redo(&mut self.world) {
+                    self.status = format!("↪ Redo: {}", desc);
+                    self.dirty = true;
+                }
+            }
+            // Delete = remove selected entity
+            if input.consume_key(Modifiers::NONE, Key::Delete) {
+                if let Some(i) = self.selected {
+                    if i < self.world.entities.len() {
+                        let eid = self.world.entities[i].id.clone();
+                        self.commands.execute(
+                            Box::new(RemoveEntity::new(eid)),
+                            &mut self.world,
+                        );
+                        self.selected = None;
+                        self.invalidate_renderer();
+                        self.status = "Deleted entity".into();
+                    }
+                }
+            }
+        });
+
         if self.dirty {
             self.render_scene();
         }
@@ -276,10 +317,23 @@ impl eframe::App for EditorApp {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(&self.status).color(TEXT_DIM).size(10.0));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let undo_info = if self.commands.can_undo() {
+                            format!("↩{}", self.commands.undo_count())
+                        } else {
+                            "↩0".into()
+                        };
+                        let redo_info = if self.commands.can_redo() {
+                            format!("↪{}", self.commands.redo_count())
+                        } else {
+                            "↪0".into()
+                        };
                         ui.label(
-                            RichText::new(format!("{} entities", self.world.entities.len()))
-                                .color(TEXT_DIM)
-                                .size(10.0),
+                            RichText::new(format!(
+                                "{} entities  {}  {}",
+                                self.world.entities.len(), undo_info, redo_info
+                            ))
+                            .color(TEXT_DIM)
+                            .size(10.0),
                         );
                     });
                 });
@@ -438,16 +492,23 @@ impl EditorApp {
                 .clicked()
             {
                 let n = self.world.entities.len();
-                Self::add_color_entity(
+                let mut e = Entity {
+                    id: format!("color_{}", n),
+                    components: Default::default(),
+                    resolved: Default::default(),
+                };
+                e.components.color_source = Some(components::ColorSource {
+                    color: ifol_render_core::color::Color4::new(0.5, 0.5, 0.5, 1.0),
+                });
+                e.components.timeline = Some(components::Timeline {
+                    start_time: self.time.global_time,
+                    duration: 3.0,
+                    layer: n as i32,
+                });
+                e.components.transform = Some(components::Transform::default());
+                self.commands.execute(
+                    Box::new(AddEntity::new(e)),
                     &mut self.world,
-                    &format!("color_{}", n),
-                    [0.5, 0.5, 0.5, 1.0],
-                    [0.0, 0.0],
-                    [0.2, 0.2],
-                    self.time.global_time,
-                    3.0,
-                    n as i32,
-                    1.0,
                 );
                 self.selected = Some(n);
                 self.invalidate_renderer();
@@ -461,7 +522,7 @@ impl EditorApp {
                     .pick_file()
                 {
                     let n = self.world.entities.len();
-                    let mut e = ifol_render_core::ecs::Entity {
+                    let mut e = Entity {
                         id: format!("img_{}", n),
                         components: Default::default(),
                         resolved: Default::default(),
@@ -475,7 +536,10 @@ impl EditorApp {
                         layer: n as i32,
                     });
                     e.components.transform = Some(components::Transform::default());
-                    self.world.add_entity(e);
+                    self.commands.execute(
+                        Box::new(AddEntity::new(e)),
+                        &mut self.world,
+                    );
                     self.selected = Some(n);
                     self.invalidate_renderer();
                 }
@@ -515,8 +579,11 @@ impl EditorApp {
                     .small_button(RichText::new("🗑 Delete").color(RED).size(10.0))
                     .clicked()
                 {
-                    self.world.entities.remove(i);
-                    self.world.rebuild_index();
+                    let eid = self.world.entities[i].id.clone();
+                    self.commands.execute(
+                        Box::new(RemoveEntity::new(eid)),
+                        &mut self.world,
+                    );
                     self.selected = None;
                     self.invalidate_renderer();
                 }
@@ -544,6 +611,10 @@ impl EditorApp {
             }
         };
 
+        // Collect pending commands here — applied after entity borrow ends.
+        let mut pending: Vec<Box<dyn ifol_render_core::commands::Command>> = Vec::new();
+        let mut needs_dirty = false;
+
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -559,80 +630,78 @@ impl EditorApp {
                 // Transform
                 if let Some(ref mut tf) = e.components.transform {
                     ui.add_space(6.0);
-                    ui.label(
-                        RichText::new("TRANSFORM")
-                            .color(TEXT_DIM)
-                            .size(10.0)
-                            .strong(),
-                    );
-                    let mut ch = false;
+                    ui.label(RichText::new("TRANSFORM").color(TEXT_DIM).size(10.0).strong());
+                    let eid = e.id.clone();
+                    let (old_px, old_py) = (tf.position.x, tf.position.y);
+                    let (old_sx, old_sy) = (tf.scale.x, tf.scale.y);
+                    let old_rot = tf.rotation;
+
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("X").color(TEXT_DIM).size(10.0));
-                        ch |= ui
-                            .add(egui::DragValue::new(&mut tf.position.x).speed(0.01))
-                            .changed();
+                        ui.add(egui::DragValue::new(&mut tf.position.x).speed(0.01));
                         ui.label(RichText::new("Y").color(TEXT_DIM).size(10.0));
-                        ch |= ui
-                            .add(egui::DragValue::new(&mut tf.position.y).speed(0.01))
-                            .changed();
+                        ui.add(egui::DragValue::new(&mut tf.position.y).speed(0.01));
                     });
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("W").color(TEXT_DIM).size(10.0));
-                        ch |= ui
-                            .add(
-                                egui::DragValue::new(&mut tf.scale.x)
-                                    .speed(0.01)
-                                    .range(0.0..=4.0),
-                            )
-                            .changed();
+                        ui.add(egui::DragValue::new(&mut tf.scale.x).speed(0.01).range(0.0..=4.0));
                         ui.label(RichText::new("H").color(TEXT_DIM).size(10.0));
-                        ch |= ui
-                            .add(
-                                egui::DragValue::new(&mut tf.scale.y)
-                                    .speed(0.01)
-                                    .range(0.0..=4.0),
-                            )
-                            .changed();
+                        ui.add(egui::DragValue::new(&mut tf.scale.y).speed(0.01).range(0.0..=4.0));
                     });
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Rot").color(TEXT_DIM).size(10.0));
-                        ch |= ui
-                            .add(
-                                egui::DragValue::new(&mut tf.rotation)
-                                    .speed(0.5)
-                                    .suffix("°"),
-                            )
-                            .changed();
+                        ui.add(egui::DragValue::new(&mut tf.rotation).speed(0.5).suffix("°"));
                     });
-                    if ch {
-                        self.dirty = true;
+
+                    // Queue commands for any changed values
+                    if tf.position.x != old_px {
+                        pending.push(Box::new(SetProperty::new(eid.clone(), "position.x".into(), PropertyValue::PositionX(old_px), PropertyValue::PositionX(tf.position.x))));
+                        needs_dirty = true;
+                    }
+                    if tf.position.y != old_py {
+                        pending.push(Box::new(SetProperty::new(eid.clone(), "position.y".into(), PropertyValue::PositionY(old_py), PropertyValue::PositionY(tf.position.y))));
+                        needs_dirty = true;
+                    }
+                    if tf.scale.x != old_sx {
+                        pending.push(Box::new(SetProperty::new(eid.clone(), "scale.x".into(), PropertyValue::ScaleX(old_sx), PropertyValue::ScaleX(tf.scale.x))));
+                        needs_dirty = true;
+                    }
+                    if tf.scale.y != old_sy {
+                        pending.push(Box::new(SetProperty::new(eid.clone(), "scale.y".into(), PropertyValue::ScaleY(old_sy), PropertyValue::ScaleY(tf.scale.y))));
+                        needs_dirty = true;
+                    }
+                    if tf.rotation != old_rot {
+                        pending.push(Box::new(SetProperty::new(eid.clone(), "rotation".into(), PropertyValue::Rotation(old_rot), PropertyValue::Rotation(tf.rotation))));
+                        needs_dirty = true;
                     }
                 }
 
                 // Opacity
                 if let Some(ref mut op) = e.components.opacity {
                     ui.add_space(6.0);
+                    let eid = e.id.clone();
+                    let old_op = *op;
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Opacity").color(TEXT_DIM).size(10.0));
-                        if ui
-                            .add(egui::Slider::new(op, 0.0..=1.0).show_value(true))
-                            .changed()
-                        {
-                            self.dirty = true;
-                        }
+                        ui.add(egui::Slider::new(op, 0.0..=1.0).show_value(true));
                     });
+                    if *op != old_op {
+                        pending.push(Box::new(SetProperty::new(eid, "opacity".into(), PropertyValue::Opacity(old_op), PropertyValue::Opacity(*op))));
+                        needs_dirty = true;
+                    }
                 }
 
                 // Color
                 if let Some(ref mut cs) = e.components.color_source {
                     ui.add_space(6.0);
                     ui.label(RichText::new("COLOR").color(TEXT_DIM).size(10.0).strong());
+                    let eid = e.id.clone();
+                    let old_color = cs.color.clone();
                     let mut rgb = [cs.color.r, cs.color.g, cs.color.b];
                     if ui.color_edit_button_rgb(&mut rgb).changed() {
-                        cs.color.r = rgb[0];
-                        cs.color.g = rgb[1];
-                        cs.color.b = rgb[2];
-                        self.dirty = true;
+                        cs.color = ifol_render_core::color::Color4::new(rgb[0], rgb[1], rgb[2], cs.color.a);
+                        pending.push(Box::new(SetProperty::new(eid, "color".into(), PropertyValue::Color(old_color), PropertyValue::Color(cs.color.clone()))));
+                        needs_dirty = true;
                     }
                 }
 
@@ -646,34 +715,45 @@ impl EditorApp {
                 // Timeline
                 if let Some(ref mut tl) = e.components.timeline {
                     ui.add_space(6.0);
-                    ui.label(
-                        RichText::new("TIMELINE")
-                            .color(TEXT_DIM)
-                            .size(10.0)
-                            .strong(),
-                    );
-                    let mut ch = false;
+                    ui.label(RichText::new("TIMELINE").color(TEXT_DIM).size(10.0).strong());
+                    let eid = e.id.clone();
+                    let (old_start, old_dur, old_layer) = (tl.start_time, tl.duration, tl.layer);
+
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Start").color(TEXT_DIM).size(10.0));
-                        ch |= ui
-                            .add(egui::DragValue::new(&mut tl.start_time).speed(0.1).suffix("s"))
-                            .changed();
+                        ui.add(egui::DragValue::new(&mut tl.start_time).speed(0.1).suffix("s"));
                     });
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Dur").color(TEXT_DIM).size(10.0));
-                        ch |= ui
-                            .add(egui::DragValue::new(&mut tl.duration).speed(0.1).suffix("s"))
-                            .changed();
+                        ui.add(egui::DragValue::new(&mut tl.duration).speed(0.1).suffix("s"));
                     });
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Layer").color(TEXT_DIM).size(10.0));
-                        ch |= ui.add(egui::DragValue::new(&mut tl.layer)).changed();
+                        ui.add(egui::DragValue::new(&mut tl.layer));
                     });
-                    if ch {
-                        self.dirty = true;
+
+                    if tl.start_time != old_start {
+                        pending.push(Box::new(SetProperty::new(eid.clone(), "start_time".into(), PropertyValue::StartTime(old_start), PropertyValue::StartTime(tl.start_time))));
+                        needs_dirty = true;
+                    }
+                    if tl.duration != old_dur {
+                        pending.push(Box::new(SetProperty::new(eid.clone(), "duration".into(), PropertyValue::Duration(old_dur), PropertyValue::Duration(tl.duration))));
+                        needs_dirty = true;
+                    }
+                    if tl.layer != old_layer {
+                        pending.push(Box::new(SetProperty::new(eid.clone(), "layer".into(), PropertyValue::Layer(old_layer), PropertyValue::Layer(tl.layer))));
+                        needs_dirty = true;
                     }
                 }
             });
+
+        // Entity borrow is now released — push commands to history.
+        for cmd in pending {
+            self.commands.push_executed(cmd);
+        }
+        if needs_dirty {
+            self.dirty = true;
+        }
     }
 
     // ── TIMELINE ──
