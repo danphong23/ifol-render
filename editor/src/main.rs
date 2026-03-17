@@ -4,11 +4,15 @@ mod app;
 mod ui;
 
 fn main() -> eframe::Result<()> {
-    env_logger::init();
+    // Only show warnings from our crates, suppress noisy wgpu Vulkan layer errors
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("ifol=info,eframe=warn,wgpu=warn,wgpu_hal=warn,naga=warn"),
+    )
+    .init();
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 800.0])
+            .with_inner_size([1440.0, 900.0])
             .with_title("ifol-render Editor"),
         ..Default::default()
     };
