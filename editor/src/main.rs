@@ -1,17 +1,14 @@
-//! ifol-render Editor — standalone GUI for scene editing and preview.
-//!
-//! Run with: `cargo run -p ifol-render-editor`
+//! ifol-render Editor — standalone GUI for compositing and animation.
 
 mod app;
 mod ui;
 
-fn main() -> eframe::Result {
+fn main() -> eframe::Result<()> {
     env_logger::init();
-    log::info!("Starting ifol-render editor");
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 720.0])
+            .with_inner_size([1280.0, 800.0])
             .with_title("ifol-render Editor"),
         ..Default::default()
     };
@@ -19,6 +16,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "ifol-render Editor",
         options,
-        Box::new(|cc| Ok(Box::new(app::EditorApp::new(cc)))),
+        Box::new(|_cc| Ok(Box::new(app::EditorApp::new()))),
     )
 }

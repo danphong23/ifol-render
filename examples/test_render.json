@@ -1,0 +1,92 @@
+{
+    "version": "1.0",
+    "settings": {
+        "width": 800,
+        "height": 600,
+        "fps": 30,
+        "duration": 5.0,
+        "colorSpace": "linearSrgb",
+        "outputColorSpace": "srgb"
+    },
+    "entities": [
+        {
+            "id": "bg",
+            "components": {
+                "colorSource": {
+                    "color": { "r": 0.15, "g": 0.15, "b": 0.2, "a": 1.0 }
+                },
+                "timeline": {
+                    "startTime": 0.0,
+                    "duration": 5.0,
+                    "layer": 0
+                },
+                "transform": {
+                    "position": { "x": 0.0, "y": 0.0 },
+                    "scale": { "x": 1.0, "y": 1.0 }
+                }
+            }
+        },
+        {
+            "id": "red_box",
+            "components": {
+                "colorSource": {
+                    "color": { "r": 0.9, "g": 0.2, "b": 0.2, "a": 1.0 }
+                },
+                "timeline": {
+                    "startTime": 0.0,
+                    "duration": 5.0,
+                    "layer": 1
+                },
+                "transform": {
+                    "position": { "x": -0.3, "y": 0.2 },
+                    "scale": { "x": 0.3, "y": 0.3 }
+                },
+                "opacity": 0.8
+            }
+        },
+        {
+            "id": "green_box",
+            "components": {
+                "colorSource": {
+                    "color": { "r": 0.2, "g": 0.8, "b": 0.3, "a": 1.0 }
+                },
+                "timeline": {
+                    "startTime": 0.5,
+                    "duration": 4.0,
+                    "layer": 2
+                },
+                "transform": {
+                    "position": { "x": 0.3, "y": -0.2 },
+                    "scale": { "x": 0.25, "y": 0.25 }
+                },
+                "animation": {
+                    "keyframes": [
+                        { "time": 0.0, "property": "opacity", "value": 0.0, "easing": "easeOut" },
+                        { "time": 1.0, "property": "opacity", "value": 1.0, "easing": "linear" },
+                        { "time": 3.0, "property": "opacity", "value": 1.0, "easing": "easeIn" },
+                        { "time": 4.0, "property": "opacity", "value": 0.0, "easing": "linear" }
+                    ]
+                }
+            }
+        },
+        {
+            "id": "blue_box",
+            "components": {
+                "colorSource": {
+                    "color": { "r": 0.2, "g": 0.4, "b": 0.9, "a": 1.0 }
+                },
+                "timeline": {
+                    "startTime": 1.0,
+                    "duration": 3.0,
+                    "layer": 3
+                },
+                "transform": {
+                    "position": { "x": 0.0, "y": 0.0 },
+                    "scale": { "x": 0.2, "y": 0.4 }
+                },
+                "opacity": 0.6
+            }
+        }
+    ],
+    "shaders": []
+}

@@ -3,7 +3,7 @@
 //! Usage:
 //!   ifol-render render --scene scene.json --fps 30 --output output.raw
 //!   ifol-render info --scene scene.json
-//!   ifol-render preview --scene scene.json --timestamp 5.0
+//!   ifol-render preview --scene scene.json --timestamp 5.0 --output preview.png
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -21,46 +21,31 @@ struct Cli {
 enum Commands {
     /// Render all frames to raw RGBA output.
     Render {
-        /// Path to scene description JSON.
         #[arg(short, long)]
         scene: PathBuf,
-
-        /// Frames per second.
         #[arg(long, default_value = "30")]
         fps: f64,
-
-        /// Output width (overrides scene setting).
         #[arg(long)]
         width: Option<u32>,
-
-        /// Output height (overrides scene setting).
         #[arg(long)]
         height: Option<u32>,
-
-        /// Output file path (use "pipe:1" for stdout).
         #[arg(short, long, default_value = "pipe:1")]
         output: String,
     },
 
     /// Print scene information.
     Info {
-        /// Path to scene description JSON.
         #[arg(short, long)]
         scene: PathBuf,
     },
 
     /// Render a single frame at a specific timestamp.
     Preview {
-        /// Path to scene description JSON.
         #[arg(short, long)]
         scene: PathBuf,
-
-        /// Timestamp in seconds.
         #[arg(short, long)]
         timestamp: f64,
-
-        /// Output PNG file path.
-        #[arg(short, long, default_value = "preview.rgba")]
+        #[arg(short, long, default_value = "preview.png")]
         output: PathBuf,
     },
 }
@@ -99,10 +84,14 @@ fn main() {
             for frame in 0..total_frames {
                 time.seek(frame as f64 / fps);
                 ifol_render_core::ecs::pipeline::run(&mut world, &time);
-                let _pixels = renderer.render_frame(&world, &time);
+                let pixels = renderer.render_frame(&world, &time);
 
-                // TODO: Write pixels to output (file or stdout pipe)
-                if frame % 100 == 0 {
+                if output == "pipe:1" {
+                    use std::io::Write;
+                    std::io::stdout().write_all(&pixels).unwrap();
+                }
+
+                if frame % 30 == 0 {
                     log::info!("Frame {}/{}", frame, total_frames);
                 }
             }
@@ -124,6 +113,9 @@ fn main() {
             println!("FPS: {}", desc.settings.fps);
             println!("Duration: {}s", desc.settings.duration);
             println!("Entities: {}", desc.entities.len());
+            for entity in &desc.entities {
+                println!("  - {} (components: {})", entity.id, count_components(entity));
+            }
             println!("Custom shaders: {}", desc.shaders.len());
         }
 
@@ -137,23 +129,57 @@ fn main() {
             let desc = ifol_render_core::scene::SceneDescription::from_json(&json)
                 .expect("Failed to parse scene JSON");
 
+            let settings = desc.settings.clone();
             let mut world = desc.into_world();
-            let mut time = ifol_render_core::time::TimeState::new(30.0);
+            let mut time = ifol_render_core::time::TimeState::new(settings.fps);
             time.seek(timestamp);
             ifol_render_core::ecs::pipeline::run(&mut world, &time);
 
-            let mut renderer =
-                ifol_render_gpu::Renderer::new_headless(&ifol_render_core::scene::RenderSettings {
-                    width: 1920,
-                    height: 1080,
-                    fps: 30.0,
-                    duration: 0.0,
-                    color_space: Default::default(),
-                    output_color_space: Default::default(),
-                });
+            let mut renderer = ifol_render_gpu::Renderer::new_headless(&settings);
+
+            // Load image sources
+            for entity in &world.entities {
+                if let Some(ref img) = entity.components.image_source {
+                    if let Err(e) = renderer.load_image(&entity.id, &img.path) {
+                        log::warn!("{}", e);
+                    }
+                }
+            }
+
             let pixels = renderer.render_frame(&world, &time);
-            std::fs::write(&output, &pixels).expect("Failed to write output");
-            log::info!("Preview saved: {} bytes", pixels.len());
+
+            let out_path = output.to_str().unwrap();
+            if out_path.ends_with(".png") {
+                ifol_render_gpu::Renderer::save_png(
+                    &pixels,
+                    settings.width,
+                    settings.height,
+                    out_path,
+                )
+                .expect("Failed to save PNG");
+            } else {
+                std::fs::write(&output, &pixels).expect("Failed to write output");
+            }
+            println!(
+                "Preview saved: {} ({}x{}, {:.2}s)",
+                out_path, settings.width, settings.height, timestamp
+            );
         }
     }
+}
+
+fn count_components(entity: &ifol_render_core::ecs::Entity) -> usize {
+    let c = &entity.components;
+    let mut n = 0;
+    if c.video_source.is_some() { n += 1; }
+    if c.image_source.is_some() { n += 1; }
+    if c.text_source.is_some() { n += 1; }
+    if c.color_source.is_some() { n += 1; }
+    if c.timeline.is_some() { n += 1; }
+    if c.transform.is_some() { n += 1; }
+    if c.opacity.is_some() { n += 1; }
+    if c.color.is_some() { n += 1; }
+    if c.animation.is_some() { n += 1; }
+    if c.effects.is_some() { n += 1; }
+    n
 }

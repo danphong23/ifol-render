@@ -48,7 +48,8 @@ pub fn animation_system(world: &mut World, _time: &TimeState) {
             }
 
             // Animate transform properties
-            if let Some(ref mut tf) = entity.components.transform.clone() {
+            if let Some(tf) = entity.components.transform.clone() {
+                let mut tf = tf;
                 if let Some(x) = anim.evaluate("transform.position.x", local_time) {
                     tf.position.x = x as f32;
                 }
@@ -64,8 +65,7 @@ pub fn animation_system(world: &mut World, _time: &TimeState) {
                 if let Some(rot) = anim.evaluate("transform.rotation", local_time) {
                     tf.rotation = rot as f32;
                 }
-                // Store back (we'll use this for transform_system)
-                entity.components.transform = Some(tf.clone());
+                entity.components.transform = Some(tf);
             }
         } else {
             entity.resolved.opacity = entity.components.opacity.unwrap_or(1.0);
@@ -74,6 +74,7 @@ pub fn animation_system(world: &mut World, _time: &TimeState) {
 }
 
 /// Compute final world transform matrices.
+/// Converts entity position/scale/rotation into NDC (-1..1) clip space.
 pub fn transform_system(world: &mut World, _time: &TimeState) {
     for entity in &mut world.entities {
         if !entity.resolved.visible {
