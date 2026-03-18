@@ -7,9 +7,9 @@
 //!
 //! The studio does NOT know about the render crate. It calls core's pipeline API.
 
-use egui::{Color32, ColorImage, Key, Modifiers, RichText, TextureHandle, TextureOptions, Vec2};
-use ifol_render_core::commands::{CommandHistory, AddEntity, RemoveEntity, SetProperty, PropertyValue};
-use ifol_render_core::ecs::{components, Entity, World};
+use egui::{Color32, ColorImage, Key, Modifiers, TextureHandle, TextureOptions};
+use ifol_render_core::commands::{CommandHistory, RemoveEntity};
+use ifol_render_core::ecs::{components, World};
 use ifol_render_core::scene::RenderSettings;
 use ifol_render_core::time::TimeState;
 
@@ -321,7 +321,7 @@ impl eframe::App for EditorApp {
             });
 
         // ── Workspace Split System ──
-        egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| {
+        egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
             // Take the tree out of self so we can pass `self` mutably to behavior
             let mut tree = std::mem::replace(&mut self.workspace.tree, egui_tiles::Tree::empty("ifol_workspace"));
             

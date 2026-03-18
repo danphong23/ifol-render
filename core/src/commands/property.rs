@@ -3,7 +3,7 @@
 use super::Command;
 use crate::ecs::World;
 use crate::color::Color4;
-use crate::types::Vec2;
+
 
 /// Identifies which property to change on an entity.
 #[derive(Debug, Clone)]
