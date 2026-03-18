@@ -1,80 +1,137 @@
-# Creating Effects
+# Creating Custom Effects
 
-This guide shows how to add a new visual effect to ifol-render.
+## Tổng quan
 
-## Step 1: Create the Shader
+Render tool hỗ trợ thêm effect mới bằng cách **chỉ viết 1 file .wgsl** — không cần code Rust.
 
-Create a new WGSL file in `shaders/`:
+## Shader Convention
+
+Mọi effect phải tuân theo layout bindings:
 
 ```wgsl
-// shaders/my_effect.wgsl
-// My custom effect shader
-
-@group(0) @binding(0) var t_texture: texture_2d<f32>;
-@group(0) @binding(1) var t_sampler: sampler;
-
+// binding 0: uniform buffer — params float của bạn
 struct Params {
     intensity: f32,
-    // Add your parameters here
+    radius: f32,
+    _pad0: f32,        // padding tới bội 16 bytes
+    _pad1: f32,
 }
-@group(0) @binding(2) var<uniform> params: Params;
 
-// Time bindings (auto-injected by engine)
-struct TimeUniforms {
-    frame_time: f32,
-    global_time: f32,
-    normalized_time: f32,
-    delta_time: f32,
+// binding 1: texture input (ping-pong)
+// binding 2: sampler (linear, clamp-to-edge)
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var t_input: texture_2d<f32>;
+@group(0) @binding(2) var t_sampler: sampler;
+
+// Vertex shader: fullscreen triangle (3 vertices, no VBO)
+struct VertexOutput {
+    @builtin(position) clip_position: vec4f,
+    @location(0) uv: vec2f,
 }
-@group(0) @binding(3) var<uniform> time: TimeUniforms;
 
+@vertex
+fn vs_fullscreen(@builtin(vertex_index) vi: u32) -> VertexOutput {
+    var out: VertexOutput;
+    let x = f32(i32(vi) / 2) * 4.0 - 1.0;
+    let y = f32(i32(vi) % 2) * 4.0 - 1.0;
+    out.clip_position = vec4f(x, y, 0.0, 1.0);
+    out.uv = vec2f((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
+}
+
+// Fragment shader: your effect logic
 @fragment
-fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
-    let color = textureSample(t_texture, t_sampler, uv);
-    // Apply your effect here
-    return color * params.intensity;
+fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+    let color = textureSample(t_input, t_sampler, in.uv);
+    // ... apply effect ...
+    return color;
 }
 ```
 
-## Step 2: Create the Render Pass
+## Quy tắc quan trọng
 
-Create `crates/gpu/src/passes/my_effect.rs`:
+| Quy tắc | Lý do |
+|---------|-------|
+| Vertex entry = `vs_fullscreen` | Pipeline cache tìm theo tên |
+| Fragment entry = `fs_main` | Pipeline cache tìm theo tên |
+| Params struct = chỉ `f32` | Generic engine pack float array |
+| Struct size = bội 16 bytes | GPU uniform alignment |
+| binding 0/1/2 = fixed layout | Bind group layout chung |
+
+## Thêm effect built-in
+
+### Bước 1: Tạo shader
+
+```
+shaders/effects/glow.wgsl
+```
+
+### Bước 2: Register trong EffectRegistry
 
 ```rust
-use super::super::render_graph::{RenderPass, PassContext};
-
-pub struct MyEffectPass {
-    pub intensity: f32,
-}
-
-impl RenderPass for MyEffectPass {
-    fn name(&self) -> &str { "my_effect" }
-
-    fn execute(&self, ctx: &mut PassContext) {
-        // TODO: bind shader, set uniforms, draw
-    }
-}
+// render/src/effects/mod.rs — register_builtins()
+self.register(EffectEntry {
+    name: "glow".into(),
+    shader_source: include_str!("../../../shaders/effects/glow.wgsl").into(),
+    default_params: vec![
+        ("intensity".into(), 0.5),
+        ("threshold".into(), 0.8),
+        ("_pad0".into(), 0.0),
+        ("_pad1".into(), 0.0),
+    ],
+    pass_count: 1,
+});
 ```
 
-## Step 3: Register the Pass
+**Xong.** Không cần viết thêm bất kỳ file Rust nào.
 
-Add to `crates/gpu/src/passes/mod.rs`:
+## Thêm effect custom (runtime)
 
 ```rust
-pub mod my_effect;
+let wgsl = std::fs::read_to_string("my_custom_effect.wgsl").unwrap();
+renderer.register_effect(
+    "my_custom_effect",
+    wgsl,
+    vec![
+        ("param1".into(), 0.5),
+        ("param2".into(), 1.0),
+        ("_pad0".into(), 0.0),
+        ("_pad1".into(), 0.0),
+    ],
+    1,  // number of passes
+);
 ```
 
-## Step 4: Use in a Scene
+## Multi-pass effect (ví dụ: blur)
+
+Blur cần 2 pass (horizontal + vertical). Set `pass_count: 2` và render engine tự quản lý direction per pass.
+
+Nếu effect custom cần multi-pass, render engine sẽ:
+1. Pass 0: render vào ping-pong output
+2. Swap ping-pong (output → input)
+3. Pass 1: render vào ping-pong output
+4. Swap...
+
+## Sử dụng từ Core (ECS)
 
 ```json
 {
-    "id": "clip_01",
-    "components": {
-        "effects": [
-            { "type": "my_effect", "params": { "intensity": 0.8 } }
-        ]
-    }
+  "effectStack": {
+    "effects": [
+      { "type": "blur", "params": { "radius": 5.0 } },
+      { "type": "vignette", "params": { "intensity": 0.3 } }
+    ]
+  }
 }
 ```
 
-That's it! No core engine changes needed.
+Core chuyển thành `EffectConfig[]` → gửi cho `render_frame_with_effects()`.
+
+## Effects sẵn có
+
+| Effect | Params | Passes |
+|--------|--------|--------|
+| `blur` | direction_x, direction_y, radius, texel_size | 2 |
+| `color_grade` | brightness, contrast, saturation | 1 |
+| `vignette` | intensity, smoothness | 1 |
+| `chromatic_aberration` | intensity | 1 |

@@ -1,146 +1,175 @@
-# Architecture
+# Architecture — ifol-render
 
-## Overview
+## Tổng quan
 
-ifol-render is a modular GPU rendering engine organized as a Rust workspace with multiple crates. The architecture follows the **Entity-Component-System (ECS)** pattern for scene management and a **pipeline-based** approach for rendering and export.
+ifol-render là hệ thống rendering modular, chia thành các tool độc lập:
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                      Consumers                          │
-│   ┌─────────┐  ┌──────────┐  ┌──────┐  ┌──────────┐   │
-│   │ Studio  │  │   CLI    │  │ WASM │  │ Your App │   │
-│   └────┬────┘  └─────┬────┘  └──┬───┘  └─────┬────┘   │
-│        │             │          │             │         │
-├────────┴─────────────┴──────────┴─────────────┴────────┤
-│                    ifol-render-core                      │
-│  ┌──────────┐  ┌────────────┐  ┌──────────────────┐    │
-│  │   ECS    │  │  Commands  │  │    Scene I/O     │    │
-│  │ World    │  │  History   │  │ SceneDescription │    │
-│  │ Entity   │  │  Undo/Redo │  │ JSON serialize   │    │
-│  │ Systems  │  │            │  │                  │    │
-│  └──────────┘  └────────────┘  └──────────────────┘    │
-│  ┌──────────┐  ┌────────────┐  ┌──────────────────┐    │
-│  │  Color   │  │  Animation │  │   Export (FFmpeg) │    │
-│  │  Spaces  │  │  Keyframes │  │   H264/VP9/ProRes│    │
-│  │  Convert │  │  Easing    │  │   Progress CB    │    │
-│  └──────────┘  └────────────┘  └──────────────────┘    │
-├─────────────────────────────────────────────────────────┤
-│                    ifol-render (GPU)                     │
-│  ┌──────────────┐  ┌───────────┐  ┌───────────────┐    │
-│  │ Render Graph │  │  Passes   │  │   Shaders     │    │
-│  │ DAG executor │  │  Composite│  │   WGSL files  │    │
-│  │ Auto-deps    │  │  Effects  │  │   Runtime load│    │
-│  └──────────────┘  └───────────┘  └───────────────┘    │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  Consumers (chọn 1 hoặc nhiều)                              │
+│  ┌─────────┐  ┌──────────┐  ┌──────┐  ┌──────────────┐    │
+│  │ Studio  │  │   CLI    │  │ WASM │  │  Your App    │    │
+│  │  (GUI)  │  │ (export) │  │ (web)│  │ (Rust crate) │    │
+│  └────┬────┘  └────┬─────┘  └──┬───┘  └──────┬───────┘    │
+│       │            │           │              │             │
+│  ┌────┴────────────┴───────────┴──────────────┴──────┐     │
+│  │  core (ECS, optional — tiện lợi, không bắt buộc)  │     │
+│  │  Scene JSON → Entity/Component → DrawCommand[]     │     │
+│  └───────────────────────┬────────────────────────────┘     │
+│                          │ hoặc gửi DrawCommand[] trực tiếp │
+│  ┌───────────────────────▼────────────────────────────┐     │
+│  │  render (GPU, độc lập 100%)                         │     │
+│  │  DrawCommand[] → GPU → pixels                       │     │
+│  └────────────────────────────────────────────────────┘     │
+└─────────────────────────────────────────────────────────────┘
 ```
+
+## Nguyên tắc tách biệt
+
+### Render = Thực thi GPU
+
+| Render sở hữu | Render KHÔNG biết |
+|---------------|-------------------|
+| GPU context (wgpu) | Entity, Component |
+| Shader pipeline | Frame thứ mấy |
+| Texture cache (VRAM) | Animation, keyframe |
+| Effect pipeline | Timeline logic |
+| Blend modes | Tại sao entity ẩn/hiện |
+| Export (PNG, video frames) | Scene JSON format |
+| Hardware detection | Ai đang drag cái gì |
+| Pipeline cache | |
+
+### Core = Quyết định logic
+
+| Core sở hữu | Core KHÔNG biết |
+|-------------|-----------------|
+| ECS (Entity, Component, System) | GPU, shader, VRAM |
+| Timeline (visibility) | Pipeline cache |
+| Animation (keyframe eval) | Texture upload |
+| Transform (world matrix) | Blend mode formula |
+| Culling (cắt ngoài viewport) | Hardware limits |
+| Command/Undo | Pixel processing |
+| Scene JSON I/O | |
+| Video export loop | |
+
+### Quy tắc đơn giản
+
+```
+Core gọi Render: render_frame(), resize(), evict_texture(), register_effect()
+Render trả Core: pixels, capabilities(), cache_stats()
+Core KHÔNG chạm: GPU, shader, VRAM
+Render KHÔNG biết: entity, timeline, animation
+```
+
+---
 
 ## Crate Structure
 
-### `core/` — ifol-render-core
+```
+ifol-render/
+├── render/         ifol-render         GPU rendering library
+├── core/           ifol-render-core    ECS engine (depends on render)
+├── studio/         ifol-render-studio  GUI editor (depends on core + render)
+├── crates/
+│   ├── cli/        ifol-render-cli     Headless CLI (depends on core + render)
+│   └── wasm/       ifol-render-wasm    WebAssembly target
+├── shaders/
+│   ├── composite.wgsl                  Quad rendering + blend modes
+│   └── effects/                        Effect shaders (drop .wgsl = new effect)
+└── docs/           Architecture docs
+```
 
-The heart of the engine. Zero GPU dependencies — all CPU-side logic.
+### Build output
 
-| Module | Purpose |
-|--------|---------|
-| `ecs/` | Entity, Components, World, Systems, Pipeline |
-| `ecs/components.rs` | All component types (Transform, Timeline, ColorSource, etc.) |
-| `ecs/systems.rs` | Per-frame systems (visibility, animation, transform, opacity) |
-| `ecs/pipeline.rs` | Frame rendering pipeline orchestrator |
-| `ecs/draw.rs` | Software rasterizer for compositing |
-| `commands/` | Command pattern for undo/redo (AddEntity, RemoveEntity, SetProperty) |
-| `scene.rs` | SceneDescription + RenderSettings (JSON ↔ World round-trip) |
-| `color.rs` | Color4, ColorSpace, conversion matrices |
-| `types.rs` | Vec2, Mat4, Keyframe, Easing |
-| `time.rs` | TimeState, EntityTime |
-| `export/` | FFmpeg pipe, ExportConfig, video export with progress |
-
-### `render/` — ifol-render
-
-GPU rendering engine built on wgpu.
-
-| Module | Purpose |
-|--------|---------|
-| `render_graph.rs` | DAG of render passes with dependency tracking |
-| `passes/` | Individual render passes (composite, effects) |
-| `shaders/` | WGSL shader loading and compilation |
-
-### `studio/` — ifol-render-studio
-
-Professional GUI editor built with egui + egui_tiles.
-
-| Module | Purpose |
-|--------|---------|
-| `app.rs` | Main application state (EditorApp) |
-| `panels/viewport.rs` | Real-time viewport with grid, safe zones |
-| `panels/timeline.rs` | NLE-style timeline with track lanes |
-| `panels/entity_list.rs` | Entity browser with multi-select |
-| `panels/properties.rs` | Property inspector with undo support |
-| `panels/top_bar.rs` | 3-zone flex top bar (brand, workspace, actions) |
-| `panels/status_bar.rs` | Status bar with entity count |
-| `panels/workspace.rs` | egui_tiles workspace with split/tab support |
-
-### `crates/cli/` — ifol-render-cli
-
-Headless CLI tool for rendering and export.
-
-| Subcommand | Purpose |
-|------------|---------|
-| `info` | Display scene metadata |
-| `preview` | Render single frame to PNG |
-| `export` | Export video via FFmpeg |
-
-### `crates/wasm/` — ifol-render-wasm
-
-WebAssembly target for browser-based preview.
+```
+cargo build
+├── render (lib)   ← compile thành thư viện
+├── core (lib)     ← compile + link với render
+├── cli (bin)      ← 1 file exe chứa tất cả
+└── studio (bin)   ← 1 file exe chứa tất cả
+```
 
 ---
 
-## ECS Pipeline
+## Data Flow
 
-Each frame follows this pipeline:
+### Preview (real-time)
 
 ```
-1. Visibility System     → determines which entities are active at current time
-2. Animation System      → evaluates keyframes, applies animated values
-3. Transform System      → computes world matrices (with parent-child hierarchy)
-4. Opacity System        → resolves final opacity per entity
-5. Draw/Composite        → software rasterizer composites visible layers
+User thao tác → Core tính ECS → DrawCommand[] → Render vẽ → hiển thị
+     ↑                                                          │
+     └──────────────────── 60fps loop ──────────────────────────┘
 ```
 
-### Parent-Child Hierarchy
+### Export video
 
-Entities can reference a parent via the `parent` component field. The transform system resolves the hierarchy using matrix multiplication (`Mat4::mul`), ensuring children inherit parent transforms.
+```
+Core loop: for frame in 0..N
+  → Core tính ECS tại time=frame/fps
+  → Core gom DrawCommand[]
+  → Render vẽ → pixels
+  → FFmpeg encode → video file
+```
 
-### Animation & Easing
+### Web (WASM)
 
-Keyframes support multiple easing functions:
-- `linear` — constant rate
-- `easeIn` / `easeOut` / `easeInOut` — cubic bezier presets
-- `cubicBezier: [x1, y1, x2, y2]` — custom cubic bezier (Newton-Raphson solver)
+```
+JavaScript UI → WASM (core+render) → WebGPU → Canvas
+               gọi như thư viện, zero overhead
+```
 
 ---
 
-## Command System
-
-All mutations go through the Command pattern for undo/redo:
+## Cache Architecture (thuộc Render)
 
 ```
-User Action → Command::execute() → World mutation
-                                  → History push
-Ctrl+Z      → Command::undo()   → Reverse mutation
-Ctrl+Y      → Command::redo()   → Re-apply mutation
-```
+┌─────────────────────────────────────────┐
+│  Render's Cache System                  │
+│                                         │
+│  ┌─ Texture Cache (VRAM)               │
+│  │  key → GPU texture (load 1 lần)     │
+│  │  evict: LRU / manual / clear_all    │
+│  │                                      │
+│  ├─ Pipeline Cache                      │
+│  │  shader_name → GPU pipeline          │
+│  │  tạo 1 lần, dùng mãi               │
+│  │                                      │
+│  └─ Layer Cache (tương lai)             │
+│     layer_hash → GPU texture result     │
+│     so sánh CPU (hash metadata)         │
+│     chỉ vẽ lại layer thay đổi          │
+└─────────────────────────────────────────┘
 
-Commands: `AddEntity`, `RemoveEntity`, `SetProperty`
+Core có thể gọi:
+  renderer.evict_texture("cat.png")   // xóa 1 texture
+  renderer.clear_cache()              // xóa hết
+  renderer.capabilities()             // đọc giới hạn GPU
+```
 
 ---
 
-## Export Pipeline
+## Effect System
+
+### Ownership
 
 ```
-SceneDescription → render_frame() loop → RGBA pixels → FFmpeg stdin pipe → video file
-                     ↑                                        ↓
-               progress callback                    codec (H264/VP9/ProRes)
+Core (ECS):                    Render (GPU):
+EffectStack component          EffectRegistry
+  effects: [                     shader WGSL files
+    { type: "blur",              pipeline cache
+      params: {radius: 5} },    ping-pong textures
+    { type: "vignette",          generic dispatch engine
+      params: {intensity: 0.5} }
+  ]
+       ↓ convert to EffectConfig[]
+       ↓ gửi cho render
+       → render_frame_with_effects(commands, effects) → pixels
 ```
 
-The export system supports configurable FFmpeg path (`--ffmpeg /path/to/ffmpeg`).
+### Thêm effect mới
+
+```
+Built-in: thêm .wgsl file + register trong EffectRegistry
+Runtime:  renderer.register_effect("name", wgsl_source, params, passes)
+Tương lai: auto-scan thư mục shaders/effects/
+```

@@ -1,65 +1,100 @@
-# ifol-render-cli — Command-Line Rendering Tool
+# ifol-render-cli — Headless CLI Tool
 
 ## Role
 
-Headless CLI tool for rendering and exporting scenes without a GUI. Uses the same `ifol-render-core` pipeline as the studio.
+Headless command-line tool cho rendering và export. Dùng để:
+- **Test render** trực tiếp trên terminal
+- **Export video** final output
+- **Preview frame** xem kết quả bằng file PNG
+- **CI/CD** automated rendering
+
+CLI = 1 consumer của core + render, build thành **1 file exe**.
 
 ## Usage
 
 ```bash
-# Show scene info
-ifol-render info -s scene.json
+# Xem thông tin scene
+ifol-render-cli info --scene scene.json
 
-# Preview a single frame
-ifol-render preview -s scene.json -t 2.5 -o frame.png
+# Render 1 frame → PNG
+ifol-render-cli preview --scene scene.json --time 2.5 --output frame.png
 
 # Export video
-ifol-render export -s scene.json -o output.mp4 -c h264 --crf 18
-
-# Export with custom FFmpeg path
-ifol-render export -s scene.json -o output.mp4 --ffmpeg /path/to/ffmpeg
+ifol-render-cli export --scene scene.json --output video.mp4 --codec h264 --crf 18
 ```
 
-## Commands
+## Subcommands
 
 ### `info`
-Displays scene metadata: resolution, FPS, duration, entity count, entity list with types.
+
+Hiển thị metadata scene:
+
+```bash
+ifol-render-cli info --scene scene.json
+```
+
+Output:
+```
+Resolution: 1920×1080
+FPS: 30
+Duration: 10.0s
+Entities: 12
+Total frames: 300
+```
 
 ### `preview`
-Renders a single frame at the specified timestamp and saves as PNG.
 
-| Flag | Description |
-|------|-------------|
-| `-s, --scene` | Scene JSON path |
-| `-t, --time` | Timestamp in seconds |
-| `-o, --output` | Output PNG path |
-| `-w, --width` | Override width |
-| `-h, --height` | Override height |
+Render 1 frame tĩnh tại thời điểm cụ thể:
+
+```bash
+ifol-render-cli preview --scene scene.json --time 2.5 --output frame.png
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--scene` | required | Path to scene JSON |
+| `--time` | 0.0 | Time in seconds |
+| `--output` | preview.png | Output file path |
 
 ### `export`
-Exports the full scene as video via FFmpeg.
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `-s, --scene` | Scene JSON path | required |
-| `-o, --output` | Output file path | `output.mp4` |
-| `-c, --codec` | Video codec | `h264` |
-| `--crf` | Quality (0=best, 51=worst) | `23` |
-| `--fps` | Override FPS | scene FPS |
-| `--ffmpeg` | Path to FFmpeg binary | system PATH |
+Export video qua FFmpeg:
 
-Codecs: `h264`, `h265`, `vp9`, `prores`, `png`
+```bash
+ifol-render-cli export --scene scene.json --output video.mp4 \
+  --codec h264 --crf 18 --ffmpeg /usr/bin/ffmpeg
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--scene` | required | Path to scene JSON |
+| `--output` | required | Output video path |
+| `--codec` | h264 | h264/h265/vp9/prores/png |
+| `--crf` | 23 | Quality (0=lossless, 51=worst) |
+| `--ffmpeg` | "ffmpeg" | Path to FFmpeg binary |
 
 ## Architecture
 
 ```
-crates/cli/src/main.rs
-  ├── parse CLI args (clap)
-  ├── load SceneDescription from JSON
-  ├── convert to World + RenderSettings
-  ├── create Renderer (headless GPU)
-  ├── load image textures
-  └── dispatch to info/preview/export handler
+┌──────────────────────────────────────────┐
+│  CLI binary                               │
+│  ├── Parse args (clap)                    │
+│  ├── Load scene JSON                      │
+│  ├── Create Renderer (GPU)                │
+│  ├── Call core pipeline                   │
+│  │   ├── ECS systems                      │
+│  │   ├── Build DrawCommand[]              │
+│  │   └── renderer.render_frame()          │
+│  └── Output (PNG file or FFmpeg pipe)     │
+└──────────────────────────────────────────┘
 ```
 
-The CLI creates a `Renderer` directly, builds the ECS `World`, and calls `pipeline::render_frame()` — the exact same pipeline the studio uses. This ensures visual consistency between studio preview and CLI export.
+CLI chỉ là **glue code** — parse args, gọi core + render, xuất kết quả.
+
+## Testing Workflow
+
+1. Tạo scene JSON tay hoặc từ studio
+2. `ifol-render-cli preview --scene scene.json --output test.png`
+3. Mở `test.png` xem kết quả
+4. Sửa shader/code → build → test lại
+5. Khi ổn → `ifol-render-cli export` để xuất video
