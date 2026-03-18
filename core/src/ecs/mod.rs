@@ -28,7 +28,7 @@ pub struct Entity {
 }
 
 /// All possible components an entity can have.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Components {
     // ── Sources ──
@@ -88,6 +88,28 @@ pub struct Components {
 
 fn default_true() -> bool {
     true
+}
+
+impl Default for Components {
+    fn default() -> Self {
+        Self {
+            video_source: None,
+            image_source: None,
+            text_source: None,
+            color_source: None,
+            timeline: None,
+            transform: None,
+            opacity: None,
+            blend_mode: None,
+            visible: true, // entities are visible by default
+            name: None,
+            color: None,
+            animation: None,
+            effects: None,
+            parent: None,
+            children: Vec::new(),
+        }
+    }
 }
 
 impl Entity {

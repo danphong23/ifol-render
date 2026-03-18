@@ -56,7 +56,7 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
 
     ui.add_space(4.0);
 
-    // Helper macro-like closure for collapsible sections
+    // Helper: collapsed sections
     let collapsed = &mut app.collapsed_sections;
 
     egui::ScrollArea::vertical()
@@ -68,19 +68,14 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
             {
                 let section = "transform";
                 let open = !collapsed.contains(section);
-                if collapsible_header(ui, "TRANSFORM", header_color, open) {
-                    if open {
-                        collapsed.insert(section.into());
-                    } else {
-                        collapsed.remove(section);
-                    }
+                if section_header(ui, "TRANSFORM", header_color, open) {
+                    toggle_section(collapsed, section);
                 }
                 if open {
                     if let Some(ref mut tf) = app.world.entities[i].components.transform {
                         let (old_px, old_py) = (tf.position.x, tf.position.y);
                         let (old_sx, old_sy) = (tf.scale.x, tf.scale.y);
                         let old_rot = tf.rotation;
-                        let old_z = tf.z_index;
 
                         Grid::new("tf_grid")
                             .num_columns(2)
@@ -144,9 +139,6 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                             );
                             needs_dirty = true;
                         }
-                        if tf.z_index != old_z {
-                            needs_dirty = true;
-                        }
                     }
                     ui.add_space(4.0);
                 }
@@ -156,19 +148,14 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
             {
                 let section = "appearance";
                 let open = !collapsed.contains(section);
-                if collapsible_header(ui, "APPEARANCE", header_color, open) {
-                    if open {
-                        collapsed.insert(section.into());
-                    } else {
-                        collapsed.remove(section);
-                    }
+                if section_header(ui, "APPEARANCE", header_color, open) {
+                    toggle_section(collapsed, section);
                 }
                 if open {
                     Grid::new("appear_grid")
                         .num_columns(2)
                         .spacing([16.0, 4.0])
                         .show(ui, |ui| {
-                            // Opacity
                             let e = &mut app.world.entities[i];
                             let op = e.components.opacity.get_or_insert(1.0);
                             let old_op = *op;
@@ -187,7 +174,6 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                                 needs_dirty = true;
                             }
 
-                            // Blend Mode
                             let blend = e.components.blend_mode.get_or_insert(BlendMode::Normal);
                             ui.label(RichText::new("Blend").color(TEXT_DIM).size(11.0));
                             egui::ComboBox::from_id_salt("blend_mode")
@@ -200,13 +186,11 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                                 });
                             ui.end_row();
 
-                            // Visible
                             ui.label(RichText::new("Visible").color(TEXT_DIM).size(11.0));
                             ui.checkbox(&mut e.components.visible, "");
                             ui.end_row();
                         });
 
-                    // Color source
                     if let Some(ref mut cs) = app.world.entities[i].components.color_source {
                         let old_color = cs.color;
                         let mut rgb = [cs.color.r, cs.color.g, cs.color.b];
@@ -237,12 +221,8 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
             {
                 let section = "timeline";
                 let open = !collapsed.contains(section);
-                if collapsible_header(ui, "TIMELINE", header_color, open) {
-                    if open {
-                        collapsed.insert(section.into());
-                    } else {
-                        collapsed.remove(section);
-                    }
+                if section_header(ui, "TIMELINE", header_color, open) {
+                    toggle_section(collapsed, section);
                 }
                 if open {
                     if let Some(ref mut tl) = app.world.entities[i].components.timeline {
@@ -327,12 +307,8 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                     || e.components.text_source.is_some();
 
                 if has_source {
-                    if collapsible_header(ui, "SOURCE", header_color, open) {
-                        if open {
-                            collapsed.insert(section.into());
-                        } else {
-                            collapsed.remove(section);
-                        }
+                    if section_header(ui, "SOURCE", header_color, open) {
+                        toggle_section(collapsed, section);
                     }
                     if open {
                         if let Some(ref img) = e.components.image_source {
@@ -363,24 +339,40 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
     }
 }
 
-/// Draw a collapsible section header. Returns true if clicked.
-fn collapsible_header(ui: &mut Ui, label: &str, color: Color32, open: bool) -> bool {
+/// Draw a collapsible section header as a full-width button. Returns true if clicked.
+fn section_header(ui: &mut Ui, label: &str, color: Color32, open: bool) -> bool {
     let arrow = if open { "▼" } else { "▶" };
-    let resp = ui
-        .horizontal(|ui| {
-            ui.add_space(4.0);
-            ui.label(RichText::new(arrow).color(TEXT_DIM).size(9.0));
-            ui.label(RichText::new(label).color(color).strong().size(10.0));
-        })
-        .response
-        .interact(egui::Sense::click());
+    let text = format!("{} {}", arrow, label);
 
-    if resp.hovered() {
+    // Use a full-width selectable label so the entire row is clickable
+    let desired_size = egui::vec2(ui.available_width(), 20.0);
+    let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click());
+
+    // Draw background on hover
+    if response.hovered() {
         ui.painter()
-            .rect_filled(resp.rect, 0.0, ACCENT.linear_multiply(0.08));
+            .rect_filled(rect, 2.0, ACCENT.linear_multiply(0.1));
     }
 
-    resp.clicked()
+    // Draw the text
+    ui.painter().text(
+        egui::pos2(rect.min.x + 6.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        text,
+        egui::FontId::proportional(10.0),
+        color,
+    );
+
+    response.clicked()
+}
+
+/// Toggle a section's collapsed state.
+fn toggle_section(collapsed: &mut std::collections::HashSet<String>, section: &str) {
+    if collapsed.contains(section) {
+        collapsed.remove(section);
+    } else {
+        collapsed.insert(section.into());
+    }
 }
 
 /// Draw a labeled drag-value row.
