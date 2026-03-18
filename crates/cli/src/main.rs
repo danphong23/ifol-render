@@ -367,6 +367,34 @@ fn main() {
                     println!("Saved resized: {} ({}x{})", out_path, new_w, new_h);
                     return;
                 }
+                "masking" => {
+                    // First render a gradient background to use as source
+                    let bg_cmds = vec![make_gradient_cmd(
+                        0.0,
+                        0.0,
+                        width as f32,
+                        height as f32,
+                        [0.9, 0.3, 0.1, 1.0],
+                        [0.1, 0.3, 0.9, 1.0],
+                        0.0,
+                        std::f32::consts::PI / 4.0,
+                        0.0,
+                        0.0,
+                        width,
+                        height,
+                    )];
+                    let bg_pixels = renderer.render_frame(&bg_cmds);
+                    // Load the rendered gradient as a texture for masking
+                    renderer.load_rgba("gradient_bg", &bg_pixels, width, height);
+
+                    // Now draw mask shapes over the gradient
+                    let cmds = build_test_masking(width, height);
+                    let pixels = renderer.render_frame(&cmds);
+                    let out_path = output.to_str().unwrap();
+                    ifol_render_core::Renderer::save_png(&pixels, width, height, out_path).unwrap();
+                    println!("Saved: {}", out_path);
+                    return;
+                }
                 "effects" => {
                     let cmds = build_test_basic(width, height);
                     let effects = vec![ifol_render_core::EffectConfig {
@@ -382,7 +410,7 @@ fn main() {
                 }
                 _ => {
                     eprintln!(
-                        "Unknown test: '{}'. Available: basic, blend, shapes, gradients, resize, effects",
+                        "Unknown test: '{}'. Available: basic, blend, shapes, gradients, resize, masking, effects",
                         test
                     );
                     std::process::exit(1);
@@ -1013,6 +1041,143 @@ fn build_test_gradients(w: u32, h: u32) -> Vec<ifol_render_core::DrawCommand> {
         0.0,
         0.0,
         0.0,
+        w,
+        h,
+    ));
+
+    cmds
+}
+
+/// Build a mask DrawCommand.
+/// Layout: [transform: f32x16, color: f32x4, opacity: f32, mask_shape: f32, param1: f32, _pad: f32]
+fn make_mask_cmd(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    mask_shape: f32,
+    param1: f32,
+    texture_key: &str,
+    canvas_w: u32,
+    canvas_h: u32,
+) -> ifol_render_core::DrawCommand {
+    let sx = w / canvas_w as f32 * 2.0;
+    let sy = h / canvas_h as f32 * 2.0;
+    let tx = (x + w / 2.0) / canvas_w as f32 * 2.0 - 1.0;
+    let ty = 1.0 - (y + h / 2.0) / canvas_h as f32 * 2.0;
+
+    #[rustfmt::skip]
+    let transform = [
+        sx,  0.0, 0.0, 0.0,
+        0.0, sy,  0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        tx,  ty,  0.0, 1.0,
+    ];
+
+    let mut uniforms = Vec::with_capacity(24);
+    uniforms.extend_from_slice(&transform);
+    uniforms.extend_from_slice(&[1.0, 1.0, 1.0, 1.0]); // color (white = no tint)
+    uniforms.push(1.0); // opacity
+    uniforms.push(mask_shape); // mask_shape
+    uniforms.push(param1); // param1
+    uniforms.push(0.0); // _pad
+
+    ifol_render_core::DrawCommand {
+        pipeline: "mask".into(),
+        uniforms,
+        textures: vec![texture_key.to_string()],
+    }
+}
+
+/// Test: masking / clipping.
+fn build_test_masking(w: u32, h: u32) -> Vec<ifol_render_core::DrawCommand> {
+    let mut cmds = vec![
+        // Dark background
+        make_draw_cmd(
+            0.0,
+            0.0,
+            w as f32,
+            h as f32,
+            [0.15, 0.15, 0.2, 1.0],
+            1.0,
+            0.0,
+            w,
+            h,
+        ),
+    ];
+
+    // Row 1: rect clip and circle clip
+    // Rect clip (mask_shape=0)
+    cmds.push(make_mask_cmd(
+        30.0,
+        30.0,
+        200.0,
+        200.0,
+        0.0,
+        0.0,
+        "gradient_bg",
+        w,
+        h,
+    ));
+    // Circle clip (mask_shape=1)
+    cmds.push(make_mask_cmd(
+        260.0,
+        30.0,
+        200.0,
+        200.0,
+        1.0,
+        0.0,
+        "gradient_bg",
+        w,
+        h,
+    ));
+    // Rounded rect clip (mask_shape=2, param1=corner_radius)
+    cmds.push(make_mask_cmd(
+        490.0,
+        30.0,
+        250.0,
+        200.0,
+        2.0,
+        0.08,
+        "gradient_bg",
+        w,
+        h,
+    ));
+
+    // Row 2: Feathered soft masks
+    // Feathered rect (mask_shape=3, param1=feather_amount)
+    cmds.push(make_mask_cmd(
+        30.0,
+        280.0,
+        200.0,
+        200.0,
+        3.0,
+        0.1,
+        "gradient_bg",
+        w,
+        h,
+    ));
+    // Feathered larger
+    cmds.push(make_mask_cmd(
+        260.0,
+        280.0,
+        200.0,
+        200.0,
+        3.0,
+        0.25,
+        "gradient_bg",
+        w,
+        h,
+    ));
+    // Circle soft
+    cmds.push(make_mask_cmd(
+        490.0,
+        280.0,
+        250.0,
+        200.0,
+        1.0,
+        0.0,
+        "gradient_bg",
         w,
         h,
     ));

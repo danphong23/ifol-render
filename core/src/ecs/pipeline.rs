@@ -43,6 +43,15 @@ pub fn setup_renderer(renderer: &mut Renderer) {
         );
     }
 
+    // Mask/clip pipeline
+    if !renderer.has_pipeline("mask") {
+        renderer.register_pipeline(
+            "mask",
+            include_str!("../../../shaders/mask.wgsl"),
+            PipelineConfig::quad(),
+        );
+    }
+
     // Built-in effects
     if !renderer.has_pipeline("blur") {
         renderer.register_effect(
