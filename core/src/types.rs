@@ -80,6 +80,22 @@ impl Mat4 {
             1.0,
         ])
     }
+
+    /// Multiply two 4x4 matrices (column-major): self * rhs
+    pub fn mul(&self, rhs: &Mat4) -> Mat4 {
+        let a = &self.0;
+        let b = &rhs.0;
+        let mut out = [0.0f32; 16];
+        for col in 0..4 {
+            for row in 0..4 {
+                out[col * 4 + row] = a[0 * 4 + row] * b[col * 4 + 0]
+                    + a[1 * 4 + row] * b[col * 4 + 1]
+                    + a[2 * 4 + row] * b[col * 4 + 2]
+                    + a[3 * 4 + row] * b[col * 4 + 3];
+            }
+        }
+        Mat4(out)
+    }
 }
 
 /// Time range in seconds.
@@ -120,22 +136,55 @@ impl Easing {
     pub fn evaluate(&self, t: f32) -> f32 {
         match self {
             Easing::Linear => t,
-            Easing::EaseIn => t * t,
-            Easing::EaseOut => 1.0 - (1.0 - t) * (1.0 - t),
+            Easing::EaseIn => t * t * t,
+            Easing::EaseOut => 1.0 - (1.0 - t).powi(3),
             Easing::EaseInOut => {
                 if t < 0.5 {
-                    2.0 * t * t
+                    4.0 * t * t * t
                 } else {
-                    1.0 - (-2.0 * t + 2.0).powi(2) / 2.0
+                    1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
                 }
             }
             Easing::CubicBezier(x1, y1, x2, y2) => {
-                // Simplified cubic bezier (TODO: proper Newton-Raphson)
-                let _ = (x1, y1, x2, y2);
-                t
+                cubic_bezier_ease(t, *x1, *y1, *x2, *y2)
             }
         }
     }
+}
+
+/// Solve cubic bezier easing using Newton-Raphson iteration.
+/// Control points: (0,0), (x1,y1), (x2,y2), (1,1)
+fn cubic_bezier_ease(t: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
+    // First find the parameter `s` such that bezier_x(s) = t
+    let mut s = t; // initial guess
+    for _ in 0..8 {
+        let x = bezier_sample(s, x1, x2) - t;
+        let dx = bezier_derivative(s, x1, x2);
+        if dx.abs() < 1e-7 {
+            break;
+        }
+        s -= x / dx;
+        s = s.clamp(0.0, 1.0);
+    }
+    // Then evaluate bezier_y(s)
+    bezier_sample(s, y1, y2)
+}
+
+#[inline]
+fn bezier_sample(t: f32, p1: f32, p2: f32) -> f32 {
+    // B(t) = 3(1-t)²t·p1 + 3(1-t)t²·p2 + t³
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let mt = 1.0 - t;
+    let mt2 = mt * mt;
+    3.0 * mt2 * t * p1 + 3.0 * mt * t2 * p2 + t3
+}
+
+#[inline]
+fn bezier_derivative(t: f32, p1: f32, p2: f32) -> f32 {
+    // B'(t) = 3(1-t)²·p1 + 6(1-t)t·(p2-p1) + 3t²·(1-p2)
+    let mt = 1.0 - t;
+    3.0 * mt * mt * p1 + 6.0 * mt * t * (p2 - p1) + 3.0 * t * t * (1.0 - p2)
 }
 
 /// A single keyframe in an animation curve.

@@ -60,6 +60,10 @@ pub struct Components {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effects: Option<Vec<components::Effect>>,
+
+    /// Parent entity ID for transform hierarchy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<EntityId>,
 }
 
 /// Runtime-resolved state (computed by systems each frame).
