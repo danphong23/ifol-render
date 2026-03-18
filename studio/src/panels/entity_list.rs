@@ -78,10 +78,9 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            let mut sel = app.selected;
             
             for (i, e) in app.world.entities.iter().enumerate() {
-                let is_sel = sel == Some(i);
+                let is_sel = app.selected == Some(i) || app.selected_indices.contains(&i);
                 
                 let (icon, color) = match () {
                     _ if e.components.color_source.is_some() => ("●", Color32::from_rgb(147, 51, 234)),
@@ -109,30 +108,68 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                     .interact(Sense::click());
 
                 if resp.clicked() {
-                    sel = Some(i);
+                    let modifiers = ui.input(|i| i.modifiers);
+                    if modifiers.ctrl || modifiers.command {
+                        // Ctrl+Click: toggle in multi-selection
+                        if app.selected_indices.contains(&i) {
+                            app.selected_indices.remove(&i);
+                            if app.selected == Some(i) {
+                                app.selected = app.selected_indices.iter().next().copied();
+                            }
+                        } else {
+                            app.selected_indices.insert(i);
+                            app.selected = Some(i);
+                        }
+                    } else if modifiers.shift {
+                        // Shift+Click: range select
+                        if let Some(anchor) = app.selected {
+                            let (lo, hi) = if anchor <= i { (anchor, i) } else { (i, anchor) };
+                            for j in lo..=hi {
+                                app.selected_indices.insert(j);
+                            }
+                        }
+                        app.selected = Some(i);
+                    } else {
+                        // Normal click: single select
+                        app.selected_indices.clear();
+                        app.selected_indices.insert(i);
+                        app.selected = Some(i);
+                    }
                 }
             }
-            app.selected = sel;
 
-            // Delete button at bottom of scroll area (not bottom_up layout)
-            if let Some(i) = app.selected {
-                if i < app.world.entities.len() {
-                    ui.add_space(8.0);
-                    ui.separator();
-                    ui.add_space(4.0);
-                    if ui
-                        .button(RichText::new("🗑 Delete Selected").color(RED).size(11.0))
-                        .clicked()
-                    {
-                        let eid = app.world.entities[i].id.clone();
-                        app.commands.execute(
-                            Box::new(RemoveEntity::new(eid)),
-                            &mut app.world,
-                        );
-                        app.selected = None;
-                        app.renderer = None;
-                        app.dirty = true;
+            // Delete button — deletes all selected entities
+            let sel_count = app.selected_indices.len();
+            if sel_count > 0 {
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(4.0);
+                let label = if sel_count == 1 {
+                    "🗑 Delete Selected".to_string()
+                } else {
+                    format!("🗑 Delete {} Selected", sel_count)
+                };
+                if ui
+                    .button(RichText::new(label).color(RED).size(11.0))
+                    .clicked()
+                {
+                    // Delete in reverse order to preserve indices
+                    let mut indices: Vec<usize> = app.selected_indices.iter().copied().collect();
+                    indices.sort_unstable();
+                    indices.reverse();
+                    for idx in indices {
+                        if idx < app.world.entities.len() {
+                            let eid = app.world.entities[idx].id.clone();
+                            app.commands.execute(
+                                Box::new(RemoveEntity::new(eid)),
+                                &mut app.world,
+                            );
+                        }
                     }
+                    app.selected = None;
+                    app.selected_indices.clear();
+                    app.renderer = None;
+                    app.dirty = true;
                 }
             }
         });

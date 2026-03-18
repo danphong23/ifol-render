@@ -49,6 +49,12 @@ pub struct EditorApp {
     pub pending_workspace_action: Option<crate::panels::workspace::WorkspaceAction>,
     /// Current scene file path (None = unsaved)
     pub scene_path: Option<std::path::PathBuf>,
+    /// Show grid overlay in viewport
+    pub show_grid: bool,
+    /// Show safe zones in viewport
+    pub show_safe_zones: bool,
+    /// Multi-selection: set of selected entity indices
+    pub selected_indices: std::collections::HashSet<usize>,
 }
 
 impl EditorApp {
@@ -126,6 +132,9 @@ impl EditorApp {
             workspace: crate::panels::WorkspaceLayout::new(),
             pending_workspace_action: None,
             scene_path: None,
+            show_grid: false,
+            show_safe_zones: false,
+            selected_indices: std::collections::HashSet::new(),
         }
     }
 
