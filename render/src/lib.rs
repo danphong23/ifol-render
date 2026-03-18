@@ -5,6 +5,7 @@
 //! **Does NOT know about ECS, Entity, Component, World, or any business logic.**
 //! It only knows how to draw textured/colored quads with transforms and opacity.
 
+pub mod effects;
 pub mod engine;
 pub mod passes;
 pub mod render_graph;
@@ -85,6 +86,10 @@ pub struct Renderer {
     composite: CompositePipeline,
     /// Cached textures by key.
     texture_cache: HashMap<String, (wgpu::Texture, wgpu::TextureView)>,
+    /// Effect pass ping-pong context.
+    effect_ctx: Option<effects::context::EffectContext>,
+    /// Registry of available effects.
+    effect_registry: effects::EffectRegistry,
     width: u32,
     height: u32,
 }
@@ -122,6 +127,8 @@ impl Renderer {
             engine,
             composite,
             texture_cache: HashMap::new(),
+            effect_ctx: None,
+            effect_registry: effects::EffectRegistry::new(),
             width,
             height,
         }
@@ -366,6 +373,139 @@ impl Renderer {
         staging.unmap();
 
         pixels
+    }
+
+    /// Render a frame with post-processing effects applied.
+    ///
+    /// Effects are applied in order after the composite pass.
+    /// Each effect reads from the ping-pong input and writes to the output,
+    /// then swaps for the next effect.
+    pub fn render_frame_with_effects(
+        &mut self,
+        commands: &[DrawCommand],
+        effect_configs: &[effects::EffectConfig],
+    ) -> Vec<u8> {
+        if effect_configs.is_empty() {
+            return self.render_frame(commands);
+        }
+
+        // First: normal composite pass
+        let _composite_pixels = self.render_frame(commands);
+
+        // Initialize effect context if needed
+        if self.effect_ctx.is_none() {
+            self.effect_ctx = Some(effects::context::EffectContext::new(
+                &self.engine.device,
+                self.width,
+                self.height,
+            ));
+        }
+
+        let output_texture = self.engine.output_texture.as_ref().unwrap();
+
+        // Copy composite result into ping-pong input
+        let mut encoder =
+            self.engine
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("effect copy"),
+                });
+        self.effect_ctx
+            .as_ref()
+            .unwrap()
+            .load_from(&mut encoder, output_texture);
+        self.engine.queue.submit(std::iter::once(encoder.finish()));
+
+        // Run each effect
+        for config in effect_configs {
+            if let Some(effect) = self.effect_registry.get(&config.effect_type) {
+                effect.execute(
+                    &self.engine.device,
+                    &self.engine.queue,
+                    self.effect_ctx.as_mut().unwrap(),
+                );
+            }
+        }
+
+        // Copy final result back to output texture
+        let mut encoder =
+            self.engine
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("effect store"),
+                });
+        self.effect_ctx
+            .as_ref()
+            .unwrap()
+            .store_to(&mut encoder, output_texture);
+        self.engine.queue.submit(std::iter::once(encoder.finish()));
+
+        // Readback the final pixels (same logic as render_frame)
+        let padded_bytes_per_row = Self::padded_bytes_per_row(self.width);
+        let staging = self.engine.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("staging"),
+            size: (padded_bytes_per_row * self.height) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder =
+            self.engine
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("effect readback"),
+                });
+
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: output_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(self.height),
+                },
+            },
+            wgpu::Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        self.engine.queue.submit(std::iter::once(encoder.finish()));
+
+        let buffer_slice = staging.slice(..);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+        self.engine.device.poll(wgpu::Maintain::Wait);
+        receiver.recv().unwrap().unwrap();
+
+        let data = buffer_slice.get_mapped_range();
+        let unpadded_bytes_per_row = self.width * 4;
+        let buffer_size = (self.width * self.height * 4) as usize;
+        let mut pixels = Vec::with_capacity(buffer_size);
+        for row in 0..self.height {
+            let start = (row * padded_bytes_per_row) as usize;
+            let end = start + unpadded_bytes_per_row as usize;
+            pixels.extend_from_slice(&data[start..end]);
+        }
+
+        drop(data);
+        staging.unmap();
+        pixels
+    }
+
+    /// Get the effect registry for querying available effects.
+    pub fn effect_registry(&self) -> &effects::EffectRegistry {
+        &self.effect_registry
     }
 
     /// Calculate padded bytes per row (wgpu requires 256-byte alignment).
