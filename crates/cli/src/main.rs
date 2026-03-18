@@ -453,6 +453,74 @@ fn main() {
                     println!("Saved: {}", out_path);
                     return;
                 }
+                "perf" => {
+                    use std::time::Instant;
+                    let n = 500u32;
+                    println!("=== Performance Test: {} draw commands ===", n);
+
+                    // Build 500 draw commands (mixed pipelines)
+                    let t_build = Instant::now();
+                    let mut cmds: Vec<ifol_render_core::DrawCommand> =
+                        Vec::with_capacity(n as usize);
+                    // Background
+                    cmds.push(make_draw_cmd(
+                        0.0,
+                        0.0,
+                        width as f32,
+                        height as f32,
+                        [0.1, 0.1, 0.15, 1.0],
+                        1.0,
+                        0.0,
+                        width,
+                        height,
+                    ));
+                    for i in 1..n {
+                        let x = (i % 25) as f32 * 30.0;
+                        let y = (i / 25) as f32 * 30.0;
+                        let r = ((i * 7) % 256) as f32 / 255.0;
+                        let g = ((i * 13) % 256) as f32 / 255.0;
+                        let b = ((i * 23) % 256) as f32 / 255.0;
+                        cmds.push(make_draw_cmd(
+                            x,
+                            y,
+                            28.0,
+                            28.0,
+                            [r, g, b, 0.7],
+                            0.7,
+                            0.0,
+                            width,
+                            height,
+                        ));
+                    }
+                    let build_ms = t_build.elapsed().as_secs_f64() * 1000.0;
+
+                    // Render
+                    let t_render = Instant::now();
+                    let pixels = renderer.render_frame(&cmds);
+                    let render_ms = t_render.elapsed().as_secs_f64() * 1000.0;
+
+                    // Save
+                    let t_save = Instant::now();
+                    let out_path = output.to_str().unwrap();
+                    ifol_render_core::Renderer::save_png(&pixels, width, height, out_path).unwrap();
+                    let save_ms = t_save.elapsed().as_secs_f64() * 1000.0;
+
+                    // VRAM stats
+                    let vram = renderer.vram_usage();
+                    println!("Build commands:  {:.2}ms", build_ms);
+                    println!("Render frame:    {:.2}ms ({} draws)", render_ms, n);
+                    println!("Save PNG:        {:.2}ms", save_ms);
+                    println!("Total:           {:.2}ms", build_ms + render_ms + save_ms);
+                    println!("--- VRAM ---");
+                    println!(
+                        "Texture cache:   {} textures, {} KB",
+                        vram.texture_count,
+                        vram.texture_cache_bytes / 1024
+                    );
+                    println!("Uniform ring:    {} KB", vram.uniform_buffer_bytes / 1024);
+                    println!("Saved: {}", out_path);
+                    return;
+                }
                 "effects" => {
                     let cmds = build_test_basic(width, height);
                     let effects = vec![ifol_render_core::EffectConfig {
