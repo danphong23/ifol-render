@@ -342,6 +342,31 @@ fn main() {
                 "blend" => build_test_blend(width, height),
                 "shapes" => build_test_shapes(width, height),
                 "gradients" => build_test_gradients(width, height),
+                "resize" => {
+                    // Test 1: render at initial size
+                    let cmds = build_test_basic(width, height);
+                    let pixels = renderer.render_frame(&cmds);
+                    let small_path = output.with_file_name("render_test_resize_small.png");
+                    ifol_render_core::Renderer::save_png(
+                        &pixels,
+                        width,
+                        height,
+                        small_path.to_str().unwrap(),
+                    )
+                    .unwrap();
+                    println!("Saved small: {:?} ({}x{})", small_path, width, height);
+
+                    // Test 2: resize to 1200x900 and render again
+                    let new_w = 1200;
+                    let new_h = 900;
+                    renderer.resize(new_w, new_h);
+                    let cmds2 = build_test_basic(new_w, new_h);
+                    let pixels2 = renderer.render_frame(&cmds2);
+                    let out_path = output.to_str().unwrap();
+                    ifol_render_core::Renderer::save_png(&pixels2, new_w, new_h, out_path).unwrap();
+                    println!("Saved resized: {} ({}x{})", out_path, new_w, new_h);
+                    return;
+                }
                 "effects" => {
                     let cmds = build_test_basic(width, height);
                     let effects = vec![ifol_render_core::EffectConfig {
@@ -357,7 +382,7 @@ fn main() {
                 }
                 _ => {
                     eprintln!(
-                        "Unknown test: '{}'. Available: basic, blend, shapes, gradients, effects",
+                        "Unknown test: '{}'. Available: basic, blend, shapes, gradients, resize, effects",
                         test
                     );
                     std::process::exit(1);
