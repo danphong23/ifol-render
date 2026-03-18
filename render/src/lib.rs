@@ -29,13 +29,32 @@ pub enum DrawSource {
     Texture(String),
 }
 
-/// Blend mode for compositing.
+/// Blend mode for compositing (matches composite.wgsl blend_mode uniform).
 #[derive(Debug, Clone, Copy, Default)]
 pub enum BlendMode {
     #[default]
-    Normal,
-    Additive,
-    Multiply,
+    Normal, // 0
+    Multiply,   // 1
+    Screen,     // 2
+    Overlay,    // 3
+    SoftLight,  // 4
+    Add,        // 5
+    Difference, // 6
+}
+
+impl BlendMode {
+    /// Convert to GPU float for shader uniform.
+    pub fn to_gpu(&self) -> f32 {
+        match self {
+            BlendMode::Normal => 0.0,
+            BlendMode::Multiply => 1.0,
+            BlendMode::Screen => 2.0,
+            BlendMode::Overlay => 3.0,
+            BlendMode::SoftLight => 4.0,
+            BlendMode::Add => 5.0,
+            BlendMode::Difference => 6.0,
+        }
+    }
 }
 
 /// A single draw command — everything the GPU needs to draw one quad.
@@ -187,6 +206,7 @@ impl Renderer {
             let mut uniforms = CompositeUniforms {
                 transform: cmd.transform,
                 opacity: cmd.opacity,
+                blend_mode: cmd.blend_mode.to_gpu(),
                 ..Default::default()
             };
 

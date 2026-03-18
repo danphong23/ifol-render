@@ -12,7 +12,8 @@ pub struct CompositeUniforms {
     pub color: [f32; 4],
     pub opacity: f32,
     pub use_texture: f32,
-    pub _pad: [f32; 2],
+    pub blend_mode: f32,
+    pub _pad: f32,
 }
 
 impl Default for CompositeUniforms {
@@ -24,7 +25,8 @@ impl Default for CompositeUniforms {
             color: [1.0, 1.0, 1.0, 1.0],
             opacity: 1.0,
             use_texture: 0.0,
-            _pad: [0.0; 2],
+            blend_mode: 0.0,
+            _pad: 0.0,
         }
     }
 }
