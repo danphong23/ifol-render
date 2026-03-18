@@ -47,6 +47,8 @@ pub struct EditorApp {
     pub workspace: crate::panels::WorkspaceLayout,
     /// Pending workspace action from editor switcher/split menu
     pub pending_workspace_action: Option<crate::panels::workspace::WorkspaceAction>,
+    /// Current scene file path (None = unsaved)
+    pub scene_path: Option<std::path::PathBuf>,
 }
 
 impl EditorApp {
@@ -123,6 +125,7 @@ impl EditorApp {
             commands: CommandHistory::new(),
             workspace: crate::panels::WorkspaceLayout::new(),
             pending_workspace_action: None,
+            scene_path: None,
         }
     }
 

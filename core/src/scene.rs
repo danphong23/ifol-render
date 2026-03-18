@@ -84,6 +84,21 @@ impl SceneDescription {
         serde_json::from_str(json)
     }
 
+    /// Serialize to JSON string.
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+
+    /// Create a SceneDescription from a World and RenderSettings.
+    pub fn from_world(world: &World, settings: &RenderSettings) -> Self {
+        Self {
+            version: "1.0".into(),
+            settings: settings.clone(),
+            entities: world.entities.clone(),
+            shaders: vec![],
+        }
+    }
+
     /// Convert to a World for ECS processing.
     pub fn into_world(self) -> World {
         let mut world = World::new();

@@ -46,6 +46,7 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                                                 app.selected = None;
                                                 app.renderer = None;
                                                 app.dirty = true;
+                                                app.scene_path = Some(path.clone());
                                                 app.status = format!("Opened: {}", path.display());
                                             }
                                             Err(e) => app.status = format!("Error: {}", e),
@@ -54,11 +55,38 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                                 }
                                 ui.close_menu();
                             }
-                            if ui.button("Save...").clicked() {
-                                let json = serde_json::to_string_pretty(&app.world).unwrap_or_default();
-                                if let Some(path) = rfd::FileDialog::new().add_filter("JSON", &["json"]).save_file() {
-                                    let _ = std::fs::write(&path, &json);
-                                    app.status = format!("Saved: {}", path.display());
+                            if ui.button("Save").clicked() {
+                                if let Some(ref path) = app.scene_path {
+                                    // Quick save to existing path
+                                    let desc = ifol_render_core::scene::SceneDescription::from_world(&app.world, &app.settings);
+                                    if let Ok(json) = desc.to_json() {
+                                        let _ = std::fs::write(path, &json);
+                                        app.status = format!("Saved: {}", path.display());
+                                        app.dirty = false;
+                                    }
+                                } else {
+                                    // Save As dialog
+                                    let desc = ifol_render_core::scene::SceneDescription::from_world(&app.world, &app.settings);
+                                    if let Ok(json) = desc.to_json() {
+                                        if let Some(path) = rfd::FileDialog::new().add_filter("JSON", &["json"]).save_file() {
+                                            let _ = std::fs::write(&path, &json);
+                                            app.status = format!("Saved: {}", path.display());
+                                            app.scene_path = Some(path);
+                                            app.dirty = false;
+                                        }
+                                    }
+                                }
+                                ui.close_menu();
+                            }
+                            if ui.button("Save As...").clicked() {
+                                let desc = ifol_render_core::scene::SceneDescription::from_world(&app.world, &app.settings);
+                                if let Ok(json) = desc.to_json() {
+                                    if let Some(path) = rfd::FileDialog::new().add_filter("JSON", &["json"]).save_file() {
+                                        let _ = std::fs::write(&path, &json);
+                                        app.status = format!("Saved: {}", path.display());
+                                        app.scene_path = Some(path);
+                                        app.dirty = false;
+                                    }
                                 }
                                 ui.close_menu();
                             }
@@ -80,7 +108,43 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                         // Overflow menu (Settings, Export, etc)
                         ui.menu_button(RichText::new("⋮").size(16.0).color(TEXT_PRIMARY), |ui| {
                             if ui.button("Export Video...").clicked() {
-                                // TODO
+                                // Use export pipeline — for now show a file dialog
+                                if let Some(path) = rfd::FileDialog::new()
+                                    .add_filter("MP4 Video", &["mp4"])
+                                    .add_filter("WebM Video", &["webm"])
+                                    .add_filter("MOV Video", &["mov"])
+                                    .save_file() 
+                                {
+                                    let ext = path.extension()
+                                        .and_then(|e| e.to_str())
+                                        .unwrap_or("mp4");
+                                    let codec = match ext {
+                                        "webm" => ifol_render_core::export::VideoCodec::VP9,
+                                        "mov" => ifol_render_core::export::VideoCodec::ProRes,
+                                        _ => ifol_render_core::export::VideoCodec::H264,
+                                    };
+                                    let config = ifol_render_core::export::ExportConfig {
+                                        output_path: path.to_string_lossy().into(),
+                                        codec,
+                                        ..Default::default()
+                                    };
+                                    let mut renderer = ifol_render_core::Renderer::new(
+                                        app.settings.width, app.settings.height,
+                                    );
+                                    app.status = format!("Exporting to {}...", path.display());
+                                    match ifol_render_core::export::export_video(
+                                        &mut app.world,
+                                        &app.settings,
+                                        &config,
+                                        &mut renderer,
+                                        |p| {
+                                            log::info!("Export: {:.0}% ({}/{})", p.percent(), p.current_frame, p.total_frames);
+                                        },
+                                    ) {
+                                        Ok(()) => app.status = format!("Exported: {}", path.display()),
+                                        Err(e) => app.status = format!("Export error: {}", e),
+                                    }
+                                }
                                 ui.close_menu();
                             }
                             if ui.button("Settings...").clicked() {
@@ -91,11 +155,27 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                         
                         ui.add_space(8.0);
                         
-                        // Save (Status-Aware)
+                        // Save (Status-Aware) — quick save
                         let save_color = if app.dirty { egui::Color32::from_rgb(100, 150, 255) } else { TEXT_DIM };
                         if ui.button(RichText::new("💾").color(save_color).size(14.0)).clicked() {
-                            // Dummy save action for now
-                            app.status = "Save triggered".to_string();
+                            if let Some(ref path) = app.scene_path {
+                                let desc = ifol_render_core::scene::SceneDescription::from_world(&app.world, &app.settings);
+                                if let Ok(json) = desc.to_json() {
+                                    let _ = std::fs::write(path, &json);
+                                    app.status = format!("Saved: {}", path.display());
+                                    app.dirty = false;
+                                }
+                            } else {
+                                let desc = ifol_render_core::scene::SceneDescription::from_world(&app.world, &app.settings);
+                                if let Ok(json) = desc.to_json() {
+                                    if let Some(path) = rfd::FileDialog::new().add_filter("JSON", &["json"]).save_file() {
+                                        let _ = std::fs::write(&path, &json);
+                                        app.status = format!("Saved: {}", path.display());
+                                        app.scene_path = Some(path);
+                                        app.dirty = false;
+                                    }
+                                }
+                            }
                         }
                         
                         ui.add_space(8.0);
