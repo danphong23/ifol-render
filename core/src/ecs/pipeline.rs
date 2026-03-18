@@ -19,10 +19,13 @@ pub fn run(world: &mut World, time: &TimeState) {
     // Phase 3: Compute transform matrices
     systems::transform_system(world, time);
 
+    // Phase 4: Process effect stacks
+    systems::effects_system(world, time);
+
     // Future phases:
-    // Phase 4: Particle system
-    // Phase 5: Physics system
-    // Phase 6: Bone/skeletal system
+    // Phase 5: Particle system
+    // Phase 6: Physics system
+    // Phase 7: Bone/skeletal system
 }
 
 /// Full pipeline: run ECS systems → build draw commands → render → return pixels.

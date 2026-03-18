@@ -76,6 +76,10 @@ pub struct Components {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effects: Option<Vec<components::Effect>>,
 
+    /// Ordered effect stack (blur, color grade, etc.) for post-processing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_stack: Option<components::EffectStack>,
+
     // ── Hierarchy ──
     /// Parent entity ID for transform hierarchy.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -106,6 +110,7 @@ impl Default for Components {
             color: None,
             animation: None,
             effects: None,
+            effect_stack: None,
             parent: None,
             children: Vec::new(),
         }
