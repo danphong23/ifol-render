@@ -341,6 +341,7 @@ fn main() {
                 "basic" => build_test_basic(width, height),
                 "blend" => build_test_blend(width, height),
                 "shapes" => build_test_shapes(width, height),
+                "gradients" => build_test_gradients(width, height),
                 "effects" => {
                     let cmds = build_test_basic(width, height);
                     let effects = vec![ifol_render_core::EffectConfig {
@@ -356,7 +357,7 @@ fn main() {
                 }
                 _ => {
                     eprintln!(
-                        "Unknown test: '{}'. Available: basic, blend, shapes, effects",
+                        "Unknown test: '{}'. Available: basic, blend, shapes, gradients, effects",
                         test
                     );
                     std::process::exit(1);
@@ -792,6 +793,199 @@ fn build_test_shapes(w: u32, h: u32) -> Vec<ifol_render_core::DrawCommand> {
         [0.2, 0.5, 0.9, 1.0],
         0.6,
         2.0,
+        0.0,
+        0.0,
+        w,
+        h,
+    ));
+
+    cmds
+}
+
+/// Build a gradient DrawCommand.
+/// Layout: [transform: f32x16, color_start: f32x4, color_end: f32x4, grad_type: f32, angle: f32, center_x: f32, center_y: f32]
+/// = 28 floats
+fn make_gradient_cmd(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    color_start: [f32; 4],
+    color_end: [f32; 4],
+    grad_type: f32,
+    angle: f32,
+    center_x: f32,
+    center_y: f32,
+    canvas_w: u32,
+    canvas_h: u32,
+) -> ifol_render_core::DrawCommand {
+    let sx = w / canvas_w as f32 * 2.0;
+    let sy = h / canvas_h as f32 * 2.0;
+    let tx = (x + w / 2.0) / canvas_w as f32 * 2.0 - 1.0;
+    let ty = 1.0 - (y + h / 2.0) / canvas_h as f32 * 2.0;
+
+    #[rustfmt::skip]
+    let transform = [
+        sx,  0.0, 0.0, 0.0,
+        0.0, sy,  0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        tx,  ty,  0.0, 1.0,
+    ];
+
+    let mut uniforms = Vec::with_capacity(28);
+    uniforms.extend_from_slice(&transform); // 16
+    uniforms.extend_from_slice(&color_start); // 4
+    uniforms.extend_from_slice(&color_end); // 4
+    uniforms.push(grad_type); // 1
+    uniforms.push(angle); // 1
+    uniforms.push(center_x); // 1
+    uniforms.push(center_y); // 1
+
+    ifol_render_core::DrawCommand {
+        pipeline: "gradient".into(),
+        uniforms,
+        textures: vec![],
+    }
+}
+
+/// Test: gradient fills.
+fn build_test_gradients(w: u32, h: u32) -> Vec<ifol_render_core::DrawCommand> {
+    let pi = std::f32::consts::PI;
+    let mut cmds = vec![
+        // Dark background
+        make_draw_cmd(
+            0.0,
+            0.0,
+            w as f32,
+            h as f32,
+            [0.08, 0.08, 0.12, 1.0],
+            1.0,
+            0.0,
+            w,
+            h,
+        ),
+    ];
+
+    // Row 1: Linear gradients at different angles
+    // Horizontal (angle=0)
+    cmds.push(make_gradient_cmd(
+        20.0,
+        20.0,
+        230.0,
+        170.0,
+        [0.9, 0.2, 0.3, 1.0],
+        [0.2, 0.3, 0.9, 1.0],
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        w,
+        h,
+    ));
+    // Diagonal (angle=PI/4)
+    cmds.push(make_gradient_cmd(
+        280.0,
+        20.0,
+        230.0,
+        170.0,
+        [0.1, 0.8, 0.4, 1.0],
+        [0.8, 0.9, 0.1, 1.0],
+        0.0,
+        pi / 4.0,
+        0.0,
+        0.0,
+        w,
+        h,
+    ));
+    // Vertical (angle=PI/2)
+    cmds.push(make_gradient_cmd(
+        540.0,
+        20.0,
+        230.0,
+        170.0,
+        [0.9, 0.6, 0.1, 1.0],
+        [0.4, 0.1, 0.8, 1.0],
+        0.0,
+        pi / 2.0,
+        0.0,
+        0.0,
+        w,
+        h,
+    ));
+
+    // Row 2: Radial and conic
+    // Radial (centered)
+    cmds.push(make_gradient_cmd(
+        20.0,
+        220.0,
+        230.0,
+        170.0,
+        [1.0, 1.0, 0.3, 1.0],
+        [0.1, 0.1, 0.5, 1.0],
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        w,
+        h,
+    ));
+    // Radial (off-center)
+    cmds.push(make_gradient_cmd(
+        280.0,
+        220.0,
+        230.0,
+        170.0,
+        [0.3, 0.9, 0.9, 1.0],
+        [0.9, 0.1, 0.3, 1.0],
+        1.0,
+        0.0,
+        -0.2,
+        -0.15,
+        w,
+        h,
+    ));
+    // Conic
+    cmds.push(make_gradient_cmd(
+        540.0,
+        220.0,
+        230.0,
+        170.0,
+        [0.9, 0.3, 0.5, 1.0],
+        [0.3, 0.8, 0.9, 1.0],
+        2.0,
+        0.0,
+        0.0,
+        0.0,
+        w,
+        h,
+    ));
+
+    // Row 3: Full-width gradients
+    // Sunset
+    cmds.push(make_gradient_cmd(
+        20.0,
+        420.0,
+        w as f32 - 40.0,
+        80.0,
+        [1.0, 0.4, 0.1, 1.0],
+        [0.1, 0.0, 0.3, 1.0],
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        w,
+        h,
+    ));
+    // Ocean
+    cmds.push(make_gradient_cmd(
+        20.0,
+        510.0,
+        w as f32 - 40.0,
+        70.0,
+        [0.0, 0.8, 0.9, 1.0],
+        [0.0, 0.2, 0.5, 1.0],
+        0.0,
+        0.0,
         0.0,
         0.0,
         w,

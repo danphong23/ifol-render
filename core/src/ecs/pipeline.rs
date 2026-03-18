@@ -34,6 +34,15 @@ pub fn setup_renderer(renderer: &mut Renderer) {
         );
     }
 
+    // Gradient pipeline
+    if !renderer.has_pipeline("gradient") {
+        renderer.register_pipeline(
+            "gradient",
+            include_str!("../../../shaders/gradient.wgsl"),
+            PipelineConfig::quad(),
+        );
+    }
+
     // Built-in effects
     if !renderer.has_pipeline("blur") {
         renderer.register_effect(
