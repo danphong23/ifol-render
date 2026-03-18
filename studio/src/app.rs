@@ -45,6 +45,8 @@ pub struct EditorApp {
     pub commands: CommandHistory,
     /// Advanced dockable workspace layout
     pub workspace: crate::panels::WorkspaceLayout,
+    /// Pending workspace action from editor switcher/split menu
+    pub pending_workspace_action: Option<crate::panels::workspace::WorkspaceAction>,
 }
 
 impl EditorApp {
@@ -120,6 +122,7 @@ impl EditorApp {
             renderer: None,
             commands: CommandHistory::new(),
             workspace: crate::panels::WorkspaceLayout::new(),
+            pending_workspace_action: None,
         }
     }
 
@@ -195,6 +198,58 @@ impl EditorApp {
     fn invalidate_renderer(&mut self) {
         self.renderer = None;
         self.dirty = true;
+    }
+
+    /// Split a tab tile into two side-by-side (or stacked) panels.
+    /// Creates a new pane of `pane_type`, wraps it in a tab tile,
+    /// then replaces `target_id` in its parent with a Linear container
+    /// holding both the original and the new tab tile.
+    fn split_tile(
+        tree: &mut egui_tiles::Tree<crate::panels::EditorPane>,
+        target_id: egui_tiles::TileId,
+        pane_type: crate::panels::EditorPane,
+        dir: egui_tiles::LinearDir,
+    ) {
+        // 1. Create the new pane wrapped in a tab
+        let new_pane = tree.tiles.insert_pane(pane_type);
+        let new_tab = tree.tiles.insert_tab_tile(vec![new_pane]);
+
+        // 2. Create a linear container with [original, new]
+        let linear_container = egui_tiles::Container::new_linear(dir, vec![target_id, new_tab]);
+        let linear_id = tree.tiles.insert_new(egui_tiles::Tile::Container(linear_container));
+
+        // 3. Find parent and replace target_id with linear_id
+        if let Some(parent_id) = tree.tiles.parent_of(target_id) {
+            if let Some(egui_tiles::Tile::Container(parent)) = tree.tiles.get_mut(parent_id) {
+                // Replace the child: remove old, insert new at same position
+                let children = parent.children_vec();
+                let mut new_children = Vec::with_capacity(children.len());
+                for child in children {
+                    if child == target_id {
+                        new_children.push(linear_id);
+                    } else {
+                        new_children.push(child);
+                    }
+                }
+                // Rebuild the container with new children
+                match parent {
+                    egui_tiles::Container::Linear(linear) => {
+                        linear.children = new_children;
+                    }
+                    egui_tiles::Container::Tabs(tabs) => {
+                        tabs.children = new_children;
+                    }
+                    egui_tiles::Container::Grid(_grid) => {
+                        // Grid: use container-level remove/add
+                        parent.remove_child(target_id);
+                        parent.add_child(linear_id);
+                    }
+                }
+            }
+        } else {
+            // target_id is the root — replace root
+            tree.root = Some(linear_id);
+        }
     }
 }
 
@@ -330,6 +385,26 @@ impl eframe::App for EditorApp {
             
             // Put the tree back
             self.workspace.tree = tree;
+
+            // Process pending workspace actions (add tab, split)
+            if let Some(action) = self.pending_workspace_action.take() {
+                use crate::panels::workspace::WorkspaceAction;
+                match action {
+                    WorkspaceAction::AddTab(tab_tile_id, pane_type) => {
+                        let new_pane_id = self.workspace.tree.tiles.insert_pane(pane_type);
+                        if let Some(egui_tiles::Tile::Container(egui_tiles::Container::Tabs(tabs))) = self.workspace.tree.tiles.get_mut(tab_tile_id) {
+                            tabs.add_child(new_pane_id);
+                            tabs.set_active(new_pane_id);
+                        }
+                    }
+                    WorkspaceAction::SplitH(tab_tile_id, pane_type) => {
+                        Self::split_tile(&mut self.workspace.tree, tab_tile_id, pane_type, egui_tiles::LinearDir::Horizontal);
+                    }
+                    WorkspaceAction::SplitV(tab_tile_id, pane_type) => {
+                        Self::split_tile(&mut self.workspace.tree, tab_tile_id, pane_type, egui_tiles::LinearDir::Vertical);
+                    }
+                }
+            }
         });
     }
 }
