@@ -2,174 +2,134 @@
 
 ## Tổng quan
 
-ifol-render là hệ thống rendering modular, chia thành các tool độc lập:
-
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Consumers (chọn 1 hoặc nhiều)                              │
-│  ┌─────────┐  ┌──────────┐  ┌──────┐  ┌──────────────┐    │
-│  │ Studio  │  │   CLI    │  │ WASM │  │  Your App    │    │
-│  │  (GUI)  │  │ (export) │  │ (web)│  │ (Rust crate) │    │
-│  └────┬────┘  └────┬─────┘  └──┬───┘  └──────┬───────┘    │
-│       │            │           │              │             │
-│  ┌────┴────────────┴───────────┴──────────────┴──────┐     │
-│  │  core (ECS, optional — tiện lợi, không bắt buộc)  │     │
-│  │  Scene JSON → Entity/Component → DrawCommand[]     │     │
-│  └───────────────────────┬────────────────────────────┘     │
-│                          │ hoặc gửi DrawCommand[] trực tiếp │
-│  ┌───────────────────────▼────────────────────────────┐     │
-│  │  render (GPU, độc lập 100%)                         │     │
-│  │  DrawCommand[] → GPU → pixels                       │     │
-│  └────────────────────────────────────────────────────┘     │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## Nguyên tắc tách biệt
-
-### Render = Thực thi GPU
-
-| Render sở hữu | Render KHÔNG biết |
-|---------------|-------------------|
-| GPU context (wgpu) | Entity, Component |
-| Shader pipeline | Frame thứ mấy |
-| Texture cache (VRAM) | Animation, keyframe |
-| Effect pipeline | Timeline logic |
-| Blend modes | Tại sao entity ẩn/hiện |
-| Export (PNG, video frames) | Scene JSON format |
-| Hardware detection | Ai đang drag cái gì |
-| Pipeline cache | |
-
-### Core = Quyết định logic
-
-| Core sở hữu | Core KHÔNG biết |
-|-------------|-----------------|
-| ECS (Entity, Component, System) | GPU, shader, VRAM |
-| Timeline (visibility) | Pipeline cache |
-| Animation (keyframe eval) | Texture upload |
-| Transform (world matrix) | Blend mode formula |
-| Culling (cắt ngoài viewport) | Hardware limits |
-| Command/Undo | Pixel processing |
-| Scene JSON I/O | |
-| Video export loop | |
-
-### Quy tắc đơn giản
-
-```
-Core gọi Render: render_frame(), resize(), evict_texture(), register_effect()
-Render trả Core: pixels, capabilities(), cache_stats()
-Core KHÔNG chạm: GPU, shader, VRAM
-Render KHÔNG biết: entity, timeline, animation
+┌──────────────────────────────────────────────────────────┐
+│  Consumers                                                │
+│  ┌─────────┐  ┌──────────┐  ┌──────┐  ┌──────────────┐  │
+│  │ Studio  │  │   CLI    │  │ WASM │  │  Your App    │  │
+│  └────┬────┘  └────┬─────┘  └──┬───┘  └──────┬───────┘  │
+│       │            │           │              │           │
+│  ┌────┴────────────┴───────────┴──────────────┴────────┐ │
+│  │  core (owns shaders + ECS + logic)                   │ │
+│  │  → register shaders vào render                       │ │
+│  │  → build DrawCommand[] từ ECS                        │ │
+│  └───────────────────────┬──────────────────────────────┘ │
+│                          │ register_pipeline + render_frame│
+│  ┌───────────────────────▼──────────────────────────────┐ │
+│  │  render (pure GPU executor)                           │ │
+│  │  → compile shader, cache pipeline, execute, trả pixels│ │
+│  └──────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Crate Structure
+## Nguyên tắc tách biệt
+
+### Render = Pure GPU Executor
+
+| Render LÀM | Render KHÔNG LÀM |
+|-------------|-------------------|
+| Compile WGSL → pipeline | Sở hữu/quản lý shader |
+| Cache pipeline + texture | Biết "blur", "composite" là gì |
+| Execute draw commands | Quyết định vẽ gì |
+| Readback pixels | Biết ECS, Entity, timeline |
+| Detect GPU capabilities | Hard-code rendering logic |
+
+### Core = Quyết định + Cung cấp
+
+| Core LÀM | Core KHÔNG LÀM |
+|-----------|-----------------|
+| Sở hữu shader files | Biết GPU, VRAM |
+| Register shaders vào render | Compile shader |
+| Build DrawCommand[] từ ECS | Quản lý pipeline cache |
+| Culling (cắt ngoài viewport) | Tạo GPU texture |
+| Điều phối video export loop | Readback pixels |
+
+### Quy tắc đơn giản
 
 ```
-ifol-render/
-├── render/         ifol-render         GPU rendering library
-├── core/           ifol-render-core    ECS engine (depends on render)
-├── studio/         ifol-render-studio  GUI editor (depends on core + render)
-├── crates/
-│   ├── cli/        ifol-render-cli     Headless CLI (depends on core + render)
-│   └── wasm/       ifol-render-wasm    WebAssembly target
-├── shaders/
-│   ├── composite.wgsl                  Quad rendering + blend modes
-│   └── effects/                        Effect shaders (drop .wgsl = new effect)
-└── docs/           Architecture docs
+Core:   "dùng shader này, vẽ cái này"  →  Render
+Render: "đây pixels"                    →  Core
 ```
 
-### Build output
+---
+
+## Shader Ownership
 
 ```
-cargo build
-├── render (lib)   ← compile thành thư viện
-├── core (lib)     ← compile + link với render
-├── cli (bin)      ← 1 file exe chứa tất cả
-└── studio (bin)   ← 1 file exe chứa tất cả
+shaders/                     ← Root workspace, core sở hữu
+├── composite.wgsl              Core register khi init
+├── shapes/
+│   ├── rect.wgsl
+│   └── circle.wgsl
+└── effects/
+    ├── blur.wgsl
+    ├── color_grade.wgsl
+    ├── vignette.wgsl
+    └── chromatic_aberration.wgsl
+
+render/                     ← KHÔNG có shader files
+├── src/
+│   ├── engine/             GPU context
+│   ├── pipeline/           Compile + cache + execute
+│   └── lib.rs              API
 ```
+
+| Loại shader | Ai sở hữu | Ai chạy |
+|-------------|-----------|---------|
+| Composite (quad) | Core/root | Render |
+| SDF shapes | Core/root | Render |
+| Built-in effects | Core/root | Render |
+| Custom effects | User/plugin | Render |
+| Custom draw | User/plugin | Render |
+
+**Render không import, embed, hay biết tên bất kỳ shader nào.**
 
 ---
 
 ## Data Flow
 
-### Preview (real-time)
+### Init
 
 ```
-User thao tác → Core tính ECS → DrawCommand[] → Render vẽ → hiển thị
-     ↑                                                          │
-     └──────────────────── 60fps loop ──────────────────────────┘
+Core/CLI:
+  renderer = Renderer::new(1920, 1080);
+  renderer.register_pipeline("composite", COMPOSITE_WGSL, config);
+  renderer.register_effect("blur", BLUR_WGSL, params, 2);
+  renderer.load_texture("bg", "assets/bg.png");
 ```
 
-### Export video
+### Per-Frame (preview)
 
 ```
-Core loop: for frame in 0..N
-  → Core tính ECS tại time=frame/fps
-  → Core gom DrawCommand[]
-  → Render vẽ → pixels
-  → FFmpeg encode → video file
+Core: ECS systems run → DrawCommand[] → renderer.render_frame() → pixels → display
 ```
 
-### Web (WASM)
+### Export (video)
 
 ```
-JavaScript UI → WASM (core+render) → WebGPU → Canvas
-               gọi như thư viện, zero overhead
+Core: for frame in 0..N → ECS systems → DrawCommand[] → render_frame() → ffmpeg
 ```
 
 ---
 
-## Cache Architecture (thuộc Render)
+## Cache Architecture (render nội bộ)
 
-```
-┌─────────────────────────────────────────┐
-│  Render's Cache System                  │
-│                                         │
-│  ┌─ Texture Cache (VRAM)               │
-│  │  key → GPU texture (load 1 lần)     │
-│  │  evict: LRU / manual / clear_all    │
-│  │                                      │
-│  ├─ Pipeline Cache                      │
-│  │  shader_name → GPU pipeline          │
-│  │  tạo 1 lần, dùng mãi               │
-│  │                                      │
-│  └─ Layer Cache (tương lai)             │
-│     layer_hash → GPU texture result     │
-│     so sánh CPU (hash metadata)         │
-│     chỉ vẽ lại layer thay đổi          │
-└─────────────────────────────────────────┘
-
-Core có thể gọi:
-  renderer.evict_texture("cat.png")   // xóa 1 texture
-  renderer.clear_cache()              // xóa hết
-  renderer.capabilities()             // đọc giới hạn GPU
-```
+| Cache | Ai tạo | Ai xóa | Nằm đâu |
+|-------|--------|--------|---------|
+| Texture | Bên ngoài gọi `load_texture()` | Bên ngoài gọi `evict_texture()` | GPU VRAM |
+| Pipeline | Render tự tạo khi `register_pipeline()` | Persistent | GPU |
+| Layer cache (tương lai) | Render tự tạo | Render tự quản lý LRU | GPU VRAM |
 
 ---
 
-## Effect System
-
-### Ownership
+## Build Output
 
 ```
-Core (ECS):                    Render (GPU):
-EffectStack component          EffectRegistry
-  effects: [                     shader WGSL files
-    { type: "blur",              pipeline cache
-      params: {radius: 5} },    ping-pong textures
-    { type: "vignette",          generic dispatch engine
-      params: {intensity: 0.5} }
-  ]
-       ↓ convert to EffectConfig[]
-       ↓ gửi cho render
-       → render_frame_with_effects(commands, effects) → pixels
-```
-
-### Thêm effect mới
-
-```
-Built-in: thêm .wgsl file + register trong EffectRegistry
-Runtime:  renderer.register_effect("name", wgsl_source, params, passes)
-Tương lai: auto-scan thư mục shaders/effects/
+cargo build
+├── render (lib)   ← compile thành thư viện (pure executor)
+├── core (lib)     ← compile + link render (owns shaders + logic)
+├── cli (bin)      ← 1 file exe (core + render + CLI)
+└── studio (bin)   ← 1 file exe (core + render + GUI)
 ```
