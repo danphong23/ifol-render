@@ -14,6 +14,7 @@
 pub mod color;
 pub mod commands;
 pub mod ecs;
+pub mod export;
 pub mod scene;
 pub mod time;
 pub mod types;

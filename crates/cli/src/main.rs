@@ -50,6 +50,31 @@ enum Commands {
         #[arg(short, long, default_value = "preview.png")]
         output: PathBuf,
     },
+
+    /// Export scene to video file using FFmpeg.
+    Export {
+        /// Path to scene JSON file.
+        #[arg(short, long)]
+        scene: PathBuf,
+        /// Output video file path.
+        #[arg(short, long, default_value = "output.mp4")]
+        output: String,
+        /// Video codec: h264, h265, vp9, prores, png.
+        #[arg(short, long, default_value = "h264")]
+        codec: String,
+        /// Constant Rate Factor (quality). Lower = better quality. Range: 0–51.
+        #[arg(long, default_value = "23")]
+        crf: u32,
+        /// Override FPS.
+        #[arg(long)]
+        fps: Option<f64>,
+        /// Override width.
+        #[arg(long)]
+        width: Option<u32>,
+        /// Override height.
+        #[arg(long)]
+        height: Option<u32>,
+    },
 }
 
 fn main() {
@@ -172,6 +197,96 @@ fn main() {
                 "Preview saved: {} ({}x{}, {:.2}s)",
                 out_path, settings.width, settings.height, timestamp
             );
+        }
+
+        Commands::Export {
+            scene,
+            output,
+            codec,
+            crf,
+            fps,
+            width,
+            height,
+        } => {
+            let json = std::fs::read_to_string(&scene).expect("Failed to read scene file");
+            let scene_desc = ifol_render_core::scene::SceneDescription::from_json(&json)
+                .expect("Failed to parse scene JSON");
+
+            let settings = scene_desc.settings.clone();
+            let mut world = scene_desc.into_world();
+
+            let effective_fps = fps.unwrap_or(settings.fps);
+            let effective_w = width.unwrap_or(settings.width);
+            let effective_h = height.unwrap_or(settings.height);
+
+            let video_codec = ifol_render_core::export::VideoCodec::from_str(&codec)
+                .unwrap_or_else(|| {
+                    eprintln!("Unknown codec '{}', defaulting to h264.", codec);
+                    ifol_render_core::export::VideoCodec::H264
+                });
+
+            let config = ifol_render_core::export::ExportConfig {
+                output_path: output.clone(),
+                codec: video_codec,
+                pixel_format: "yuv420p".into(),
+                crf,
+                fps: Some(effective_fps),
+                width: Some(effective_w),
+                height: Some(effective_h),
+            };
+
+            let mut renderer =
+                ifol_render_core::Renderer::new(effective_w, effective_h);
+
+            // Load image sources
+            for entity in &world.entities {
+                if let Some(ref img) = entity.components.image_source {
+                    if let Err(e) = renderer.load_image(&entity.id, &img.path) {
+                        log::warn!("{}", e);
+                    }
+                }
+            }
+
+            println!(
+                "Exporting: {}x{} @ {}fps → {} ({:?})",
+                effective_w, effective_h, effective_fps, output, video_codec
+            );
+
+            let start = std::time::Instant::now();
+
+            let result = ifol_render_core::export::export_video(
+                &mut world,
+                &settings,
+                &config,
+                &mut renderer,
+                |progress| {
+                    // Print progress bar
+                    let pct = progress.percent();
+                    let bar_len = 40;
+                    let filled = (pct / 100.0 * bar_len as f64) as usize;
+                    let bar: String = "█".repeat(filled) + &"░".repeat(bar_len - filled);
+
+                    eprint!(
+                        "\r  [{bar}] {pct:5.1}%  {}/{}  ETA: {:.0}s  ({:.1}fps)  ",
+                        progress.current_frame + 1,
+                        progress.total_frames,
+                        progress.eta_seconds,
+                        progress.export_fps,
+                    );
+                },
+            );
+
+            eprintln!(); // newline after progress bar
+            match result {
+                Ok(()) => {
+                    let elapsed = start.elapsed().as_secs_f64();
+                    println!("Export complete: {} ({:.1}s)", output, elapsed);
+                }
+                Err(e) => {
+                    eprintln!("Export failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }
