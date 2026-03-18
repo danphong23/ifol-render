@@ -3,11 +3,11 @@
 //! Every mutation to the ECS World goes through a Command.
 //! CommandHistory manages undo/redo stacks.
 
-mod property;
 mod entity;
+mod property;
 
-pub use property::{PropertyValue, SetProperty};
 pub use entity::{AddEntity, RemoveEntity};
+pub use property::{PropertyValue, SetProperty};
 
 use crate::ecs::World;
 

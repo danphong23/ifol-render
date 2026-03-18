@@ -184,9 +184,11 @@ impl Renderer {
         let mut draw_calls: Vec<GpuDrawCall> = Vec::new();
 
         for cmd in commands {
-            let mut uniforms = CompositeUniforms::default();
-            uniforms.transform = cmd.transform;
-            uniforms.opacity = cmd.opacity;
+            let mut uniforms = CompositeUniforms {
+                transform: cmd.transform,
+                opacity: cmd.opacity,
+                ..Default::default()
+            };
 
             match &cmd.source {
                 DrawSource::Color(rgba) => {
@@ -289,15 +291,12 @@ impl Renderer {
         // Readback
         let padded_bytes_per_row = Self::padded_bytes_per_row(self.width);
 
-        let staging = self
-            .engine
-            .device
-            .create_buffer(&wgpu::BufferDescriptor {
-                label: Some("staging"),
-                size: (padded_bytes_per_row * self.height) as u64,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
+        let staging = self.engine.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("staging"),
+            size: (padded_bytes_per_row * self.height) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
 
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
@@ -353,7 +352,7 @@ impl Renderer {
     fn padded_bytes_per_row(width: u32) -> u32 {
         let unpadded = width * 4;
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        (unpadded + align - 1) / align * align
+        unpadded.div_ceil(align) * align
     }
 
     /// Save rendered pixels to a PNG file.

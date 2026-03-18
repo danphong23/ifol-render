@@ -1,6 +1,6 @@
-use egui::{Ui, WidgetText, Color32, RichText, Stroke, Response};
+use crate::app::{ACCENT, BG_PANEL, BG_SURFACE, BORDER, TEXT_DIM, TEXT_PRIMARY};
+use egui::{Color32, Response, RichText, Stroke, Ui, WidgetText};
 use std::fmt;
-use crate::app::{BG_PANEL, BG_SURFACE, BORDER, TEXT_DIM, TEXT_PRIMARY, ACCENT};
 
 /// Defines the different types of editors/panels available in the workspace.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -46,12 +46,18 @@ pub struct WorkspaceBehavior<'a> {
 
 impl<'a> WorkspaceBehavior<'a> {
     /// Find the active pane type in a Tabs container
-    fn get_active_pane_in_tab(&self, tiles: &egui_tiles::Tiles<EditorPane>, tab_tile_id: egui_tiles::TileId) -> EditorPane {
-        if let Some(egui_tiles::Tile::Container(egui_tiles::Container::Tabs(tabs))) = tiles.get(tab_tile_id) {
-            if let Some(active_id) = tabs.active {
-                if let Some(egui_tiles::Tile::Pane(pane)) = tiles.get(active_id) {
-                    return *pane;
-                }
+    fn get_active_pane_in_tab(
+        &self,
+        tiles: &egui_tiles::Tiles<EditorPane>,
+        tab_tile_id: egui_tiles::TileId,
+    ) -> EditorPane {
+        if let Some(egui_tiles::Tile::Container(egui_tiles::Container::Tabs(tabs))) =
+            tiles.get(tab_tile_id)
+        {
+            if let Some(active_id) = tabs.active
+                && let Some(egui_tiles::Tile::Pane(pane)) = tiles.get(active_id)
+            {
+                return *pane;
             }
             // Fallback: first child
             for child in tabs.children.iter() {
@@ -65,25 +71,28 @@ impl<'a> WorkspaceBehavior<'a> {
 }
 
 impl<'a> egui_tiles::Behavior<EditorPane> for WorkspaceBehavior<'a> {
-    fn pane_ui(&mut self, ui: &mut Ui, _tile_id: egui_tiles::TileId, pane: &mut EditorPane) -> egui_tiles::UiResponse {
+    fn pane_ui(
+        &mut self,
+        ui: &mut Ui,
+        _tile_id: egui_tiles::TileId,
+        pane: &mut EditorPane,
+    ) -> egui_tiles::UiResponse {
         let frame = egui::Frame::new()
             .fill(BG_PANEL)
             .inner_margin(egui::Margin::same(2));
-        
-        frame.show(ui, |ui| {
-            match pane {
-                EditorPane::Viewport => {
-                    crate::panels::viewport::ui(self.app, ui);
-                }
-                EditorPane::EntityList => {
-                    crate::panels::entity_list::ui(self.app, ui);
-                }
-                EditorPane::Properties => {
-                    crate::panels::properties::ui(self.app, ui);
-                }
-                EditorPane::Timeline => {
-                    crate::panels::timeline::ui(self.app, ui);
-                }
+
+        frame.show(ui, |ui| match pane {
+            EditorPane::Viewport => {
+                crate::panels::viewport::ui(self.app, ui);
+            }
+            EditorPane::EntityList => {
+                crate::panels::entity_list::ui(self.app, ui);
+            }
+            EditorPane::Properties => {
+                crate::panels::properties::ui(self.app, ui);
+            }
+            EditorPane::Timeline => {
+                crate::panels::timeline::ui(self.app, ui);
             }
         });
         egui_tiles::UiResponse::None
@@ -143,10 +152,10 @@ impl<'a> egui_tiles::Behavior<EditorPane> for WorkspaceBehavior<'a> {
             action
         });
 
-        if let Some(inner) = resp.inner {
-            if let Some(action) = inner {
-                self.app.pending_workspace_action = Some(action);
-            }
+        if let Some(inner) = resp.inner
+            && let Some(action) = inner
+        {
+            self.app.pending_workspace_action = Some(action);
         }
     }
 
@@ -172,7 +181,11 @@ impl<'a> egui_tiles::Behavior<EditorPane> for WorkspaceBehavior<'a> {
         _tile_id: egui_tiles::TileId,
         state: &egui_tiles::TabState,
     ) -> Stroke {
-        if state.active { Stroke::new(1.0, ACCENT) } else { Stroke::NONE }
+        if state.active {
+            Stroke::new(1.0, ACCENT)
+        } else {
+            Stroke::NONE
+        }
     }
 
     fn tab_text_color(
@@ -182,11 +195,15 @@ impl<'a> egui_tiles::Behavior<EditorPane> for WorkspaceBehavior<'a> {
         _tile_id: egui_tiles::TileId,
         state: &egui_tiles::TabState,
     ) -> Color32 {
-        if state.active { Color32::WHITE } else { TEXT_DIM }
+        if state.active {
+            Color32::WHITE
+        } else {
+            TEXT_DIM
+        }
     }
 
     fn gap_width(&self, _style: &egui::Style) -> f32 {
-        3.0  // wider gap for visible panel separation
+        3.0 // wider gap for visible panel separation
     }
 
     fn tab_bar_height(&self, _style: &egui::Style) -> f32 {
@@ -194,7 +211,11 @@ impl<'a> egui_tiles::Behavior<EditorPane> for WorkspaceBehavior<'a> {
     }
 
     // Allow closing tabs (split panels can be closed)
-    fn is_tab_closable(&self, _tiles: &egui_tiles::Tiles<EditorPane>, _tile_id: egui_tiles::TileId) -> bool {
+    fn is_tab_closable(
+        &self,
+        _tiles: &egui_tiles::Tiles<EditorPane>,
+        _tile_id: egui_tiles::TileId,
+    ) -> bool {
         true
     }
 
@@ -215,7 +236,12 @@ impl<'a> egui_tiles::Behavior<EditorPane> for WorkspaceBehavior<'a> {
         _tile_id: egui_tiles::TileId,
         rect: egui::Rect,
     ) {
-        painter.rect_stroke(rect, 0.0, Stroke::new(1.0, BORDER), egui::StrokeKind::Inside);
+        painter.rect_stroke(
+            rect,
+            0.0,
+            Stroke::new(1.0, BORDER),
+            egui::StrokeKind::Inside,
+        );
     }
 
     // Keep all tab bars visible so the ☰ editor switcher and tab titles are always shown
@@ -260,34 +286,39 @@ impl WorkspaceLayout {
     /// ```
     pub fn new() -> Self {
         let mut tiles = egui_tiles::Tiles::default();
-        
+
         // Top row: Entities | Viewport | Properties
         let pane_entities = tiles.insert_pane(EditorPane::EntityList);
         let tab_entities = tiles.insert_tab_tile(vec![pane_entities]);
-        
+
         let pane_viewport = tiles.insert_pane(EditorPane::Viewport);
         let tab_viewport = tiles.insert_tab_tile(vec![pane_viewport]);
-        
+
         let pane_properties = tiles.insert_pane(EditorPane::Properties);
         let tab_properties = tiles.insert_tab_tile(vec![pane_properties]);
-        
-        let top_row = tiles.insert_horizontal_tile(vec![tab_entities, tab_viewport, tab_properties]);
-        
+
+        let top_row =
+            tiles.insert_horizontal_tile(vec![tab_entities, tab_viewport, tab_properties]);
+
         // Bottom: Timeline (full width)
         let pane_timeline = tiles.insert_pane(EditorPane::Timeline);
         let tab_timeline = tiles.insert_tab_tile(vec![pane_timeline]);
-        
+
         // Root: top_row / timeline (vertical split)
         let root = tiles.insert_vertical_tile(vec![top_row, tab_timeline]);
 
         // Proportions: top row columns
-        if let Some(egui_tiles::Tile::Container(egui_tiles::Container::Linear(linear))) = tiles.get_mut(top_row) {
+        if let Some(egui_tiles::Tile::Container(egui_tiles::Container::Linear(linear))) =
+            tiles.get_mut(top_row)
+        {
             linear.shares.set_share(tab_entities, 1.0);
             linear.shares.set_share(tab_viewport, 3.0);
             linear.shares.set_share(tab_properties, 1.2);
         }
         // Proportions: vertical (top area 3:1 timeline)
-        if let Some(egui_tiles::Tile::Container(egui_tiles::Container::Linear(linear))) = tiles.get_mut(root) {
+        if let Some(egui_tiles::Tile::Container(egui_tiles::Container::Linear(linear))) =
+            tiles.get_mut(root)
+        {
             linear.shares.set_share(top_row, 3.0);
             linear.shares.set_share(tab_timeline, 1.2);
         }

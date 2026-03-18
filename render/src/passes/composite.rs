@@ -1,6 +1,6 @@
 //! Composite render pipeline — draws textured/colored quads with transform and opacity.
 
-use crate::vertex::{Vertex, QUAD_INDICES, QUAD_VERTICES};
+use crate::vertex::{QUAD_INDICES, QUAD_VERTICES, Vertex};
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
@@ -48,7 +48,9 @@ impl CompositePipeline {
         // Load shader
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("composite shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/composite.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../shaders/composite.wgsl").into(),
+            ),
         });
 
         // Bind group layout
@@ -163,7 +165,11 @@ impl CompositePipeline {
         // 1x1 white fallback texture
         let white_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("white 1x1"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,

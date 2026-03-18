@@ -1,5 +1,5 @@
-use egui::{Ui, Vec2, RichText, Color32, Stroke, Rect, pos2};
-use crate::app::{EditorApp, TEXT_DIM, ACCENT};
+use crate::app::{ACCENT, EditorApp, TEXT_DIM};
+use egui::{Color32, Rect, RichText, Stroke, Ui, Vec2, pos2};
 
 pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
     let avail = ui.available_size();
@@ -16,10 +16,8 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
         let offset_x = (avail.x - w) / 2.0;
         let offset_y = (avail.y - h) / 2.0;
         let min = ui.min_rect().min;
-        let viewport_rect = Rect::from_min_size(
-            pos2(min.x + offset_x, min.y + offset_y),
-            Vec2::new(w, h),
-        );
+        let viewport_rect =
+            Rect::from_min_size(pos2(min.x + offset_x, min.y + offset_y), Vec2::new(w, h));
 
         // Draw the rendered image
         let img = egui::Image::new(egui::load::SizedTexture::new(tex.id(), Vec2::new(w, h)));
@@ -47,15 +45,14 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
         );
 
         // Click to select entity (basic hit-test)
-        if ui.input(|i| i.pointer.primary_clicked()) {
-            if let Some(pos) = ui.input(|i| i.pointer.latest_pos()) {
-                if viewport_rect.contains(pos) {
-                    // Normalize click to 0..1 canvas coords
-                    let nx = (pos.x - viewport_rect.left()) / viewport_rect.width();
-                    let ny = (pos.y - viewport_rect.top()) / viewport_rect.height();
-                    app.status = format!("Click: ({:.2}, {:.2})", nx, ny);
-                }
-            }
+        if ui.input(|i| i.pointer.primary_clicked())
+            && let Some(pos) = ui.input(|i| i.pointer.latest_pos())
+            && viewport_rect.contains(pos)
+        {
+            // Normalize click to 0..1 canvas coords
+            let nx = (pos.x - viewport_rect.left()) / viewport_rect.width();
+            let ny = (pos.y - viewport_rect.top()) / viewport_rect.height();
+            app.status = format!("Click: ({:.2}, {:.2})", nx, ny);
         }
     } else {
         ui.centered_and_justified(|ui| {
@@ -74,13 +71,23 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
             // Grid toggle
             let grid_label = if app.show_grid { "▦" } else { "▥" };
             let grid_color = if app.show_grid { ACCENT } else { TEXT_DIM };
-            if ui.button(RichText::new(grid_label).color(grid_color).size(12.0)).clicked() {
+            if ui
+                .button(RichText::new(grid_label).color(grid_color).size(12.0))
+                .clicked()
+            {
                 app.show_grid = !app.show_grid;
             }
-            // Safe zone toggle  
-            let sz_label = if app.show_safe_zones { "◻" } else { "◻" };
-            let sz_color = if app.show_safe_zones { ACCENT } else { TEXT_DIM };
-            if ui.button(RichText::new(sz_label).color(sz_color).size(12.0)).clicked() {
+            // Safe zone toggle
+            let sz_label = if app.show_safe_zones { "◼" } else { "◻" };
+            let sz_color = if app.show_safe_zones {
+                ACCENT
+            } else {
+                TEXT_DIM
+            };
+            if ui
+                .button(RichText::new(sz_label).color(sz_color).size(12.0))
+                .clicked()
+            {
                 app.show_safe_zones = !app.show_safe_zones;
             }
         });
@@ -107,8 +114,14 @@ fn draw_grid_overlay(ui: &Ui, rect: Rect) {
     let cx = rect.center().x;
     let cy = rect.center().y;
     let cross_stroke = Stroke::new(0.5, Color32::from_rgba_premultiplied(255, 255, 255, 25));
-    painter.line_segment([pos2(cx, rect.top()), pos2(cx, rect.bottom())], cross_stroke);
-    painter.line_segment([pos2(rect.left(), cy), pos2(rect.right(), cy)], cross_stroke);
+    painter.line_segment(
+        [pos2(cx, rect.top()), pos2(cx, rect.bottom())],
+        cross_stroke,
+    );
+    painter.line_segment(
+        [pos2(rect.left(), cy), pos2(rect.right(), cy)],
+        cross_stroke,
+    );
 }
 
 /// Draw broadcast safe zones (title-safe 80% and action-safe 90%).
@@ -127,7 +140,12 @@ fn draw_safe_zones(ui: &Ui, rect: Rect) {
             rect.bottom() - rect.height() * action_inset,
         ),
     );
-    painter.rect_stroke(action_rect, 0.0, Stroke::new(1.0, Color32::from_rgba_premultiplied(100, 200, 255, 60)), egui::StrokeKind::Inside);
+    painter.rect_stroke(
+        action_rect,
+        0.0,
+        Stroke::new(1.0, Color32::from_rgba_premultiplied(100, 200, 255, 60)),
+        egui::StrokeKind::Inside,
+    );
 
     // Title safe: 80% of frame
     let title_inset = 0.10;
@@ -141,5 +159,10 @@ fn draw_safe_zones(ui: &Ui, rect: Rect) {
             rect.bottom() - rect.height() * title_inset,
         ),
     );
-    painter.rect_stroke(title_rect, 0.0, Stroke::new(1.0, Color32::from_rgba_premultiplied(255, 200, 100, 50)), egui::StrokeKind::Inside);
+    painter.rect_stroke(
+        title_rect,
+        0.0,
+        Stroke::new(1.0, Color32::from_rgba_premultiplied(255, 200, 100, 50)),
+        egui::StrokeKind::Inside,
+    );
 }

@@ -1,9 +1,8 @@
 //! SetProperty command — change a single property on an entity.
 
 use super::Command;
-use crate::ecs::World;
 use crate::color::Color4;
-
+use crate::ecs::World;
 
 /// Identifies which property to change on an entity.
 #[derive(Debug, Clone)]
@@ -38,8 +37,18 @@ pub struct SetProperty {
 }
 
 impl SetProperty {
-    pub fn new(entity_id: String, field: String, old_value: PropertyValue, new_value: PropertyValue) -> Self {
-        Self { entity_id, field, old_value, new_value }
+    pub fn new(
+        entity_id: String,
+        field: String,
+        old_value: PropertyValue,
+        new_value: PropertyValue,
+    ) -> Self {
+        Self {
+            entity_id,
+            field,
+            old_value,
+            new_value,
+        }
     }
 }
 
@@ -113,7 +122,7 @@ fn apply_property(world: &mut World, entity_id: &str, value: &PropertyValue) {
         }
         PropertyValue::Color(c) => {
             if let Some(ref mut cs) = entity.components.color_source {
-                cs.color = c.clone();
+                cs.color = *c;
             }
         }
         PropertyValue::EntityId(new_id) => {

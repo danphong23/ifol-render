@@ -61,6 +61,12 @@ pub struct EditorApp {
     pub selected_indices: std::collections::HashSet<usize>,
 }
 
+impl Default for EditorApp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EditorApp {
     pub fn new() -> Self {
         let world = World::new();
@@ -103,10 +109,10 @@ impl EditorApp {
             let mut r = ifol_render_core::Renderer::new(self.settings.width, self.settings.height);
             // Load images for entities that have image_source
             for entity in &self.world.entities {
-                if let Some(ref img) = entity.components.image_source {
-                    if let Err(e) = r.load_image(&entity.id, &img.path) {
-                        log::warn!("Failed to load image for '{}': {}", entity.id, e);
-                    }
+                if let Some(ref img) = entity.components.image_source
+                    && let Err(e) = r.load_image(&entity.id, &img.path)
+                {
+                    log::warn!("Failed to load image for '{}': {}", entity.id, e);
                 }
             }
             self.renderer = Some(r);
@@ -148,7 +154,9 @@ impl EditorApp {
 
         // 2. Create a linear container with [original, new]
         let linear_container = egui_tiles::Container::new_linear(dir, vec![target_id, new_tab]);
-        let linear_id = tree.tiles.insert_new(egui_tiles::Tile::Container(linear_container));
+        let linear_id = tree
+            .tiles
+            .insert_new(egui_tiles::Tile::Container(linear_container));
 
         // 3. Find parent and replace target_id with linear_id
         if let Some(parent_id) = tree.tiles.parent_of(target_id) {
@@ -240,39 +248,36 @@ impl eframe::App for EditorApp {
                 self.playing = !self.playing;
             }
             // Ctrl+Z = undo
-            if input.consume_key(Modifiers::CTRL, Key::Z) {
-                if let Some(desc) = self.commands.undo(&mut self.world) {
-                    self.status = format!("↩ Undo: {}", desc);
-                    self.needs_render = true;
-                    self.dirty = true;
-                }
+            if input.consume_key(Modifiers::CTRL, Key::Z)
+                && let Some(desc) = self.commands.undo(&mut self.world)
+            {
+                self.status = format!("↩ Undo: {}", desc);
+                self.needs_render = true;
+                self.dirty = true;
             }
             // Ctrl+Y = redo
-            if input.consume_key(Modifiers::CTRL, Key::Y) {
-                if let Some(desc) = self.commands.redo(&mut self.world) {
-                    self.status = format!("↪ Redo: {}", desc);
-                    self.needs_render = true;
-                    self.dirty = true;
-                }
+            if input.consume_key(Modifiers::CTRL, Key::Y)
+                && let Some(desc) = self.commands.redo(&mut self.world)
+            {
+                self.status = format!("↪ Redo: {}", desc);
+                self.needs_render = true;
+                self.dirty = true;
             }
             // Ctrl+S = save
             if input.consume_key(Modifiers::CTRL, Key::S) {
                 // Will be handled after panels
             }
             // Delete = remove selected entity
-            if input.consume_key(Modifiers::NONE, Key::Delete) {
-                if let Some(i) = self.selected {
-                    if i < self.world.entities.len() {
-                        let eid = self.world.entities[i].id.clone();
-                        self.commands.execute(
-                            Box::new(RemoveEntity::new(eid)),
-                            &mut self.world,
-                        );
-                        self.selected = None;
-                        self.invalidate_renderer();
-                        self.status = "Deleted entity".into();
-                    }
-                }
+            if input.consume_key(Modifiers::NONE, Key::Delete)
+                && let Some(i) = self.selected
+                && i < self.world.entities.len()
+            {
+                let eid = self.world.entities[i].id.clone();
+                self.commands
+                    .execute(Box::new(RemoveEntity::new(eid)), &mut self.world);
+                self.selected = None;
+                self.invalidate_renderer();
+                self.status = "Deleted entity".into();
             }
         });
 
@@ -314,35 +319,53 @@ impl eframe::App for EditorApp {
             });
 
         // ── Workspace Split System ──
-        egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
-            // Take the tree out of self so we can pass `self` mutably to behavior
-            let mut tree = std::mem::replace(&mut self.workspace.tree, egui_tiles::Tree::empty("ifol_workspace"));
-            
-            let mut behavior = crate::panels::workspace::WorkspaceBehavior { app: self };
-            tree.ui(&mut behavior, ui);
-            
-            // Put the tree back
-            self.workspace.tree = tree;
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE)
+            .show(ctx, |ui| {
+                // Take the tree out of self so we can pass `self` mutably to behavior
+                let mut tree = std::mem::replace(
+                    &mut self.workspace.tree,
+                    egui_tiles::Tree::empty("ifol_workspace"),
+                );
 
-            // Process pending workspace actions (add tab, split)
-            if let Some(action) = self.pending_workspace_action.take() {
-                use crate::panels::workspace::WorkspaceAction;
-                match action {
-                    WorkspaceAction::AddTab(tab_tile_id, pane_type) => {
-                        let new_pane_id = self.workspace.tree.tiles.insert_pane(pane_type);
-                        if let Some(egui_tiles::Tile::Container(egui_tiles::Container::Tabs(tabs))) = self.workspace.tree.tiles.get_mut(tab_tile_id) {
-                            tabs.add_child(new_pane_id);
-                            tabs.set_active(new_pane_id);
+                let mut behavior = crate::panels::workspace::WorkspaceBehavior { app: self };
+                tree.ui(&mut behavior, ui);
+
+                // Put the tree back
+                self.workspace.tree = tree;
+
+                // Process pending workspace actions (add tab, split)
+                if let Some(action) = self.pending_workspace_action.take() {
+                    use crate::panels::workspace::WorkspaceAction;
+                    match action {
+                        WorkspaceAction::AddTab(tab_tile_id, pane_type) => {
+                            let new_pane_id = self.workspace.tree.tiles.insert_pane(pane_type);
+                            if let Some(egui_tiles::Tile::Container(egui_tiles::Container::Tabs(
+                                tabs,
+                            ))) = self.workspace.tree.tiles.get_mut(tab_tile_id)
+                            {
+                                tabs.add_child(new_pane_id);
+                                tabs.set_active(new_pane_id);
+                            }
+                        }
+                        WorkspaceAction::SplitH(tab_tile_id, pane_type) => {
+                            Self::split_tile(
+                                &mut self.workspace.tree,
+                                tab_tile_id,
+                                pane_type,
+                                egui_tiles::LinearDir::Horizontal,
+                            );
+                        }
+                        WorkspaceAction::SplitV(tab_tile_id, pane_type) => {
+                            Self::split_tile(
+                                &mut self.workspace.tree,
+                                tab_tile_id,
+                                pane_type,
+                                egui_tiles::LinearDir::Vertical,
+                            );
                         }
                     }
-                    WorkspaceAction::SplitH(tab_tile_id, pane_type) => {
-                        Self::split_tile(&mut self.workspace.tree, tab_tile_id, pane_type, egui_tiles::LinearDir::Horizontal);
-                    }
-                    WorkspaceAction::SplitV(tab_tile_id, pane_type) => {
-                        Self::split_tile(&mut self.workspace.tree, tab_tile_id, pane_type, egui_tiles::LinearDir::Vertical);
-                    }
                 }
-            }
-        });
+            });
     }
 }

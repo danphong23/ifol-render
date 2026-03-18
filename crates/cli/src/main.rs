@@ -108,15 +108,17 @@ fn main() {
             let mut world = scene_desc.into_world();
             let mut time = ifol_render_core::time::TimeState::new(fps);
             // Use core's re-exported Renderer (no direct GPU dependency)
-            let mut renderer =
-                ifol_render_core::Renderer::new(settings.width, settings.height);
+            let mut renderer = ifol_render_core::Renderer::new(settings.width, settings.height);
 
             let total_frames = (settings.duration * fps) as u64;
 
             for frame in 0..total_frames {
                 time.seek(frame as f64 / fps);
                 let pixels = ifol_render_core::ecs::pipeline::render_frame(
-                    &mut world, &time, &settings, &mut renderer,
+                    &mut world,
+                    &time,
+                    &settings,
+                    &mut renderer,
                 );
 
                 if output == "pipe:1" {
@@ -147,7 +149,11 @@ fn main() {
             println!("Duration: {}s", desc.settings.duration);
             println!("Entities: {}", desc.entities.len());
             for entity in &desc.entities {
-                println!("  - {} (components: {})", entity.id, count_components(entity));
+                println!(
+                    "  - {} (components: {})",
+                    entity.id,
+                    count_components(entity)
+                );
             }
             println!("Custom shaders: {}", desc.shaders.len());
         }
@@ -168,20 +174,22 @@ fn main() {
             time.seek(timestamp);
 
             // Use core's re-exported Renderer
-            let mut renderer =
-                ifol_render_core::Renderer::new(settings.width, settings.height);
+            let mut renderer = ifol_render_core::Renderer::new(settings.width, settings.height);
 
             // Load image sources through core's re-exported API
             for entity in &world.entities {
-                if let Some(ref img) = entity.components.image_source {
-                    if let Err(e) = renderer.load_image(&entity.id, &img.path) {
-                        log::warn!("{}", e);
-                    }
+                if let Some(ref img) = entity.components.image_source
+                    && let Err(e) = renderer.load_image(&entity.id, &img.path)
+                {
+                    log::warn!("{}", e);
                 }
             }
 
             let pixels = ifol_render_core::ecs::pipeline::render_frame(
-                &mut world, &time, &settings, &mut renderer,
+                &mut world,
+                &time,
+                &settings,
+                &mut renderer,
             );
 
             let out_path = output.to_str().unwrap();
@@ -223,7 +231,7 @@ fn main() {
             let effective_w = width.unwrap_or(settings.width);
             let effective_h = height.unwrap_or(settings.height);
 
-            let video_codec = ifol_render_core::export::VideoCodec::from_str(&codec)
+            let video_codec = ifol_render_core::export::VideoCodec::parse_codec(&codec)
                 .unwrap_or_else(|| {
                     eprintln!("Unknown codec '{}', defaulting to h264.", codec);
                     ifol_render_core::export::VideoCodec::H264
@@ -240,15 +248,14 @@ fn main() {
                 ffmpeg_path: ffmpeg,
             };
 
-            let mut renderer =
-                ifol_render_core::Renderer::new(effective_w, effective_h);
+            let mut renderer = ifol_render_core::Renderer::new(effective_w, effective_h);
 
             // Load image sources
             for entity in &world.entities {
-                if let Some(ref img) = entity.components.image_source {
-                    if let Err(e) = renderer.load_image(&entity.id, &img.path) {
-                        log::warn!("{}", e);
-                    }
+                if let Some(ref img) = entity.components.image_source
+                    && let Err(e) = renderer.load_image(&entity.id, &img.path)
+                {
+                    log::warn!("{}", e);
                 }
             }
 
@@ -299,15 +306,35 @@ fn main() {
 fn count_components(entity: &ifol_render_core::ecs::Entity) -> usize {
     let c = &entity.components;
     let mut n = 0;
-    if c.video_source.is_some() { n += 1; }
-    if c.image_source.is_some() { n += 1; }
-    if c.text_source.is_some() { n += 1; }
-    if c.color_source.is_some() { n += 1; }
-    if c.timeline.is_some() { n += 1; }
-    if c.transform.is_some() { n += 1; }
-    if c.opacity.is_some() { n += 1; }
-    if c.color.is_some() { n += 1; }
-    if c.animation.is_some() { n += 1; }
-    if c.effects.is_some() { n += 1; }
+    if c.video_source.is_some() {
+        n += 1;
+    }
+    if c.image_source.is_some() {
+        n += 1;
+    }
+    if c.text_source.is_some() {
+        n += 1;
+    }
+    if c.color_source.is_some() {
+        n += 1;
+    }
+    if c.timeline.is_some() {
+        n += 1;
+    }
+    if c.transform.is_some() {
+        n += 1;
+    }
+    if c.opacity.is_some() {
+        n += 1;
+    }
+    if c.color.is_some() {
+        n += 1;
+    }
+    if c.animation.is_some() {
+        n += 1;
+    }
+    if c.effects.is_some() {
+        n += 1;
+    }
     n
 }

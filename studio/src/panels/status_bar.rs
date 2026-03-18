@@ -1,5 +1,5 @@
-use egui::{Ui, RichText};
 use crate::app::{EditorApp, TEXT_DIM};
+use egui::{RichText, Ui};
 
 pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
     ui.horizontal(|ui| {
@@ -18,7 +18,9 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
             ui.label(
                 RichText::new(format!(
                     "{} entities  {}  {}",
-                    app.world.entities.len(), undo_info, redo_info
+                    app.world.entities.len(),
+                    undo_info,
+                    redo_info
                 ))
                 .color(TEXT_DIM)
                 .size(10.0),

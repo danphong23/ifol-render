@@ -1,13 +1,18 @@
-use egui::{Ui, RichText, Color32, Frame, Margin, Align, Layout, Sense};
+use crate::app::{ACCENT, EditorApp, RED, TEXT_DIM, TEXT_PRIMARY};
+use egui::{Align, Color32, Frame, Layout, Margin, RichText, Sense, Ui};
 use ifol_render_core::commands::{AddEntity, RemoveEntity};
-use ifol_render_core::ecs::{components, Entity};
-use crate::app::{EditorApp, ACCENT, TEXT_DIM, TEXT_PRIMARY, RED};
+use ifol_render_core::ecs::{Entity, components};
 
 pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
     // Header: "ENTITIES" + Add dropdown
     ui.horizontal(|ui| {
-        ui.label(RichText::new("ENTITIES").color(TEXT_DIM).strong().size(11.0));
-        
+        ui.label(
+            RichText::new("ENTITIES")
+                .color(TEXT_DIM)
+                .strong()
+                .size(11.0),
+        );
+
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.menu_button(RichText::new("+ Add").color(ACCENT).size(11.0), |ui| {
                 if ui.button("🎨 Color Solid").clicked() {
@@ -26,10 +31,8 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                         layer: n as i32,
                     });
                     e.components.transform = Some(components::Transform::default());
-                    app.commands.execute(
-                        Box::new(AddEntity::new(e)),
-                        &mut app.world,
-                    );
+                    app.commands
+                        .execute(Box::new(AddEntity::new(e)), &mut app.world);
                     app.selected = Some(n);
                     app.renderer = None;
                     app.needs_render = true;
@@ -56,10 +59,8 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                             layer: n as i32,
                         });
                         e.components.transform = Some(components::Transform::default());
-                        app.commands.execute(
-                            Box::new(AddEntity::new(e)),
-                            &mut app.world,
-                        );
+                        app.commands
+                            .execute(Box::new(AddEntity::new(e)), &mut app.world);
                         app.selected = Some(n);
                         app.renderer = None;
                         app.needs_render = true;
@@ -80,20 +81,32 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            
+
             for (i, e) in app.world.entities.iter().enumerate() {
                 let is_sel = app.selected == Some(i) || app.selected_indices.contains(&i);
-                
+
                 let (icon, color) = match () {
-                    _ if e.components.color_source.is_some() => ("●", Color32::from_rgb(147, 51, 234)),
-                    _ if e.components.image_source.is_some() => ("🖼", Color32::from_rgb(234, 88, 12)),
-                    _ if e.components.video_source.is_some() => ("▶", Color32::from_rgb(234, 88, 12)),
-                    _ if e.components.text_source.is_some() => ("T", Color32::from_rgb(22, 163, 74)),
+                    _ if e.components.color_source.is_some() => {
+                        ("●", Color32::from_rgb(147, 51, 234))
+                    }
+                    _ if e.components.image_source.is_some() => {
+                        ("🖼", Color32::from_rgb(234, 88, 12))
+                    }
+                    _ if e.components.video_source.is_some() => {
+                        ("▶", Color32::from_rgb(234, 88, 12))
+                    }
+                    _ if e.components.text_source.is_some() => {
+                        ("T", Color32::from_rgb(22, 163, 74))
+                    }
                     _ => ("◻", TEXT_DIM),
                 };
 
-                let bg = if is_sel { ACCENT.linear_multiply(0.25) } else { Color32::TRANSPARENT };
-                
+                let bg = if is_sel {
+                    ACCENT.linear_multiply(0.25)
+                } else {
+                    Color32::TRANSPARENT
+                };
+
                 let resp = Frame::NONE
                     .fill(bg)
                     .inner_margin(Margin::symmetric(8, 4))
@@ -125,7 +138,11 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                     } else if modifiers.shift {
                         // Shift+Click: range select
                         if let Some(anchor) = app.selected {
-                            let (lo, hi) = if anchor <= i { (anchor, i) } else { (i, anchor) };
+                            let (lo, hi) = if anchor <= i {
+                                (anchor, i)
+                            } else {
+                                (i, anchor)
+                            };
                             for j in lo..=hi {
                                 app.selected_indices.insert(j);
                             }
@@ -162,10 +179,8 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                     for idx in indices {
                         if idx < app.world.entities.len() {
                             let eid = app.world.entities[idx].id.clone();
-                            app.commands.execute(
-                                Box::new(RemoveEntity::new(eid)),
-                                &mut app.world,
-                            );
+                            app.commands
+                                .execute(Box::new(RemoveEntity::new(eid)), &mut app.world);
                         }
                     }
                     app.selected = None;

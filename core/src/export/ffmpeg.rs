@@ -13,6 +13,7 @@ impl FfmpegPipe {
     /// Start an FFmpeg encoding process.
     ///
     /// Frames must be written as raw RGBA bytes (width × height × 4 bytes per frame).
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         width: u32,
         height: u32,
@@ -78,9 +79,9 @@ impl FfmpegPipe {
         cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::piped());
 
-        let child = cmd
-            .spawn()
-            .map_err(|e| format!("Failed to start FFmpeg: {e}. Make sure FFmpeg is installed and in your PATH."))?;
+        let child = cmd.spawn().map_err(|e| {
+            format!("Failed to start FFmpeg: {e}. Make sure FFmpeg is installed and in your PATH.")
+        })?;
 
         Ok(Self { child })
     }
@@ -115,7 +116,15 @@ impl FfmpegPipe {
             return Err(format!(
                 "FFmpeg exited with code {:?}:\n{}",
                 output.status.code(),
-                stderr.lines().rev().take(10).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")
+                stderr
+                    .lines()
+                    .rev()
+                    .take(10)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n")
             ));
         }
 

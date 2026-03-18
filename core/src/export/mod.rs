@@ -5,10 +5,10 @@
 
 pub mod ffmpeg;
 
+use crate::Renderer;
 use crate::ecs::World;
 use crate::scene::RenderSettings;
 use crate::time::TimeState;
-use crate::Renderer;
 
 /// Export configuration.
 #[derive(Debug, Clone)]
@@ -79,7 +79,7 @@ impl VideoCodec {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse_codec(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "h264" | "x264" | "libx264" => Some(VideoCodec::H264),
             "h265" | "x265" | "hevc" | "libx265" => Some(VideoCodec::H265),

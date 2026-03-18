@@ -36,10 +36,22 @@ impl Vertex {
 
 /// Fullscreen quad vertices (two triangles).
 pub const QUAD_VERTICES: &[Vertex] = &[
-    Vertex { position: [-1.0, -1.0], uv: [0.0, 1.0] }, // bottom-left
-    Vertex { position: [1.0, -1.0], uv: [1.0, 1.0] },  // bottom-right
-    Vertex { position: [1.0, 1.0], uv: [1.0, 0.0] },   // top-right
-    Vertex { position: [-1.0, 1.0], uv: [0.0, 0.0] },  // top-left
+    Vertex {
+        position: [-1.0, -1.0],
+        uv: [0.0, 1.0],
+    }, // bottom-left
+    Vertex {
+        position: [1.0, -1.0],
+        uv: [1.0, 1.0],
+    }, // bottom-right
+    Vertex {
+        position: [1.0, 1.0],
+        uv: [1.0, 0.0],
+    }, // top-right
+    Vertex {
+        position: [-1.0, 1.0],
+        uv: [0.0, 0.0],
+    }, // top-left
 ];
 
 /// Quad indices (two triangles).

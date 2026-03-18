@@ -88,10 +88,11 @@ impl Mat4 {
         let mut out = [0.0f32; 16];
         for col in 0..4 {
             for row in 0..4 {
-                out[col * 4 + row] = a[0 * 4 + row] * b[col * 4 + 0]
-                    + a[1 * 4 + row] * b[col * 4 + 1]
-                    + a[2 * 4 + row] * b[col * 4 + 2]
-                    + a[3 * 4 + row] * b[col * 4 + 3];
+                let mut sum = 0.0f32;
+                for k in 0..4 {
+                    sum += a[k * 4 + row] * b[col * 4 + k];
+                }
+                out[col * 4 + row] = sum;
             }
         }
         Mat4(out)
@@ -145,9 +146,7 @@ impl Easing {
                     1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
                 }
             }
-            Easing::CubicBezier(x1, y1, x2, y2) => {
-                cubic_bezier_ease(t, *x1, *y1, *x2, *y2)
-            }
+            Easing::CubicBezier(x1, y1, x2, y2) => cubic_bezier_ease(t, *x1, *y1, *x2, *y2),
         }
     }
 }
