@@ -7,6 +7,7 @@ pub mod gpu;
 
 /// Core GPU engine — owns the wgpu instance, adapter, device, and queue.
 pub struct GpuEngine {
+    #[allow(dead_code)]
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,

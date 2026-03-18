@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_arguments)]
 //! ifol-render CLI — headless rendering and export.
 //!
 //! A third-party consumer that only depends on ifol-render-core.

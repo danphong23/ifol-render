@@ -159,7 +159,7 @@ impl UniformRingBuffer {
     /// Returns None if buffer is full.
     fn allocate(&mut self, data_bytes: u64) -> Option<u64> {
         let aligned_offset = self.offset;
-        let aligned_size = ((data_bytes + self.alignment - 1) / self.alignment) * self.alignment;
+        let aligned_size = data_bytes.div_ceil(self.alignment) * self.alignment;
         let new_offset = aligned_offset + aligned_size;
 
         if new_offset > self.capacity {
@@ -181,6 +181,7 @@ impl UniformRingBuffer {
 // ══════════════════════════════════════
 
 struct CachedTexture {
+    #[allow(dead_code)]
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     /// Size in bytes (w * h * 4).
@@ -673,10 +674,10 @@ impl Renderer {
 
             // Update LRU for textures
             let tex_key = cmd.textures.first().cloned();
-            if let Some(ref key) = tex_key {
-                if let Some(entry) = self.texture_cache.get_mut(key) {
-                    entry.last_used_frame = self.frame_number;
-                }
+            if let Some(ref key) = tex_key
+                && let Some(entry) = self.texture_cache.get_mut(key)
+            {
+                entry.last_used_frame = self.frame_number;
             }
 
             prepared.push(PreparedDraw {

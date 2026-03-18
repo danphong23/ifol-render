@@ -9,9 +9,9 @@ use crate::ecs::World;
 use crate::scene::RenderSettings;
 use ifol_render::DrawCommand;
 
-/// Composite shader uniform layout:
-/// [transform: f32x16, color: f32x4, opacity: f32, use_texture: f32, blend_mode: f32, _pad: f32]
-/// = 24 floats total
+// Composite shader uniform layout:
+// [transform: f32x16, color: f32x4, opacity: f32, use_texture: f32, blend_mode: f32, _pad: f32]
+// = 24 floats total
 
 /// Map core BlendMode to shader float.
 fn blend_mode_to_float(mode: Option<&crate::ecs::components::BlendMode>) -> f32 {
