@@ -1,113 +1,173 @@
 //! # ifol-render
 //!
-//! Passive GPU rendering tool. Receives `DrawCommand`s, outputs pixels.
+//! Pure GPU executor. Receives shaders (WGSL strings), compiles them,
+//! caches pipelines, and executes draw commands. **Does NOT own any shaders.**
 //!
-//! **Does NOT know about ECS, Entity, Component, World, or any business logic.**
-//! It only knows how to draw textured/colored quads with transforms and opacity.
+//! Callers (core, CLI, user code) register pipelines and effects,
+//! then send `DrawCommand[]` to get pixels back.
 
 pub mod effects;
-pub mod engine;
-pub mod passes;
-pub mod render_graph;
-pub mod resource_manager;
+mod engine;
 pub mod vertex;
 
 use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 
-use passes::composite::{CompositePipeline, CompositeUniforms};
+use effects::context::EffectContext;
+use vertex::{QUAD_INDICES, QUAD_VERTICES, Vertex};
+
+// Re-export
+pub use engine::gpu::GpuCapabilities;
 
 // ══════════════════════════════════════
-// Public API Types (standalone — no ECS)
+// Public API Types
 // ══════════════════════════════════════
 
-/// What to draw: a solid color or a cached texture.
+/// Configuration for registering a draw pipeline.
 #[derive(Debug, Clone)]
-pub enum DrawSource {
-    /// Solid RGBA color fill.
-    Color([f32; 4]),
-    /// Reference to a previously loaded texture by key.
-    Texture(String),
+pub struct PipelineConfig {
+    /// Vertex entry point name.
+    pub vertex_entry: String,
+    /// Fragment entry point name.
+    pub fragment_entry: String,
+    /// Whether this pipeline uses vertex buffers (quad) or fullscreen triangle.
+    pub uses_vertex_buffer: bool,
+    /// Whether to enable alpha blending.
+    pub alpha_blend: bool,
 }
 
-/// Blend mode for compositing (matches composite.wgsl blend_mode uniform).
-#[derive(Debug, Clone, Copy, Default)]
-pub enum BlendMode {
-    #[default]
-    Normal, // 0
-    Multiply,   // 1
-    Screen,     // 2
-    Overlay,    // 3
-    SoftLight,  // 4
-    Add,        // 5
-    Difference, // 6
-}
+impl PipelineConfig {
+    /// Config for standard quad rendering (vertex buffer + alpha blend).
+    pub fn quad() -> Self {
+        Self {
+            vertex_entry: "vs_main".into(),
+            fragment_entry: "fs_main".into(),
+            uses_vertex_buffer: true,
+            alpha_blend: true,
+        }
+    }
 
-impl BlendMode {
-    /// Convert to GPU float for shader uniform.
-    pub fn to_gpu(&self) -> f32 {
-        match self {
-            BlendMode::Normal => 0.0,
-            BlendMode::Multiply => 1.0,
-            BlendMode::Screen => 2.0,
-            BlendMode::Overlay => 3.0,
-            BlendMode::SoftLight => 4.0,
-            BlendMode::Add => 5.0,
-            BlendMode::Difference => 6.0,
+    /// Config for fullscreen effect pass (no vertex buffer, no blend).
+    pub fn fullscreen() -> Self {
+        Self {
+            vertex_entry: "vs_fullscreen".into(),
+            fragment_entry: "fs_main".into(),
+            uses_vertex_buffer: false,
+            alpha_blend: false,
         }
     }
 }
 
-/// A single draw command — everything the GPU needs to draw one quad.
+/// A single draw command — everything the GPU needs for one draw call.
 ///
-/// The render tool does NOT decide what to draw. Callers (core/ECS)
-/// build these commands and pass them in.
+/// Generic: pipeline name determines which shader runs.
+/// Uniforms are raw float data packed by the caller.
 #[derive(Debug, Clone)]
 pub struct DrawCommand {
-    /// 4x4 column-major transform matrix (positions the quad in clip space).
-    pub transform: [f32; 16],
-    /// Opacity (0.0 = invisible, 1.0 = fully opaque).
-    pub opacity: f32,
-    /// What to render: color fill or texture.
-    pub source: DrawSource,
-    /// Blend mode.
-    pub blend_mode: BlendMode,
+    /// Name of the registered pipeline to use.
+    pub pipeline: String,
+    /// Raw uniform data (floats). Layout must match shader struct.
+    pub uniforms: Vec<f32>,
+    /// Texture keys to bind (in order: binding 1, 2, ...).
+    /// First texture is bound at binding 1.
+    pub textures: Vec<String>,
+}
+
+/// Effect configuration (post-processing pass).
+#[derive(Debug, Clone)]
+pub struct EffectConfig {
+    /// Effect name (must be registered).
+    pub effect_type: String,
+    /// Override parameters (key → value).
+    pub params: HashMap<String, f32>,
+}
+
+/// An effect entry in the registry.
+pub struct EffectEntry {
+    pub name: String,
+    pub shader_source: String,
+    pub default_params: Vec<(String, f32)>,
+    pub pass_count: u32,
 }
 
 // ══════════════════════════════════════
-// Renderer
+// Cached Pipeline
 // ══════════════════════════════════════
 
-/// The GPU renderer — owns the wgpu context and render resources.
-///
-/// Create one, load textures, then call `render_frame()` with draw commands.
+struct CachedPipeline {
+    pipeline: wgpu::RenderPipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    config: PipelineConfig,
+}
+
+// ══════════════════════════════════════
+// Renderer — Pure GPU Executor
+// ══════════════════════════════════════
+
+/// The GPU renderer. Owns GPU context but NO shaders.
+/// All pipelines and effects are registered from outside.
 pub struct Renderer {
-    pub engine: engine::GpuEngine,
-    composite: CompositePipeline,
+    engine: engine::GpuEngine,
+    /// Registered draw pipelines (name → cached GPU pipeline).
+    pipelines: HashMap<String, CachedPipeline>,
+    /// Registered effects.
+    effect_entries: HashMap<String, EffectEntry>,
     /// Cached textures by key.
     texture_cache: HashMap<String, (wgpu::Texture, wgpu::TextureView)>,
-    /// Effect pass ping-pong context.
-    effect_ctx: Option<effects::context::EffectContext>,
-    /// Pipeline cache — avoids recreating pipelines every frame.
-    pipeline_cache: effects::pipeline_cache::PipelineCache,
-    /// Registry of available effects.
-    effect_registry: effects::EffectRegistry,
+    /// 1x1 white fallback texture for solid color rendering.
+    white_texture_view: wgpu::TextureView,
+    /// Shared quad vertex/index buffers.
+    quad_vertex_buffer: wgpu::Buffer,
+    quad_index_buffer: wgpu::Buffer,
+    /// Effect ping-pong context.
+    effect_ctx: Option<EffectContext>,
     width: u32,
     height: u32,
 }
 
 impl Renderer {
-    /// Create a new headless renderer (no window surface).
+    /// Create a new headless renderer.
     pub fn new(width: u32, height: u32) -> Self {
         let engine = pollster::block_on(engine::GpuEngine::new_headless(width, height));
 
-        let output_format = wgpu::TextureFormat::Rgba8UnormSrgb;
-        let composite = CompositePipeline::new(&engine.device, output_format);
+        // Quad geometry (shared by all quad-based pipelines)
+        let quad_vertex_buffer =
+            engine
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("quad vertices"),
+                    contents: bytemuck::cast_slice(QUAD_VERTICES),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
 
-        // Write white pixel to fallback texture
+        let quad_index_buffer =
+            engine
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("quad indices"),
+                    contents: bytemuck::cast_slice(QUAD_INDICES),
+                    usage: wgpu::BufferUsages::INDEX,
+                });
+
+        // 1x1 white fallback texture
+        let white_texture = engine.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("white 1x1"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
         engine.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &composite.white_texture,
+                texture: &white_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -124,32 +184,49 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
+        let white_texture_view = white_texture.create_view(&Default::default());
 
         Self {
             engine,
-            composite,
+            pipelines: HashMap::new(),
+            effect_entries: HashMap::new(),
             texture_cache: HashMap::new(),
+            white_texture_view,
+            quad_vertex_buffer,
+            quad_index_buffer,
             effect_ctx: None,
-            pipeline_cache: effects::pipeline_cache::PipelineCache::new(),
-            effect_registry: effects::EffectRegistry::new(),
             width,
             height,
         }
     }
+
+    // ── Engine ──────────────────────────
+
+    /// Resize the output.
+    pub fn resize(&mut self, width: u32, height: u32) {
+        self.width = width;
+        self.height = height;
+        self.engine.resize(width, height);
+        self.effect_ctx = None; // recreate on next use
+    }
+
+    /// Query GPU capabilities.
+    pub fn capabilities(&self) -> GpuCapabilities {
+        GpuCapabilities::from_adapter(&self.engine.adapter)
+    }
+
+    // ── Texture ────────────────────────
 
     /// Load an image file into GPU texture cache.
     pub fn load_image(&mut self, key: &str, path: &str) -> Result<(), String> {
         if self.texture_cache.contains_key(key) {
             return Ok(());
         }
-
         let img = image::open(path)
             .map_err(|e| format!("Failed to load image '{}': {}", path, e))?
             .to_rgba8();
-
         let (w, h) = img.dimensions();
         self.load_rgba(key, &img, w, h);
-
         log::info!("Loaded image '{}' ({}x{}) as '{}'", path, w, h, key);
         Ok(())
     }
@@ -170,7 +247,6 @@ impl Renderer {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-
         self.engine.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -190,7 +266,6 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
-
         let view = texture.create_view(&Default::default());
         self.texture_cache.insert(key.to_string(), (texture, view));
     }
@@ -200,6 +275,172 @@ impl Renderer {
         self.texture_cache.contains_key(key)
     }
 
+    /// Evict a cached texture.
+    pub fn evict_texture(&mut self, key: &str) {
+        self.texture_cache.remove(key);
+    }
+
+    /// Clear all cached textures.
+    pub fn clear_textures(&mut self) {
+        self.texture_cache.clear();
+    }
+
+    // ── Pipeline (shader from outside) ──
+
+    /// Register a draw pipeline from WGSL source.
+    /// After registration, DrawCommands can reference this pipeline by name.
+    pub fn register_pipeline(&mut self, name: &str, wgsl_source: &str, config: PipelineConfig) {
+        let device = &self.engine.device;
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(name),
+            source: wgpu::ShaderSource::Wgsl(wgsl_source.into()),
+        });
+
+        // Standard bind group layout: uniform buffer + texture + sampler
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some(&format!("{name} bgl")),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some(&format!("{name} layout")),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let vertex_buffers: Vec<wgpu::VertexBufferLayout> = if config.uses_vertex_buffer {
+            vec![Vertex::layout()]
+        } else {
+            vec![]
+        };
+
+        let blend = if config.alpha_blend {
+            Some(wgpu::BlendState::ALPHA_BLENDING)
+        } else {
+            None
+        };
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(&format!("{name} pipeline")),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some(&config.vertex_entry),
+                buffers: &vertex_buffers,
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some(&config.fragment_entry),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    blend,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some(&format!("{name} sampler")),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        self.pipelines.insert(
+            name.to_string(),
+            CachedPipeline {
+                pipeline,
+                bind_group_layout,
+                sampler,
+                config,
+            },
+        );
+
+        log::info!("Pipeline registered: '{}'", name);
+    }
+
+    /// Register an effect pipeline from WGSL source.
+    pub fn register_effect(
+        &mut self,
+        name: &str,
+        wgsl_source: &str,
+        default_params: Vec<(String, f32)>,
+        pass_count: u32,
+    ) {
+        // Register as fullscreen pipeline
+        self.register_pipeline(name, wgsl_source, PipelineConfig::fullscreen());
+
+        // Store effect metadata
+        self.effect_entries.insert(
+            name.to_string(),
+            EffectEntry {
+                name: name.to_string(),
+                shader_source: wgsl_source.to_string(),
+                default_params,
+                pass_count,
+            },
+        );
+
+        log::info!("Effect registered: '{}'", name);
+    }
+
+    /// Check if a pipeline is registered.
+    pub fn has_pipeline(&self, name: &str) -> bool {
+        self.pipelines.contains_key(name)
+    }
+
+    /// List available registered pipelines.
+    pub fn available_pipelines(&self) -> Vec<&str> {
+        self.pipelines.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// List available registered effects.
+    pub fn available_effects(&self) -> Vec<&str> {
+        self.effect_entries.keys().map(|s| s.as_str()).collect()
+    }
+
+    // ── Draw ───────────────────────────
+
     /// Render a single frame from draw commands. Returns RGBA pixel data.
     pub fn render_frame(&mut self, commands: &[DrawCommand]) -> Vec<u8> {
         let output_texture = self.engine.output_texture.as_ref().unwrap();
@@ -208,55 +449,50 @@ impl Renderer {
         // Pre-compute per-command GPU resources
         struct GpuDrawCall {
             bind_group: wgpu::BindGroup,
+            pipeline_name: String,
         }
 
         let mut draw_calls: Vec<GpuDrawCall> = Vec::new();
 
         for cmd in commands {
-            let mut uniforms = CompositeUniforms {
-                transform: cmd.transform,
-                opacity: cmd.opacity,
-                blend_mode: cmd.blend_mode.to_gpu(),
-                ..Default::default()
+            let cached = match self.pipelines.get(&cmd.pipeline) {
+                Some(c) => c,
+                None => {
+                    log::warn!("Pipeline '{}' not registered, skipping", cmd.pipeline);
+                    continue;
+                }
             };
 
-            match &cmd.source {
-                DrawSource::Color(rgba) => {
-                    uniforms.color = *rgba;
-                    uniforms.use_texture = 0.0;
-                }
-                DrawSource::Texture(key) => {
-                    uniforms.use_texture = 1.0;
-                    // If texture not found, skip this command
-                    if !self.texture_cache.contains_key(key) {
-                        continue;
-                    }
-                }
-            }
-
-            // Create per-command uniform buffer
+            // Create uniform buffer from raw float data
             let ub = self
                 .engine
                 .device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("draw_uniform"),
-                    contents: bytemuck::cast_slice(&[uniforms]),
+                    contents: bytemuck::cast_slice(&cmd.uniforms),
                     usage: wgpu::BufferUsages::UNIFORM,
                 });
 
-            // Pick texture view
-            let tex_view = match &cmd.source {
-                DrawSource::Texture(key) => &self.texture_cache.get(key).unwrap().1,
-                _ => &self.composite.white_texture_view,
+            // Pick first texture or white fallback
+            let tex_view = if !cmd.textures.is_empty() {
+                if let Some(key) = cmd.textures.first() {
+                    match self.texture_cache.get(key) {
+                        Some((_, view)) => view,
+                        None => &self.white_texture_view,
+                    }
+                } else {
+                    &self.white_texture_view
+                }
+            } else {
+                &self.white_texture_view
             };
 
-            // Create per-command bind group
             let bg = self
                 .engine
                 .device
                 .create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("draw_bg"),
-                    layout: &self.composite.bind_group_layout,
+                    layout: &cached.bind_group_layout,
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
@@ -268,12 +504,15 @@ impl Renderer {
                         },
                         wgpu::BindGroupEntry {
                             binding: 2,
-                            resource: wgpu::BindingResource::Sampler(&self.composite.sampler),
+                            resource: wgpu::BindingResource::Sampler(&cached.sampler),
                         },
                     ],
                 });
 
-            draw_calls.push(GpuDrawCall { bind_group: bg });
+            draw_calls.push(GpuDrawCall {
+                bind_group: bg,
+                pipeline_name: cmd.pipeline.clone(),
+            });
         }
 
         // Render pass
@@ -285,16 +524,16 @@ impl Renderer {
                 });
 
         {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("composite pass"),
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("main pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &output_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.05,
-                            g: 0.05,
-                            b: 0.07,
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
@@ -305,100 +544,45 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            render_pass.set_pipeline(&self.composite.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.composite.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(
-                self.composite.index_buffer.slice(..),
-                wgpu::IndexFormat::Uint16,
-            );
-
             for dc in &draw_calls {
-                render_pass.set_bind_group(0, &dc.bind_group, &[]);
-                render_pass.draw_indexed(0..6, 0, 0..1);
+                let cached = self.pipelines.get(&dc.pipeline_name).unwrap();
+                rpass.set_pipeline(&cached.pipeline);
+
+                if cached.config.uses_vertex_buffer {
+                    rpass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
+                    rpass.set_index_buffer(
+                        self.quad_index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                    rpass.set_bind_group(0, &dc.bind_group, &[]);
+                    rpass.draw_indexed(0..6, 0, 0..1);
+                } else {
+                    rpass.set_bind_group(0, &dc.bind_group, &[]);
+                    rpass.draw(0..3, 0..1); // fullscreen triangle
+                }
             }
         }
 
-        // Readback
-        let padded_bytes_per_row = Self::padded_bytes_per_row(self.width);
-
-        let staging = self.engine.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("staging"),
-            size: (padded_bytes_per_row * self.height) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: output_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &staging,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_bytes_per_row),
-                    rows_per_image: Some(self.height),
-                },
-            },
-            wgpu::Extent3d {
-                width: self.width,
-                height: self.height,
-                depth_or_array_layers: 1,
-            },
-        );
-
         self.engine.queue.submit(std::iter::once(encoder.finish()));
-
-        // Map and read pixels
-        let buffer_slice = staging.slice(..);
-        let (sender, receiver) = std::sync::mpsc::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = sender.send(result);
-        });
-        self.engine.device.poll(wgpu::Maintain::Wait);
-        receiver.recv().unwrap().unwrap();
-
-        let data = buffer_slice.get_mapped_range();
-
-        let unpadded_bytes_per_row = self.width * 4;
-        let buffer_size = (self.width * self.height * 4) as usize;
-        let mut pixels = Vec::with_capacity(buffer_size);
-        for row in 0..self.height {
-            let start = (row * padded_bytes_per_row) as usize;
-            let end = start + unpadded_bytes_per_row as usize;
-            pixels.extend_from_slice(&data[start..end]);
-        }
-
-        drop(data);
-        staging.unmap();
-
-        pixels
+        self.engine.readback_output()
     }
 
     /// Render a frame with post-processing effects applied.
-    ///
-    /// Effects are applied in order after the composite pass.
-    /// Uses pipeline cache — pipelines are created once and reused.
-    /// Any shader following the convention (vs_fullscreen + fs_main + standard bindings)
-    /// works automatically without per-effect Rust code.
     pub fn render_frame_with_effects(
         &mut self,
         commands: &[DrawCommand],
-        effect_configs: &[effects::EffectConfig],
+        effect_configs: &[EffectConfig],
     ) -> Vec<u8> {
         if effect_configs.is_empty() {
             return self.render_frame(commands);
         }
 
-        // First: normal composite pass
-        let _composite_pixels = self.render_frame(commands);
+        // First: normal draw pass
+        let _pixels = self.render_frame(commands);
 
-        // Initialize effect context if needed
+        // Init effect context if needed
         if self.effect_ctx.is_none() {
-            self.effect_ctx = Some(effects::context::EffectContext::new(
+            self.effect_ctx = Some(EffectContext::new(
                 &self.engine.device,
                 self.width,
                 self.height,
@@ -420,127 +604,133 @@ impl Renderer {
             .load_from(&mut encoder, output_texture);
         self.engine.queue.submit(std::iter::once(encoder.finish()));
 
-        // Run each effect using the generic engine
+        // Run each effect
         for config in effect_configs {
-            if let Some(entry) = self.effect_registry.get(&config.effect_type) {
-                let shader_source = entry.shader_source.clone();
-                let default_params = entry.default_params.clone();
-                let pass_count = entry.pass_count;
-                let effect_name = entry.name.clone();
-
-                // Get or create cached pipeline
-                let cached = self.pipeline_cache.get_or_create(
-                    &self.engine.device,
-                    &effect_name,
-                    &shader_source,
-                );
-
-                for pass in 0..pass_count {
-                    // Build uniform data: pack params as f32 array
-                    let param_values: Vec<f32> = default_params
-                        .iter()
-                        .map(|(name, default)| {
-                            // Special handling for blur direction per pass
-                            if effect_name == "blur" {
-                                match name.as_str() {
-                                    "direction_x" => {
-                                        if pass == 0 {
-                                            1.0
-                                        } else {
-                                            0.0
-                                        }
-                                    }
-                                    "direction_y" => {
-                                        if pass == 0 {
-                                            0.0
-                                        } else {
-                                            1.0
-                                        }
-                                    }
-                                    "texel_size" => {
-                                        if pass == 0 {
-                                            1.0 / self.width as f32
-                                        } else {
-                                            1.0 / self.height as f32
-                                        }
-                                    }
-                                    _ => *config.params.get(name).unwrap_or(default),
-                                }
-                            } else {
-                                *config.params.get(name).unwrap_or(default)
-                            }
-                        })
-                        .collect();
-
-                    let ub =
-                        self.engine
-                            .device
-                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                label: Some("effect uniform"),
-                                contents: bytemuck::cast_slice(&param_values),
-                                usage: wgpu::BufferUsages::UNIFORM,
-                            });
-
-                    let effect_ctx = self.effect_ctx.as_ref().unwrap();
-
-                    let bg = self
-                        .engine
-                        .device
-                        .create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("effect bg"),
-                            layout: &cached.bind_group_layout,
-                            entries: &[
-                                wgpu::BindGroupEntry {
-                                    binding: 0,
-                                    resource: ub.as_entire_binding(),
-                                },
-                                wgpu::BindGroupEntry {
-                                    binding: 1,
-                                    resource: wgpu::BindingResource::TextureView(
-                                        effect_ctx.input_view(),
-                                    ),
-                                },
-                                wgpu::BindGroupEntry {
-                                    binding: 2,
-                                    resource: wgpu::BindingResource::Sampler(&cached.sampler),
-                                },
-                            ],
-                        });
-
-                    let mut encoder = self.engine.device.create_command_encoder(
-                        &wgpu::CommandEncoderDescriptor {
-                            label: Some("effect pass"),
-                        },
-                    );
-
-                    {
-                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("effect render pass"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: effect_ctx.output_view(),
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            depth_stencil_attachment: None,
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                        });
-
-                        rpass.set_pipeline(&cached.pipeline);
-                        rpass.set_bind_group(0, &bg, &[]);
-                        rpass.draw(0..3, 0..1); // fullscreen triangle
-                    }
-
-                    self.engine.queue.submit(std::iter::once(encoder.finish()));
-                    self.effect_ctx.as_mut().unwrap().swap();
+            let entry = match self.effect_entries.get(&config.effect_type) {
+                Some(e) => e,
+                None => {
+                    log::warn!("Effect '{}' not registered", config.effect_type);
+                    continue;
                 }
+            };
+            let default_params = entry.default_params.clone();
+            let pass_count = entry.pass_count;
+            let effect_name = entry.name.clone();
+
+            let cached = match self.pipelines.get(&effect_name) {
+                Some(c) => c,
+                None => continue,
+            };
+            let pipeline_ptr = &cached.pipeline as *const wgpu::RenderPipeline;
+            let bgl_ptr = &cached.bind_group_layout as *const wgpu::BindGroupLayout;
+            let sampler_ptr = &cached.sampler as *const wgpu::Sampler;
+
+            for pass in 0..pass_count {
+                let param_values: Vec<f32> = default_params
+                    .iter()
+                    .map(|(name, default)| {
+                        if effect_name == "blur" {
+                            match name.as_str() {
+                                "direction_x" => {
+                                    if pass == 0 {
+                                        1.0
+                                    } else {
+                                        0.0
+                                    }
+                                }
+                                "direction_y" => {
+                                    if pass == 0 {
+                                        0.0
+                                    } else {
+                                        1.0
+                                    }
+                                }
+                                "texel_size" => {
+                                    if pass == 0 {
+                                        1.0 / self.width as f32
+                                    } else {
+                                        1.0 / self.height as f32
+                                    }
+                                }
+                                _ => *config.params.get(name).unwrap_or(default),
+                            }
+                        } else {
+                            *config.params.get(name).unwrap_or(default)
+                        }
+                    })
+                    .collect();
+
+                let ub = self
+                    .engine
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("effect uniform"),
+                        contents: bytemuck::cast_slice(&param_values),
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    });
+
+                let effect_ctx = self.effect_ctx.as_ref().unwrap();
+
+                // SAFETY: pipeline/bgl/sampler live in self.pipelines HashMap for duration of Renderer
+                let bg = self
+                    .engine
+                    .device
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("effect bg"),
+                        layout: unsafe { &*bgl_ptr },
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: ub.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(
+                                    effect_ctx.input_view(),
+                                ),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: wgpu::BindingResource::Sampler(unsafe { &*sampler_ptr }),
+                            },
+                        ],
+                    });
+
+                let mut encoder =
+                    self.engine
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("effect pass"),
+                        });
+
+                {
+                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("effect render pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: effect_ctx.output_view(),
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+
+                    rpass.set_pipeline(unsafe { &*pipeline_ptr });
+                    rpass.set_bind_group(0, &bg, &[]);
+                    rpass.draw(0..3, 0..1);
+                }
+
+                self.engine.queue.submit(std::iter::once(encoder.finish()));
+                self.effect_ctx.as_mut().unwrap().swap();
             }
         }
 
-        // Copy final result back to output texture
+        // Copy final result back to output
+        let output_texture = self.engine.output_texture.as_ref().unwrap();
         let mut encoder =
             self.engine
                 .device
@@ -553,97 +743,10 @@ impl Renderer {
             .store_to(&mut encoder, output_texture);
         self.engine.queue.submit(std::iter::once(encoder.finish()));
 
-        // Readback the final pixels
-        self.readback_pixels(output_texture)
+        self.engine.readback_output()
     }
 
-    /// Get the effect registry for querying available effects.
-    pub fn effect_registry(&self) -> &effects::EffectRegistry {
-        &self.effect_registry
-    }
-
-    /// Register an external shader effect at runtime.
-    pub fn register_effect(
-        &mut self,
-        name: &str,
-        shader_source: String,
-        default_params: Vec<(String, f32)>,
-        pass_count: u32,
-    ) {
-        self.effect_registry
-            .register_external(name, shader_source, default_params, pass_count);
-    }
-
-    /// Readback pixels from a GPU texture into a CPU Vec<u8>.
-    fn readback_pixels(&self, texture: &wgpu::Texture) -> Vec<u8> {
-        let padded_bytes_per_row = Self::padded_bytes_per_row(self.width);
-        let staging = self.engine.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("staging"),
-            size: (padded_bytes_per_row * self.height) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        let mut encoder =
-            self.engine
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("readback"),
-                });
-
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &staging,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_bytes_per_row),
-                    rows_per_image: Some(self.height),
-                },
-            },
-            wgpu::Extent3d {
-                width: self.width,
-                height: self.height,
-                depth_or_array_layers: 1,
-            },
-        );
-
-        self.engine.queue.submit(std::iter::once(encoder.finish()));
-
-        let buffer_slice = staging.slice(..);
-        let (sender, receiver) = std::sync::mpsc::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = sender.send(result);
-        });
-        self.engine.device.poll(wgpu::Maintain::Wait);
-        receiver.recv().unwrap().unwrap();
-
-        let data = buffer_slice.get_mapped_range();
-        let unpadded_bytes_per_row = self.width * 4;
-        let buffer_size = (self.width * self.height * 4) as usize;
-        let mut pixels = Vec::with_capacity(buffer_size);
-        for row in 0..self.height {
-            let start = (row * padded_bytes_per_row) as usize;
-            let end = start + unpadded_bytes_per_row as usize;
-            pixels.extend_from_slice(&data[start..end]);
-        }
-
-        drop(data);
-        staging.unmap();
-        pixels
-    }
-
-    /// Calculate padded bytes per row (wgpu requires 256-byte alignment).
-    fn padded_bytes_per_row(width: u32) -> u32 {
-        let unpadded = width * 4;
-        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        unpadded.div_ceil(align) * align
-    }
+    // ── Export ──────────────────────────
 
     /// Save rendered pixels to a PNG file.
     pub fn save_png(pixels: &[u8], width: u32, height: u32, path: &str) -> Result<(), String> {

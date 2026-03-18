@@ -78,6 +78,22 @@ enum Commands {
         #[arg(long)]
         ffmpeg: Option<String>,
     },
+
+    /// Test render directly (no ECS). Draws test patterns to verify GPU output.
+    RenderTest {
+        /// Test name: basic, blend, effects
+        #[arg(short, long, default_value = "basic")]
+        test: String,
+        /// Output image path.
+        #[arg(short, long, default_value = "render_test.png")]
+        output: PathBuf,
+        /// Output width.
+        #[arg(long, default_value = "800")]
+        width: u32,
+        /// Output height.
+        #[arg(long, default_value = "600")]
+        height: u32,
+    },
 }
 
 fn main() {
@@ -300,6 +316,55 @@ fn main() {
                 }
             }
         }
+
+        Commands::RenderTest {
+            test,
+            output,
+            width,
+            height,
+        } => {
+            println!(
+                "Render test: '{}' → {:?} ({}x{})",
+                test, output, width, height
+            );
+
+            let mut renderer = ifol_render_core::Renderer::new(width, height);
+
+            // Register composite pipeline from core
+            ifol_render_core::ecs::pipeline::setup_renderer(&mut renderer);
+
+            let caps = renderer.capabilities();
+            println!("GPU: {} ({})", caps.gpu_name, caps.backend);
+            println!("Max texture: {}", caps.max_texture_size);
+
+            let commands = match test.as_str() {
+                "basic" => build_test_basic(width, height),
+                "blend" => build_test_blend(width, height),
+                "effects" => {
+                    let cmds = build_test_basic(width, height);
+                    let effects = vec![ifol_render_core::EffectConfig {
+                        effect_type: "vignette".into(),
+                        params: std::collections::HashMap::from([("intensity".into(), 0.8)]),
+                    }];
+                    let pixels = renderer.render_frame_with_effects(&cmds, &effects);
+                    let out_path = output.to_str().unwrap();
+                    ifol_render_core::Renderer::save_png(&pixels, width, height, out_path)
+                        .expect("Failed to save PNG");
+                    println!("Saved: {}", out_path);
+                    return;
+                }
+                _ => {
+                    eprintln!("Unknown test: '{}'. Available: basic, blend, effects", test);
+                    std::process::exit(1);
+                }
+            };
+
+            let pixels = renderer.render_frame(&commands);
+            let out_path = output.to_str().unwrap();
+            ifol_render_core::Renderer::save_png(&pixels, width, height, out_path)
+                .expect("Failed to save PNG");
+            println!("Saved: {}", out_path);
+        }
     }
 }
 
@@ -337,4 +402,175 @@ fn count_components(entity: &ifol_render_core::ecs::Entity) -> usize {
         n += 1;
     }
     n
+}
+
+/// Build a composite DrawCommand with the standard uniform layout.
+/// Layout: [transform: f32x16, color: f32x4, opacity: f32, use_texture: f32, blend_mode: f32, _pad: f32]
+fn make_draw_cmd(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    color: [f32; 4],
+    opacity: f32,
+    blend_mode: f32,
+    canvas_w: u32,
+    canvas_h: u32,
+) -> ifol_render_core::DrawCommand {
+    // Convert pixel coords to clip space (-1..1)
+    let sx = w / canvas_w as f32 * 2.0;
+    let sy = h / canvas_h as f32 * 2.0;
+    let tx = (x + w / 2.0) / canvas_w as f32 * 2.0 - 1.0;
+    let ty = 1.0 - (y + h / 2.0) / canvas_h as f32 * 2.0;
+
+    #[rustfmt::skip]
+    let transform = [
+        sx,  0.0, 0.0, 0.0,
+        0.0, sy,  0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        tx,  ty,  0.0, 1.0,
+    ];
+
+    let mut uniforms = Vec::with_capacity(24);
+    uniforms.extend_from_slice(&transform);
+    uniforms.extend_from_slice(&color);
+    uniforms.push(opacity);
+    uniforms.push(0.0); // use_texture = false
+    uniforms.push(blend_mode);
+    uniforms.push(0.0); // _pad
+
+    ifol_render_core::DrawCommand {
+        pipeline: "composite".into(),
+        uniforms,
+        textures: vec![],
+    }
+}
+
+/// Test: basic colored quads.
+fn build_test_basic(w: u32, h: u32) -> Vec<ifol_render_core::DrawCommand> {
+    vec![
+        // Dark background
+        make_draw_cmd(
+            0.0,
+            0.0,
+            w as f32,
+            h as f32,
+            [0.1, 0.1, 0.15, 1.0],
+            1.0,
+            0.0,
+            w,
+            h,
+        ),
+        // Red quad (top-left)
+        make_draw_cmd(
+            50.0,
+            50.0,
+            200.0,
+            200.0,
+            [0.9, 0.2, 0.2, 1.0],
+            1.0,
+            0.0,
+            w,
+            h,
+        ),
+        // Green quad (center, semi-transparent)
+        make_draw_cmd(
+            150.0,
+            150.0,
+            200.0,
+            200.0,
+            [0.2, 0.9, 0.3, 1.0],
+            0.7,
+            0.0,
+            w,
+            h,
+        ),
+        // Blue quad (right)
+        make_draw_cmd(
+            350.0,
+            100.0,
+            200.0,
+            200.0,
+            [0.2, 0.3, 0.9, 1.0],
+            1.0,
+            0.0,
+            w,
+            h,
+        ),
+        // Yellow quad (bottom)
+        make_draw_cmd(
+            200.0,
+            350.0,
+            300.0,
+            150.0,
+            [0.9, 0.9, 0.2, 1.0],
+            0.85,
+            0.0,
+            w,
+            h,
+        ),
+        // White small quad (overlay)
+        make_draw_cmd(
+            300.0,
+            200.0,
+            100.0,
+            100.0,
+            [1.0, 1.0, 1.0, 1.0],
+            0.5,
+            0.0,
+            w,
+            h,
+        ),
+    ]
+}
+
+/// Test: blend modes (7 modes side by side).
+fn build_test_blend(w: u32, h: u32) -> Vec<ifol_render_core::DrawCommand> {
+    let mut cmds = vec![
+        // White background
+        make_draw_cmd(
+            0.0,
+            0.0,
+            w as f32,
+            h as f32,
+            [0.8, 0.8, 0.85, 1.0],
+            1.0,
+            0.0,
+            w,
+            h,
+        ),
+    ];
+
+    let modes = [
+        "Normal",
+        "Multiply",
+        "Screen",
+        "Overlay",
+        "SoftLight",
+        "Add",
+        "Difference",
+    ];
+    let colors = [
+        [0.9, 0.2, 0.2, 1.0],
+        [0.2, 0.8, 0.2, 1.0],
+        [0.2, 0.2, 0.9, 1.0],
+        [0.9, 0.5, 0.1, 1.0],
+        [0.7, 0.2, 0.8, 1.0],
+        [0.2, 0.8, 0.8, 1.0],
+        [0.9, 0.9, 0.2, 1.0],
+    ];
+
+    let count = modes.len();
+    let quad_w = w as f32 / count as f32 - 10.0;
+    let quad_h = h as f32 * 0.6;
+
+    for (i, _mode) in modes.iter().enumerate() {
+        let x = 5.0 + i as f32 * (quad_w + 10.0);
+        let y = (h as f32 - quad_h) / 2.0;
+        cmds.push(make_draw_cmd(
+            x, y, quad_w, quad_h, colors[i], 0.9, i as f32, w, h,
+        ));
+    }
+
+    cmds
 }
