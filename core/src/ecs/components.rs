@@ -76,6 +76,15 @@ pub struct Timeline {
     /// Layer/track index (higher = on top).
     #[serde(default)]
     pub layer: i32,
+    /// Whether this track is locked (cannot be edited).
+    #[serde(default)]
+    pub locked: bool,
+    /// Whether this track is muted (hidden during playback).
+    #[serde(default)]
+    pub muted: bool,
+    /// Solo mode — only solo tracks are visible during playback.
+    #[serde(default)]
+    pub solo: bool,
 }
 
 /// Spatial transform.
@@ -90,6 +99,9 @@ pub struct Transform {
     pub rotation: f32,
     #[serde(default = "default_anchor")]
     pub anchor: Vec2,
+    /// Depth ordering within the same layer (higher = closer to camera).
+    #[serde(default)]
+    pub z_index: f32,
 }
 
 fn default_position() -> Vec2 {
@@ -109,6 +121,7 @@ impl Default for Transform {
             scale: default_scale(),
             rotation: 0.0,
             anchor: default_anchor(),
+            z_index: 0.0,
         }
     }
 }
@@ -116,6 +129,45 @@ impl Default for Transform {
 // ══════════════════════════════════════
 // Visual Components
 // ══════════════════════════════════════
+
+/// Blend mode for compositing layers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BlendMode {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    SoftLight,
+    Add,
+    Difference,
+}
+
+impl BlendMode {
+    /// All available blend modes for UI dropdowns.
+    pub const ALL: &'static [BlendMode] = &[
+        BlendMode::Normal,
+        BlendMode::Multiply,
+        BlendMode::Screen,
+        BlendMode::Overlay,
+        BlendMode::SoftLight,
+        BlendMode::Add,
+        BlendMode::Difference,
+    ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            BlendMode::Normal => "Normal",
+            BlendMode::Multiply => "Multiply",
+            BlendMode::Screen => "Screen",
+            BlendMode::Overlay => "Overlay",
+            BlendMode::SoftLight => "Soft Light",
+            BlendMode::Add => "Add",
+            BlendMode::Difference => "Difference",
+        }
+    }
+}
 
 /// Color adjustments.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -204,4 +256,32 @@ pub struct Effect {
     /// Effect parameters.
     #[serde(default)]
     pub params: std::collections::HashMap<String, serde_json::Value>,
+}
+
+// ══════════════════════════════════════
+// Scene-Level Components
+// ══════════════════════════════════════
+
+/// Camera component for viewport pan/zoom.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Camera {
+    /// Camera center position (world coordinates).
+    #[serde(default)]
+    pub position: Vec2,
+    /// Zoom level (1.0 = 100%).
+    #[serde(default = "one")]
+    pub zoom: f32,
+    /// Rotation in radians.
+    #[serde(default)]
+    pub rotation: f32,
+}
+
+impl Default for Camera {
+    fn default() -> Self {
+        Self {
+            position: Vec2 { x: 0.0, y: 0.0 },
+            zoom: 1.0,
+            rotation: 0.0,
+        }
+    }
 }

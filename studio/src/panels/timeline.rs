@@ -1,6 +1,8 @@
 use crate::app::{BORDER, EditorApp, RED, TEXT_DIM, TEXT_PRIMARY};
 use egui::{Align, Color32, Layout, RichText, Stroke, Ui, Vec2};
 
+const TRACK_HEADER_W: f32 = 120.0;
+
 pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
     // Transport Controls — compact horizontal bar
     ui.horizontal(|ui| {
@@ -82,17 +84,18 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
 
     ui.add_space(1.0);
 
-    // NLE Track Area
+    // NLE Track Area with headers
     let avail_w = ui.available_width();
     let dur = app.settings.duration;
-    let pps = (avail_w / dur as f32) * app.zoom;
-    let track_h = 22.0f32;
-    let gap = 2.0f32;
+    let track_area_w = avail_w - TRACK_HEADER_W;
+    let pps = (track_area_w / dur as f32) * app.zoom;
+    let track_h = 24.0f32;
+    let gap = 1.0f32;
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            let ruler_h = 18.0;
+            let ruler_h = 20.0;
             let total_tracks = app.world.entities.len();
             let total_h = ruler_h + total_tracks as f32 * (track_h + gap) + 8.0;
             let (rect, response) =
@@ -100,20 +103,31 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
 
             let painter = ui.painter_at(rect);
             let origin = rect.min;
+            let tracks_origin_x = origin.x + TRACK_HEADER_W;
 
-            // ── Click/Drag on ruler area to seek playhead ──
-            let ruler_rect = egui::Rect::from_min_size(origin, egui::vec2(avail_w, ruler_h));
+            // ── Ruler background ──
+            painter.rect_filled(
+                egui::Rect::from_min_size(origin, egui::vec2(avail_w, ruler_h)),
+                0.0,
+                Color32::from_rgb(30, 31, 35),
+            );
+
+            // ── Click/Drag on ruler to seek ──
+            let ruler_rect = egui::Rect::from_min_size(
+                egui::pos2(tracks_origin_x, origin.y),
+                egui::vec2(track_area_w, ruler_h),
+            );
             if (response.dragged() || response.clicked())
                 && let Some(pos) = response.interact_pointer_pos()
                 && (ruler_rect.contains(pos) || response.dragged())
             {
-                let clicked_time = ((pos.x - origin.x) / pps) as f64;
+                let clicked_time = ((pos.x - tracks_origin_x) / pps) as f64;
                 let clamped = clicked_time.clamp(0.0, dur);
                 app.time.seek(clamped);
                 app.needs_render = true;
             }
 
-            // Ruler ticks
+            // ── Ruler ticks ──
             let step = if app.zoom > 2.0 {
                 0.5
             } else if app.zoom > 1.0 {
@@ -123,10 +137,10 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
             };
             let mut tm = 0.0f64;
             while tm <= dur {
-                let x = origin.x + tm as f32 * pps;
+                let x = tracks_origin_x + tm as f32 * pps;
                 painter.line_segment(
                     [
-                        egui::pos2(x, origin.y + ruler_h - 5.0),
+                        egui::pos2(x, origin.y + ruler_h - 6.0),
                         egui::pos2(x, origin.y + ruler_h),
                     ],
                     Stroke::new(1.0, TEXT_DIM),
@@ -141,7 +155,16 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                 tm += step;
             }
 
-            // Ruler bottom line
+            // ── Header/Track separator ──
+            painter.line_segment(
+                [
+                    egui::pos2(tracks_origin_x - 1.0, origin.y),
+                    egui::pos2(tracks_origin_x - 1.0, origin.y + total_h),
+                ],
+                Stroke::new(1.0, BORDER),
+            );
+
+            // ── Ruler bottom line ──
             painter.line_segment(
                 [
                     egui::pos2(origin.x, origin.y + ruler_h),
@@ -150,57 +173,148 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                 Stroke::new(0.5, BORDER),
             );
 
-            // Track lanes + items
-            let tracks_y = origin.y + ruler_h + 2.0;
-            for (i, e) in app.world.entities.iter().enumerate() {
-                let y = tracks_y + i as f32 * (track_h + gap);
-                // Lane background
-                painter.rect_filled(
-                    egui::Rect::from_min_size(
-                        egui::pos2(origin.x, y),
-                        egui::vec2(avail_w, track_h),
-                    ),
-                    2.0,
-                    Color32::from_black_alpha(15),
-                );
+            // ── Track headers + items ──
+            let tracks_y = origin.y + ruler_h + 1.0;
 
-                if let Some(tl) = &e.components.timeline {
-                    let x0 = origin.x + tl.start_time as f32 * pps;
-                    let w = tl.duration as f32 * pps;
+            // Collect entity info to draw headers
+            struct TrackInfo {
+                name: String,
+                visible: bool,
+                locked: bool,
+                muted: bool,
+                is_sel: bool,
+                color: Color32,
+            }
 
-                    let base_color = match () {
+            let infos: Vec<TrackInfo> = app
+                .world
+                .entities
+                .iter()
+                .enumerate()
+                .map(|(i, e)| {
+                    let color = match () {
                         _ if e.components.color_source.is_some() => Color32::from_rgb(147, 51, 234),
                         _ if e.components.image_source.is_some() => Color32::from_rgb(234, 88, 12),
                         _ if e.components.text_source.is_some() => Color32::from_rgb(22, 163, 74),
                         _ => Color32::from_rgb(88, 101, 242),
                     };
+                    TrackInfo {
+                        name: e.display_name().to_string(),
+                        visible: e.components.visible,
+                        locked: e.components.timeline.as_ref().is_some_and(|t| t.locked),
+                        muted: e.components.timeline.as_ref().is_some_and(|t| t.muted),
+                        is_sel: app.selected == Some(i) || app.selected_indices.contains(&i),
+                        color,
+                    }
+                })
+                .collect();
 
-                    let is_sel = app.selected == Some(i) || app.selected_indices.contains(&i);
-                    let r = egui::Rect::from_min_size(egui::pos2(x0, y), egui::vec2(w, track_h));
+            for (i, info) in infos.iter().enumerate() {
+                let y = tracks_y + i as f32 * (track_h + gap);
 
-                    painter.rect_filled(r, 3.0, base_color);
-                    if is_sel {
+                // ── Track header ──
+                let header_rect = egui::Rect::from_min_size(
+                    egui::pos2(origin.x, y),
+                    egui::vec2(TRACK_HEADER_W - 2.0, track_h),
+                );
+
+                // Header background
+                let hdr_bg = if info.is_sel {
+                    info.color.linear_multiply(0.2)
+                } else {
+                    Color32::from_rgb(28, 29, 33)
+                };
+                painter.rect_filled(header_rect, 2.0, hdr_bg);
+
+                // Color indicator bar
+                painter.rect_filled(
+                    egui::Rect::from_min_size(egui::pos2(origin.x, y), egui::vec2(3.0, track_h)),
+                    0.0,
+                    info.color,
+                );
+
+                // Track name
+                let name_color = if info.muted { TEXT_DIM } else { TEXT_PRIMARY };
+                painter.text(
+                    egui::pos2(origin.x + 8.0, y + 5.0),
+                    egui::Align2::LEFT_TOP,
+                    &info.name,
+                    egui::FontId::proportional(10.0),
+                    name_color,
+                );
+
+                // Status icons in header (right side)
+                let icons_x = origin.x + TRACK_HEADER_W - 38.0;
+
+                // Eye icon
+                let eye_color = if info.visible { TEXT_DIM } else { RED };
+                painter.text(
+                    egui::pos2(icons_x, y + 5.0),
+                    egui::Align2::LEFT_TOP,
+                    if info.visible { "👁" } else { "—" },
+                    egui::FontId::proportional(10.0),
+                    eye_color,
+                );
+
+                // Lock icon
+                if info.locked {
+                    painter.text(
+                        egui::pos2(icons_x + 14.0, y + 5.0),
+                        egui::Align2::LEFT_TOP,
+                        "🔒",
+                        egui::FontId::proportional(10.0),
+                        Color32::from_rgb(255, 190, 60),
+                    );
+                }
+
+                // ── Track lane (clip area) ──
+                let lane_rect = egui::Rect::from_min_size(
+                    egui::pos2(tracks_origin_x, y),
+                    egui::vec2(track_area_w, track_h),
+                );
+                painter.rect_filled(lane_rect, 0.0, Color32::from_black_alpha(12));
+
+                // Draw clip
+                let e = &app.world.entities[i];
+                if let Some(tl) = &e.components.timeline {
+                    let x0 = tracks_origin_x + tl.start_time as f32 * pps;
+                    let w = tl.duration as f32 * pps;
+
+                    let clip_color = if info.muted {
+                        info.color.linear_multiply(0.3)
+                    } else {
+                        info.color
+                    };
+
+                    let clip_rect = egui::Rect::from_min_size(
+                        egui::pos2(x0, y + 1.0),
+                        egui::vec2(w, track_h - 2.0),
+                    );
+                    painter.rect_filled(clip_rect, 3.0, clip_color);
+
+                    if info.is_sel {
                         painter.rect_stroke(
-                            r,
+                            clip_rect,
                             3.0,
                             Stroke::new(1.5, Color32::WHITE),
                             egui::StrokeKind::Inside,
                         );
                     }
 
-                    let text_rect = r.shrink2(egui::vec2(6.0, 4.0));
-                    painter.with_clip_rect(text_rect).text(
-                        text_rect.min,
+                    // Clip label
+                    let label_rect = clip_rect.shrink2(egui::vec2(6.0, 3.0));
+                    painter.with_clip_rect(label_rect).text(
+                        label_rect.min,
                         egui::Align2::LEFT_TOP,
-                        &e.id,
-                        egui::FontId::proportional(10.0),
+                        &info.name,
+                        egui::FontId::proportional(9.0),
                         Color32::WHITE,
                     );
                 }
             }
 
-            // Playhead
-            let ph_x = origin.x + app.time.global_time as f32 * pps;
+            // ── Playhead ──
+            let ph_x = tracks_origin_x + app.time.global_time as f32 * pps;
             painter.line_segment(
                 [
                     egui::pos2(ph_x, origin.y),
@@ -208,7 +322,7 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                 ],
                 Stroke::new(1.5, RED),
             );
-            // Playhead handle (triangle)
+            // Playhead handle
             let handle_pts = vec![
                 egui::pos2(ph_x - 5.0, origin.y),
                 egui::pos2(ph_x + 5.0, origin.y),
@@ -218,26 +332,22 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
             ];
             painter.add(egui::Shape::convex_polygon(handle_pts, RED, Stroke::NONE));
 
-            // Click-to-select tracks
+            // ── Click-to-select tracks ──
             if response.clicked()
                 && let Some(pos) = response.interact_pointer_pos()
+                && pos.y > origin.y + ruler_h
             {
-                // Only select track if click is BELOW the ruler
-                if pos.y > origin.y + ruler_h {
-                    for (i, e) in app.world.entities.iter().enumerate() {
-                        if let Some(tl) = &e.components.timeline {
-                            let y = tracks_y + i as f32 * (track_h + gap);
-                            let x0 = origin.x + tl.start_time as f32 * pps;
-                            let w = tl.duration as f32 * pps;
-                            let r = egui::Rect::from_min_size(
-                                egui::pos2(x0, y),
-                                egui::vec2(w, track_h),
-                            );
-                            if r.contains(pos) {
-                                app.selected = Some(i);
-                                app.selected_indices.clear();
-                                app.selected_indices.insert(i);
-                            }
+                for (i, e) in app.world.entities.iter().enumerate() {
+                    if let Some(tl) = &e.components.timeline {
+                        let y = tracks_y + i as f32 * (track_h + gap);
+                        let x0 = tracks_origin_x + tl.start_time as f32 * pps;
+                        let w = tl.duration as f32 * pps;
+                        let r =
+                            egui::Rect::from_min_size(egui::pos2(x0, y), egui::vec2(w, track_h));
+                        if r.contains(pos) {
+                            app.selected = Some(i);
+                            app.selected_indices.clear();
+                            app.selected_indices.insert(i);
                         }
                     }
                 }

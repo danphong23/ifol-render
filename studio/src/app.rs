@@ -59,6 +59,12 @@ pub struct EditorApp {
     pub show_safe_zones: bool,
     /// Multi-selection: set of selected entity indices
     pub selected_indices: std::collections::HashSet<usize>,
+    /// Viewport camera (pan/zoom)
+    pub camera: ifol_render_core::ecs::components::Camera,
+    /// Collapsed property sections
+    pub collapsed_sections: std::collections::HashSet<String>,
+    /// Expanded entities in hierarchy tree
+    pub expanded_entities: std::collections::HashSet<String>,
 }
 
 impl Default for EditorApp {
@@ -101,6 +107,9 @@ impl EditorApp {
             show_grid: false,
             show_safe_zones: false,
             selected_indices: std::collections::HashSet::new(),
+            camera: ifol_render_core::ecs::components::Camera::default(),
+            collapsed_sections: std::collections::HashSet::new(),
+            expanded_entities: std::collections::HashSet::new(),
         }
     }
 

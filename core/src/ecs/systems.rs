@@ -5,12 +5,44 @@ use crate::time::TimeState;
 use crate::types::Mat4;
 
 /// Resolve which entities are visible at the current time.
+///
+/// Handles:
+/// - Timeline start/end range
+/// - Entity `visible` flag
+/// - Track `muted` / `solo` logic
+/// - Z-index resolution
 pub fn timeline_system(world: &mut World, time: &TimeState) {
+    // Solo logic: if ANY entity has solo=true, only solo entities are visible
+    let has_solo = world
+        .entities
+        .iter()
+        .any(|e| e.components.timeline.as_ref().is_some_and(|tl| tl.solo));
+
     for entity in &mut world.entities {
+        // Check entity-level visibility flag
+        if !entity.components.visible {
+            entity.resolved.visible = false;
+            continue;
+        }
+
         if let Some(tl) = &entity.components.timeline {
             let end = tl.start_time + tl.duration;
-            entity.resolved.visible = time.global_time >= tl.start_time && time.global_time < end;
+            let in_range = time.global_time >= tl.start_time && time.global_time < end;
+
+            // Apply mute/solo logic
+            let track_visible = if has_solo {
+                tl.solo // Only solo tracks visible
+            } else {
+                !tl.muted // Non-muted tracks visible
+            };
+
+            entity.resolved.visible = in_range && track_visible;
             entity.resolved.layer = tl.layer;
+
+            // Resolve z_index from transform
+            if let Some(tf) = &entity.components.transform {
+                entity.resolved.z_index = tf.z_index;
+            }
 
             if entity.resolved.visible {
                 let local_time = time.global_time - tl.start_time;
@@ -48,8 +80,8 @@ pub fn animation_system(world: &mut World, _time: &TimeState) {
             }
 
             // Animate transform properties
-            if let Some(tf) = entity.components.transform.clone() {
-                let mut tf = tf;
+            if let Some(ref tf) = entity.components.transform {
+                let mut tf = tf.clone();
                 if let Some(x) = anim.evaluate("transform.position.x", local_time) {
                     tf.position.x = x as f32;
                 }
