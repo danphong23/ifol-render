@@ -88,6 +88,8 @@ pub struct Renderer {
     texture_cache: HashMap<String, (wgpu::Texture, wgpu::TextureView)>,
     /// Effect pass ping-pong context.
     effect_ctx: Option<effects::context::EffectContext>,
+    /// Pipeline cache — avoids recreating pipelines every frame.
+    pipeline_cache: effects::pipeline_cache::PipelineCache,
     /// Registry of available effects.
     effect_registry: effects::EffectRegistry,
     width: u32,
@@ -128,6 +130,7 @@ impl Renderer {
             composite,
             texture_cache: HashMap::new(),
             effect_ctx: None,
+            pipeline_cache: effects::pipeline_cache::PipelineCache::new(),
             effect_registry: effects::EffectRegistry::new(),
             width,
             height,
@@ -378,8 +381,9 @@ impl Renderer {
     /// Render a frame with post-processing effects applied.
     ///
     /// Effects are applied in order after the composite pass.
-    /// Each effect reads from the ping-pong input and writes to the output,
-    /// then swaps for the next effect.
+    /// Uses pipeline cache — pipelines are created once and reused.
+    /// Any shader following the convention (vs_fullscreen + fs_main + standard bindings)
+    /// works automatically without per-effect Rust code.
     pub fn render_frame_with_effects(
         &mut self,
         commands: &[DrawCommand],
@@ -416,14 +420,123 @@ impl Renderer {
             .load_from(&mut encoder, output_texture);
         self.engine.queue.submit(std::iter::once(encoder.finish()));
 
-        // Run each effect
+        // Run each effect using the generic engine
         for config in effect_configs {
-            if let Some(effect) = self.effect_registry.get(&config.effect_type) {
-                effect.execute(
+            if let Some(entry) = self.effect_registry.get(&config.effect_type) {
+                let shader_source = entry.shader_source.clone();
+                let default_params = entry.default_params.clone();
+                let pass_count = entry.pass_count;
+                let effect_name = entry.name.clone();
+
+                // Get or create cached pipeline
+                let cached = self.pipeline_cache.get_or_create(
                     &self.engine.device,
-                    &self.engine.queue,
-                    self.effect_ctx.as_mut().unwrap(),
+                    &effect_name,
+                    &shader_source,
                 );
+
+                for pass in 0..pass_count {
+                    // Build uniform data: pack params as f32 array
+                    let param_values: Vec<f32> = default_params
+                        .iter()
+                        .map(|(name, default)| {
+                            // Special handling for blur direction per pass
+                            if effect_name == "blur" {
+                                match name.as_str() {
+                                    "direction_x" => {
+                                        if pass == 0 {
+                                            1.0
+                                        } else {
+                                            0.0
+                                        }
+                                    }
+                                    "direction_y" => {
+                                        if pass == 0 {
+                                            0.0
+                                        } else {
+                                            1.0
+                                        }
+                                    }
+                                    "texel_size" => {
+                                        if pass == 0 {
+                                            1.0 / self.width as f32
+                                        } else {
+                                            1.0 / self.height as f32
+                                        }
+                                    }
+                                    _ => *config.params.get(name).unwrap_or(default),
+                                }
+                            } else {
+                                *config.params.get(name).unwrap_or(default)
+                            }
+                        })
+                        .collect();
+
+                    let ub =
+                        self.engine
+                            .device
+                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("effect uniform"),
+                                contents: bytemuck::cast_slice(&param_values),
+                                usage: wgpu::BufferUsages::UNIFORM,
+                            });
+
+                    let effect_ctx = self.effect_ctx.as_ref().unwrap();
+
+                    let bg = self
+                        .engine
+                        .device
+                        .create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("effect bg"),
+                            layout: &cached.bind_group_layout,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: ub.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: wgpu::BindingResource::TextureView(
+                                        effect_ctx.input_view(),
+                                    ),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 2,
+                                    resource: wgpu::BindingResource::Sampler(&cached.sampler),
+                                },
+                            ],
+                        });
+
+                    let mut encoder = self.engine.device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor {
+                            label: Some("effect pass"),
+                        },
+                    );
+
+                    {
+                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("effect render pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: effect_ctx.output_view(),
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+
+                        rpass.set_pipeline(&cached.pipeline);
+                        rpass.set_bind_group(0, &bg, &[]);
+                        rpass.draw(0..3, 0..1); // fullscreen triangle
+                    }
+
+                    self.engine.queue.submit(std::iter::once(encoder.finish()));
+                    self.effect_ctx.as_mut().unwrap().swap();
+                }
             }
         }
 
@@ -440,7 +553,29 @@ impl Renderer {
             .store_to(&mut encoder, output_texture);
         self.engine.queue.submit(std::iter::once(encoder.finish()));
 
-        // Readback the final pixels (same logic as render_frame)
+        // Readback the final pixels
+        self.readback_pixels(output_texture)
+    }
+
+    /// Get the effect registry for querying available effects.
+    pub fn effect_registry(&self) -> &effects::EffectRegistry {
+        &self.effect_registry
+    }
+
+    /// Register an external shader effect at runtime.
+    pub fn register_effect(
+        &mut self,
+        name: &str,
+        shader_source: String,
+        default_params: Vec<(String, f32)>,
+        pass_count: u32,
+    ) {
+        self.effect_registry
+            .register_external(name, shader_source, default_params, pass_count);
+    }
+
+    /// Readback pixels from a GPU texture into a CPU Vec<u8>.
+    fn readback_pixels(&self, texture: &wgpu::Texture) -> Vec<u8> {
         let padded_bytes_per_row = Self::padded_bytes_per_row(self.width);
         let staging = self.engine.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("staging"),
@@ -453,12 +588,12 @@ impl Renderer {
             self.engine
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("effect readback"),
+                    label: Some("readback"),
                 });
 
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: output_texture,
+                texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -501,11 +636,6 @@ impl Renderer {
         drop(data);
         staging.unmap();
         pixels
-    }
-
-    /// Get the effect registry for querying available effects.
-    pub fn effect_registry(&self) -> &effects::EffectRegistry {
-        &self.effect_registry
     }
 
     /// Calculate padded bytes per row (wgpu requires 256-byte alignment).
