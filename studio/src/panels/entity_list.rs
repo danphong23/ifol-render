@@ -32,6 +32,7 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                     );
                     app.selected = Some(n);
                     app.renderer = None;
+                    app.needs_render = true;
                     app.dirty = true;
                     ui.close_menu();
                 }
@@ -61,6 +62,7 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                         );
                         app.selected = Some(n);
                         app.renderer = None;
+                        app.needs_render = true;
                         app.dirty = true;
                     }
                     ui.close_menu();
@@ -169,6 +171,7 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                     app.selected = None;
                     app.selected_indices.clear();
                     app.renderer = None;
+                    app.needs_render = true;
                     app.dirty = true;
                 }
             }

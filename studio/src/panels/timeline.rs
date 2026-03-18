@@ -9,7 +9,7 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
 
         if ui.small_button(RichText::new("⏮").size(11.0).color(TEXT_PRIMARY)).clicked() {
             app.time.seek(0.0);
-            app.dirty = true;
+            app.needs_render = true;
         }
 
         let play_color = if app.playing { RED } else { Color32::from_rgb(100, 220, 120) };
@@ -20,7 +20,7 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
 
         if ui.small_button(RichText::new("⏭").size(11.0).color(TEXT_PRIMARY)).clicked() {
             app.time.seek(app.settings.duration);
-            app.dirty = true;
+            app.needs_render = true;
         }
 
         ui.add_space(8.0);
@@ -49,7 +49,7 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
             .changed()
         {
             app.time.seek(t);
-            app.dirty = true;
+            app.needs_render = true;
         }
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -77,10 +77,29 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
             let ruler_h = 18.0;
             let total_tracks = app.world.entities.len();
             let total_h = ruler_h + total_tracks as f32 * (track_h + gap) + 8.0;
-            let (rect, _) = ui.allocate_exact_size(Vec2::new(avail_w, total_h), egui::Sense::click());
+            let (rect, response) = ui.allocate_exact_size(
+                Vec2::new(avail_w, total_h),
+                egui::Sense::click_and_drag(),
+            );
 
             let painter = ui.painter_at(rect);
             let origin = rect.min;
+
+            // ── Click/Drag on ruler area to seek playhead ──
+            let ruler_rect = egui::Rect::from_min_size(
+                origin,
+                egui::vec2(avail_w, ruler_h),
+            );
+            if response.dragged() || response.clicked() {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    if ruler_rect.contains(pos) || response.dragged() {
+                        let clicked_time = ((pos.x - origin.x) / pps) as f64;
+                        let clamped = clicked_time.clamp(0.0, dur);
+                        app.time.seek(clamped);
+                        app.needs_render = true;
+                    }
+                }
+            }
 
             // Ruler ticks
             let step = if app.zoom > 2.0 { 0.5 } else if app.zoom > 1.0 { 1.0 } else { 2.0 };
@@ -129,7 +148,7 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                         _ => Color32::from_rgb(88, 101, 242)
                     };
 
-                    let is_sel = app.selected == Some(i);
+                    let is_sel = app.selected == Some(i) || app.selected_indices.contains(&i);
                     let r = egui::Rect::from_min_size(egui::pos2(x0, y), egui::vec2(w, track_h));
                     
                     painter.rect_filled(r, 3.0, base_color);
@@ -165,17 +184,21 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
             painter.add(egui::Shape::convex_polygon(handle_pts, RED, Stroke::NONE));
 
             // Click-to-select tracks
-            for (i, e) in app.world.entities.iter().enumerate() {
-                if let Some(tl) = &e.components.timeline {
-                    let y = tracks_y + i as f32 * (track_h + gap);
-                    let x0 = origin.x + tl.start_time as f32 * pps;
-                    let w = tl.duration as f32 * pps;
-                    let r = egui::Rect::from_min_size(egui::pos2(x0, y), egui::vec2(w, track_h));
-
-                    if ui.input(|inp| inp.pointer.any_click()) {
-                        if let Some(pos) = ui.input(|inp| inp.pointer.hover_pos()) {
-                            if r.contains(pos) {
-                                app.selected = Some(i);
+            if response.clicked() {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    // Only select track if click is BELOW the ruler
+                    if pos.y > origin.y + ruler_h {
+                        for (i, e) in app.world.entities.iter().enumerate() {
+                            if let Some(tl) = &e.components.timeline {
+                                let y = tracks_y + i as f32 * (track_h + gap);
+                                let x0 = origin.x + tl.start_time as f32 * pps;
+                                let w = tl.duration as f32 * pps;
+                                let r = egui::Rect::from_min_size(egui::pos2(x0, y), egui::vec2(w, track_h));
+                                if r.contains(pos) {
+                                    app.selected = Some(i);
+                                    app.selected_indices.clear();
+                                    app.selected_indices.insert(i);
+                                }
                             }
                         }
                     }

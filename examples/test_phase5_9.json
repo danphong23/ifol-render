@@ -1,0 +1,108 @@
+{
+    "version": "1.0",
+    "settings": {
+        "width": 640,
+        "height": 360,
+        "fps": 30,
+        "duration": 10.0,
+        "colorSpace": "linearSrgb",
+        "outputColorSpace": "srgb"
+    },
+    "entities": [
+        {
+            "id": "background",
+            "components": {
+                "colorSource": {
+                    "color": { "r": 0.12, "g": 0.12, "b": 0.18, "a": 1.0 }
+                },
+                "timeline": { "startTime": 0.0, "duration": 10.0, "layer": 0 },
+                "transform": {
+                    "position": { "x": 0.0, "y": 0.0 },
+                    "scale": { "x": 1.0, "y": 1.0 }
+                }
+            }
+        },
+        {
+            "id": "parent_group",
+            "components": {
+                "colorSource": {
+                    "color": { "r": 0.3, "g": 0.3, "b": 0.4, "a": 1.0 }
+                },
+                "timeline": { "startTime": 0.0, "duration": 10.0, "layer": 1 },
+                "transform": {
+                    "position": { "x": 0.0, "y": 0.0 },
+                    "scale": { "x": 0.6, "y": 0.6 }
+                }
+            }
+        },
+        {
+            "id": "child_red",
+            "components": {
+                "colorSource": {
+                    "color": { "r": 0.95, "g": 0.25, "b": 0.35, "a": 1.0 }
+                },
+                "timeline": { "startTime": 0.0, "duration": 10.0, "layer": 2 },
+                "transform": {
+                    "position": { "x": -0.2, "y": -0.1 },
+                    "scale": { "x": 0.15, "y": 0.15 }
+                },
+                "parent": "parent_group",
+                "opacity": 0.9
+            }
+        },
+        {
+            "id": "child_blue",
+            "components": {
+                "colorSource": {
+                    "color": { "r": 0.25, "g": 0.45, "b": 0.95, "a": 1.0 }
+                },
+                "timeline": { "startTime": 0.5, "duration": 8.0, "layer": 3 },
+                "transform": {
+                    "position": { "x": 0.2, "y": 0.1 },
+                    "scale": { "x": 0.15, "y": 0.15 }
+                },
+                "parent": "parent_group"
+            }
+        },
+        {
+            "id": "animated_box",
+            "components": {
+                "colorSource": {
+                    "color": { "r": 0.2, "g": 0.9, "b": 0.5, "a": 1.0 }
+                },
+                "timeline": { "startTime": 1.0, "duration": 8.0, "layer": 4 },
+                "transform": {
+                    "position": { "x": 0.0, "y": 0.3 },
+                    "scale": { "x": 0.12, "y": 0.12 }
+                },
+                "animation": {
+                    "keyframes": [
+                        { "time": 0.0, "property": "opacity", "value": 0.0, "easing": "easeOut" },
+                        { "time": 1.5, "property": "opacity", "value": 1.0, "easing": "linear" },
+                        { "time": 6.0, "property": "opacity", "value": 1.0, "easing": "easeIn" },
+                        { "time": 8.0, "property": "opacity", "value": 0.0, "easing": "linear" },
+
+                        { "time": 0.0, "property": "transform.position.x", "value": -0.4, "easing": { "cubicBezier": [0.42, 0.0, 0.58, 1.0] } },
+                        { "time": 4.0, "property": "transform.position.x", "value": 0.0, "easing": "linear" },
+                        { "time": 8.0, "property": "transform.position.x", "value": 0.4, "easing": { "cubicBezier": [0.42, 0.0, 0.58, 1.0] } }
+                    ]
+                }
+            }
+        },
+        {
+            "id": "late_entry",
+            "components": {
+                "colorSource": {
+                    "color": { "r": 0.95, "g": 0.75, "b": 0.1, "a": 1.0 }
+                },
+                "timeline": { "startTime": 5.0, "duration": 5.0, "layer": 5 },
+                "transform": {
+                    "position": { "x": 0.3, "y": -0.3 },
+                    "scale": { "x": 0.18, "y": 0.08 }
+                },
+                "opacity": 0.7
+            }
+        }
+    ],
+    "shaders": []
+}

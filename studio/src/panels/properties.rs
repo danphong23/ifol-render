@@ -200,6 +200,7 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
         app.commands.push_executed(cmd);
     }
     if needs_dirty {
+        app.needs_render = true;
         app.dirty = true;
     }
 }

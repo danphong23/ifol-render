@@ -9,7 +9,7 @@
 
 use egui::{Color32, ColorImage, Key, Modifiers, TextureHandle, TextureOptions};
 use ifol_render_core::commands::{CommandHistory, RemoveEntity};
-use ifol_render_core::ecs::{components, World};
+use ifol_render_core::ecs::World;
 use ifol_render_core::scene::RenderSettings;
 use ifol_render_core::time::TimeState;
 
@@ -37,10 +37,14 @@ pub struct EditorApp {
     pub viewport_tex: Option<TextureHandle>,
     pub pixels: Vec<u8>,
     pub dirty: bool,
+    /// Whether the scene needs re-rendering (viewport update).
+    pub needs_render: bool,
     pub status: String,
     pub zoom: f32,
     /// Persistent renderer — obtained through core's re-export.
     pub renderer: Option<ifol_render_core::Renderer>,
+    /// Path to FFmpeg binary for export.
+    pub ffmpeg_path: Option<String>,
     /// Command history for undo/redo.
     pub commands: CommandHistory,
     /// Advanced dockable workspace layout
@@ -59,53 +63,7 @@ pub struct EditorApp {
 
 impl EditorApp {
     pub fn new() -> Self {
-        let mut world = World::new();
-
-        // Default scene
-        Self::add_color_entity(
-            &mut world,
-            "background",
-            [0.12, 0.13, 0.16, 1.0],
-            [0.0, 0.0],
-            [1.0, 1.0],
-            0.0,
-            10.0,
-            0,
-            1.0,
-        );
-        Self::add_color_entity(
-            &mut world,
-            "red_box",
-            [0.9, 0.2, 0.2, 1.0],
-            [-0.3, 0.2],
-            [0.3, 0.3],
-            0.0,
-            10.0,
-            1,
-            0.8,
-        );
-        Self::add_color_entity(
-            &mut world,
-            "green_box",
-            [0.2, 0.85, 0.35, 1.0],
-            [0.3, -0.2],
-            [0.25, 0.25],
-            0.5,
-            8.0,
-            2,
-            1.0,
-        );
-        Self::add_color_entity(
-            &mut world,
-            "blue_box",
-            [0.3, 0.5, 0.95, 1.0],
-            [0.0, 0.0],
-            [0.2, 0.3],
-            0.0,
-            10.0,
-            3,
-            0.6,
-        );
+        let world = World::new();
 
         let settings = RenderSettings {
             width: 640,
@@ -124,10 +82,12 @@ impl EditorApp {
             selected: None,
             viewport_tex: None,
             pixels: Vec::new(),
-            dirty: true,
-            status: "Ready".into(),
+            dirty: false,
+            needs_render: true,
+            status: "Ready — New Scene".into(),
             zoom: 1.0,
             renderer: None,
+            ffmpeg_path: None,
             commands: CommandHistory::new(),
             workspace: crate::panels::WorkspaceLayout::new(),
             pending_workspace_action: None,
@@ -136,47 +96,6 @@ impl EditorApp {
             show_safe_zones: false,
             selected_indices: std::collections::HashSet::new(),
         }
-    }
-
-    fn add_color_entity(
-        world: &mut World,
-        id: &str,
-        rgba: [f32; 4],
-        pos: [f32; 2],
-        scale: [f32; 2],
-        start: f64,
-        dur: f64,
-        layer: i32,
-        opacity: f32,
-    ) {
-        let mut e = ifol_render_core::ecs::Entity {
-            id: id.to_string(),
-            components: Default::default(),
-            resolved: Default::default(),
-        };
-        e.components.color_source = Some(components::ColorSource {
-            color: ifol_render_core::color::Color4::new(rgba[0], rgba[1], rgba[2], rgba[3]),
-        });
-        e.components.timeline = Some(components::Timeline {
-            start_time: start,
-            duration: dur,
-            layer,
-        });
-        e.components.transform = Some(components::Transform {
-            position: ifol_render_core::types::Vec2 {
-                x: pos[0],
-                y: pos[1],
-            },
-            scale: ifol_render_core::types::Vec2 {
-                x: scale[0],
-                y: scale[1],
-            },
-            ..Default::default()
-        });
-        if (opacity - 1.0).abs() > 0.001 {
-            e.components.opacity = Some(opacity);
-        }
-        world.add_entity(e);
     }
 
     fn ensure_renderer(&mut self) {
@@ -204,11 +123,12 @@ impl EditorApp {
                 r,
             );
         }
-        self.dirty = false;
+        self.needs_render = false;
     }
 
     fn invalidate_renderer(&mut self) {
         self.renderer = None;
+        self.needs_render = true;
         self.dirty = true;
     }
 
@@ -309,7 +229,7 @@ impl eframe::App for EditorApp {
             if self.time.global_time >= self.settings.duration {
                 self.time.seek(0.0);
             }
-            self.dirty = true;
+            self.needs_render = true;
             ctx.request_repaint();
         }
 
@@ -323,6 +243,7 @@ impl eframe::App for EditorApp {
             if input.consume_key(Modifiers::CTRL, Key::Z) {
                 if let Some(desc) = self.commands.undo(&mut self.world) {
                     self.status = format!("↩ Undo: {}", desc);
+                    self.needs_render = true;
                     self.dirty = true;
                 }
             }
@@ -330,8 +251,13 @@ impl eframe::App for EditorApp {
             if input.consume_key(Modifiers::CTRL, Key::Y) {
                 if let Some(desc) = self.commands.redo(&mut self.world) {
                     self.status = format!("↪ Redo: {}", desc);
+                    self.needs_render = true;
                     self.dirty = true;
                 }
+            }
+            // Ctrl+S = save
+            if input.consume_key(Modifiers::CTRL, Key::S) {
+                // Will be handled after panels
             }
             // Delete = remove selected entity
             if input.consume_key(Modifiers::NONE, Key::Delete) {
@@ -350,7 +276,7 @@ impl eframe::App for EditorApp {
             }
         });
 
-        if self.dirty {
+        if self.needs_render {
             self.render_scene();
         }
 
@@ -363,14 +289,14 @@ impl eframe::App for EditorApp {
             self.viewport_tex = Some(tex);
         }
 
-        // ── Top bar ──
+        // ── Top bar ── (must render BEFORE CentralPanel to reserve space)
         egui::TopBottomPanel::top("top")
             .frame(
                 egui::Frame::new()
                     .fill(BG_APP)
-                    .inner_margin(egui::Margin::symmetric(10, 5)),
+                    .inner_margin(egui::Margin::symmetric(10, 4)),
             )
-            .exact_height(34.0)
+            .exact_height(40.0)
             .show(ctx, |ui| {
                 crate::panels::top_bar::ui(self, ui);
             });
