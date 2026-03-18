@@ -340,6 +340,7 @@ fn main() {
             let commands = match test.as_str() {
                 "basic" => build_test_basic(width, height),
                 "blend" => build_test_blend(width, height),
+                "shapes" => build_test_shapes(width, height),
                 "effects" => {
                     let cmds = build_test_basic(width, height);
                     let effects = vec![ifol_render_core::EffectConfig {
@@ -354,7 +355,10 @@ fn main() {
                     return;
                 }
                 _ => {
-                    eprintln!("Unknown test: '{}'. Available: basic, blend, effects", test);
+                    eprintln!(
+                        "Unknown test: '{}'. Available: basic, blend, shapes, effects",
+                        test
+                    );
                     std::process::exit(1);
                 }
             };
@@ -571,6 +575,228 @@ fn build_test_blend(w: u32, h: u32) -> Vec<ifol_render_core::DrawCommand> {
             x, y, quad_w, quad_h, colors[i], 0.9, i as f32, w, h,
         ));
     }
+
+    cmds
+}
+
+/// Build a shape DrawCommand with SDF uniform layout.
+/// Layout: [transform: f32x16, color: f32x4, opacity: f32, shape_type: f32, param1: f32, param2: f32]
+fn make_shape_cmd(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    color: [f32; 4],
+    opacity: f32,
+    shape_type: f32,
+    param1: f32,
+    param2: f32,
+    canvas_w: u32,
+    canvas_h: u32,
+) -> ifol_render_core::DrawCommand {
+    let sx = w / canvas_w as f32 * 2.0;
+    let sy = h / canvas_h as f32 * 2.0;
+    let tx = (x + w / 2.0) / canvas_w as f32 * 2.0 - 1.0;
+    let ty = 1.0 - (y + h / 2.0) / canvas_h as f32 * 2.0;
+
+    #[rustfmt::skip]
+    let transform = [
+        sx,  0.0, 0.0, 0.0,
+        0.0, sy,  0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        tx,  ty,  0.0, 1.0,
+    ];
+
+    let mut uniforms = Vec::with_capacity(24);
+    uniforms.extend_from_slice(&transform);
+    uniforms.extend_from_slice(&color);
+    uniforms.push(opacity);
+    uniforms.push(shape_type);
+    uniforms.push(param1);
+    uniforms.push(param2);
+
+    ifol_render_core::DrawCommand {
+        pipeline: "shapes".into(),
+        uniforms,
+        textures: vec![],
+    }
+}
+
+/// Test: SDF shapes.
+fn build_test_shapes(w: u32, h: u32) -> Vec<ifol_render_core::DrawCommand> {
+    let mut cmds = vec![
+        // Dark background
+        make_draw_cmd(
+            0.0,
+            0.0,
+            w as f32,
+            h as f32,
+            [0.08, 0.08, 0.12, 1.0],
+            1.0,
+            0.0,
+            w,
+            h,
+        ),
+    ];
+
+    // Row 1: Filled shapes
+    // Rect (shape_type=0)
+    cmds.push(make_shape_cmd(
+        30.0,
+        30.0,
+        150.0,
+        120.0,
+        [0.9, 0.3, 0.3, 1.0],
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        w,
+        h,
+    ));
+    // Rounded rect (shape_type=1, param1=corner_radius)
+    cmds.push(make_shape_cmd(
+        210.0,
+        30.0,
+        150.0,
+        120.0,
+        [0.3, 0.9, 0.4, 1.0],
+        1.0,
+        1.0,
+        0.08,
+        0.0,
+        w,
+        h,
+    ));
+    // Circle (shape_type=2)
+    cmds.push(make_shape_cmd(
+        400.0,
+        30.0,
+        120.0,
+        120.0,
+        [0.3, 0.5, 0.95, 1.0],
+        1.0,
+        2.0,
+        0.0,
+        0.0,
+        w,
+        h,
+    ));
+    // Ellipse (shape_type=3)
+    cmds.push(make_shape_cmd(
+        560.0,
+        30.0,
+        200.0,
+        120.0,
+        [0.9, 0.7, 0.2, 1.0],
+        1.0,
+        3.0,
+        0.0,
+        0.0,
+        w,
+        h,
+    ));
+
+    // Row 2: Stroke/border shapes (param2=border_width)
+    // Rect stroke
+    cmds.push(make_shape_cmd(
+        30.0,
+        200.0,
+        150.0,
+        120.0,
+        [0.9, 0.5, 0.5, 1.0],
+        1.0,
+        0.0,
+        0.0,
+        0.015,
+        w,
+        h,
+    ));
+    // Rounded rect stroke
+    cmds.push(make_shape_cmd(
+        210.0,
+        200.0,
+        150.0,
+        120.0,
+        [0.5, 0.9, 0.6, 1.0],
+        1.0,
+        1.0,
+        0.08,
+        0.015,
+        w,
+        h,
+    ));
+    // Circle stroke
+    cmds.push(make_shape_cmd(
+        400.0,
+        200.0,
+        120.0,
+        120.0,
+        [0.5, 0.7, 0.95, 1.0],
+        1.0,
+        2.0,
+        0.0,
+        0.015,
+        w,
+        h,
+    ));
+    // Ellipse stroke
+    cmds.push(make_shape_cmd(
+        560.0,
+        200.0,
+        200.0,
+        120.0,
+        [0.95, 0.85, 0.4, 1.0],
+        1.0,
+        3.0,
+        0.0,
+        0.015,
+        w,
+        h,
+    ));
+
+    // Row 3: Line + semi-transparent overlapping shapes
+    // Line (shape_type=4, param1=line_width)
+    cmds.push(make_shape_cmd(
+        30.0,
+        400.0,
+        300.0,
+        40.0,
+        [1.0, 1.0, 1.0, 1.0],
+        0.9,
+        4.0,
+        0.15,
+        0.0,
+        w,
+        h,
+    ));
+    // Overlapping circles
+    cmds.push(make_shape_cmd(
+        400.0,
+        370.0,
+        150.0,
+        150.0,
+        [0.9, 0.2, 0.5, 1.0],
+        0.6,
+        2.0,
+        0.0,
+        0.0,
+        w,
+        h,
+    ));
+    cmds.push(make_shape_cmd(
+        480.0,
+        400.0,
+        150.0,
+        150.0,
+        [0.2, 0.5, 0.9, 1.0],
+        0.6,
+        2.0,
+        0.0,
+        0.0,
+        w,
+        h,
+    ));
 
     cmds
 }

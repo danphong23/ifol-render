@@ -25,6 +25,15 @@ pub fn setup_renderer(renderer: &mut Renderer) {
         );
     }
 
+    // SDF shapes pipeline
+    if !renderer.has_pipeline("shapes") {
+        renderer.register_pipeline(
+            "shapes",
+            include_str!("../../../shaders/shapes.wgsl"),
+            PipelineConfig::quad(),
+        );
+    }
+
     // Built-in effects
     if !renderer.has_pipeline("blur") {
         renderer.register_effect(
