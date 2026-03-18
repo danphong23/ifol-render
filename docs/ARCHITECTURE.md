@@ -1,346 +1,146 @@
-# ifol-render — System Architecture
+# Architecture
 
-> Thiết kế kiến trúc hệ thống render engine cho video compositing.
+## Overview
 
----
-
-## 1. Tổng quan 3 phần
-
-Hệ thống chia thành 3 phần độc lập, dependency **1 chiều từ dưới lên**:
+ifol-render is a modular GPU rendering engine organized as a Rust workspace with multiple crates. The architecture follows the **Entity-Component-System (ECS)** pattern for scene management and a **pipeline-based** approach for rendering and export.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Editor / CLI            (consumers — bên thứ 3)        │
-│  Chỉ import core. Không biết render tồn tại.            │
+│                      Consumers                          │
+│   ┌─────────┐  ┌──────────┐  ┌──────┐  ┌──────────┐   │
+│   │ Studio  │  │   CLI    │  │ WASM │  │ Your App │   │
+│   └────┬────┘  └─────┬────┘  └──┬───┘  └─────┬────┘   │
+│        │             │          │             │         │
+├────────┴─────────────┴──────────┴─────────────┴────────┤
+│                    ifol-render-core                      │
+│  ┌──────────┐  ┌────────────┐  ┌──────────────────┐    │
+│  │   ECS    │  │  Commands  │  │    Scene I/O     │    │
+│  │ World    │  │  History   │  │ SceneDescription │    │
+│  │ Entity   │  │  Undo/Redo │  │ JSON serialize   │    │
+│  │ Systems  │  │            │  │                  │    │
+│  └──────────┘  └────────────┘  └──────────────────┘    │
+│  ┌──────────┐  ┌────────────┐  ┌──────────────────┐    │
+│  │  Color   │  │  Animation │  │   Export (FFmpeg) │    │
+│  │  Spaces  │  │  Keyframes │  │   H264/VP9/ProRes│    │
+│  │  Convert │  │  Easing    │  │   Progress CB    │    │
+│  └──────────┘  └────────────┘  └──────────────────┘    │
 ├─────────────────────────────────────────────────────────┤
-│  ECS Core                (trí tuệ — orchestrator)       │
-│  Import render. Sở hữu data, logic, unit system.        │
-│  Gọi render khi cần vẽ.                                 │
-├─────────────────────────────────────────────────────────┤
-│  Render Tool             (GPU thuần — passive)           │
-│  Không biết ECS tồn tại. Nhận draw commands → vẽ pixel. │
+│                    ifol-render (GPU)                     │
+│  ┌──────────────┐  ┌───────────┐  ┌───────────────┐    │
+│  │ Render Graph │  │  Passes   │  │   Shaders     │    │
+│  │ DAG executor │  │  Composite│  │   WGSL files  │    │
+│  │ Auto-deps    │  │  Effects  │  │   Runtime load│    │
+│  └──────────────┘  └───────────┘  └───────────────┘    │
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Quy tắc vàng**: mỗi layer chỉ biết layer bên dưới nó, không bao giờ biết layer trên.
+## Crate Structure
+
+### `core/` — ifol-render-core
+
+The heart of the engine. Zero GPU dependencies — all CPU-side logic.
+
+| Module | Purpose |
+|--------|---------|
+| `ecs/` | Entity, Components, World, Systems, Pipeline |
+| `ecs/components.rs` | All component types (Transform, Timeline, ColorSource, etc.) |
+| `ecs/systems.rs` | Per-frame systems (visibility, animation, transform, opacity) |
+| `ecs/pipeline.rs` | Frame rendering pipeline orchestrator |
+| `ecs/draw.rs` | Software rasterizer for compositing |
+| `commands/` | Command pattern for undo/redo (AddEntity, RemoveEntity, SetProperty) |
+| `scene.rs` | SceneDescription + RenderSettings (JSON ↔ World round-trip) |
+| `color.rs` | Color4, ColorSpace, conversion matrices |
+| `types.rs` | Vec2, Mat4, Keyframe, Easing |
+| `time.rs` | TimeState, EntityTime |
+| `export/` | FFmpeg pipe, ExportConfig, video export with progress |
+
+### `render/` — ifol-render
+
+GPU rendering engine built on wgpu.
+
+| Module | Purpose |
+|--------|---------|
+| `render_graph.rs` | DAG of render passes with dependency tracking |
+| `passes/` | Individual render passes (composite, effects) |
+| `shaders/` | WGSL shader loading and compilation |
+
+### `studio/` — ifol-render-studio
+
+Professional GUI editor built with egui + egui_tiles.
+
+| Module | Purpose |
+|--------|---------|
+| `app.rs` | Main application state (EditorApp) |
+| `panels/viewport.rs` | Real-time viewport with grid, safe zones |
+| `panels/timeline.rs` | NLE-style timeline with track lanes |
+| `panels/entity_list.rs` | Entity browser with multi-select |
+| `panels/properties.rs` | Property inspector with undo support |
+| `panels/top_bar.rs` | 3-zone flex top bar (brand, workspace, actions) |
+| `panels/status_bar.rs` | Status bar with entity count |
+| `panels/workspace.rs` | egui_tiles workspace with split/tab support |
+
+### `crates/cli/` — ifol-render-cli
+
+Headless CLI tool for rendering and export.
+
+| Subcommand | Purpose |
+|------------|---------|
+| `info` | Display scene metadata |
+| `preview` | Render single frame to PNG |
+| `export` | Export video via FFmpeg |
+
+### `crates/wasm/` — ifol-render-wasm
+
+WebAssembly target for browser-based preview.
 
 ---
 
-## 2. Render Tool (`render/`)
+## ECS Pipeline
 
-GPU engine thuần túy. **Không biết Entity, Component, World là gì.**
+Each frame follows this pipeline:
 
-### Trách nhiệm
-
-| Việc | Chi tiết |
-|---|---|
-| GPU context | Khởi tạo wgpu, chọn adapter, device, queue |
-| Draw commands | Nhận danh sách `DrawCommand` (pixel coords) → render |
-| Texture cache | Load texture 1 lần, tái sử dụng nhiều frame |
-| Shader pipeline | Vertex + fragment shader, blend modes |
-| Device check | Kiểm tra GPU capability, fallback CPU nếu cần |
-| Pixel output | Readback GPU → `Vec<u8>` RGBA |
-
-### API
-
-```rust
-pub struct DrawCommand {
-    pub rect: PixelRect,       // vị trí + kích thước (pixel)
-    pub rotation: f32,         // radians
-    pub opacity: f32,          // 0..1
-    pub source: DrawSource,    // Color | TextureId
-    pub blend_mode: BlendMode,
-}
-
-pub struct GpuRenderer {
-    // GPU state (private)
-}
-
-impl GpuRenderer {
-    /// Khởi tạo, tự detect GPU, fallback nếu cần
-    pub fn new(width: u32, height: u32) -> Result<Self, RenderError>;
-
-    /// Load texture từ raw bytes, trả về ID. Cache nội bộ.
-    pub fn load_texture(&mut self, key: &str, data: &[u8], w: u32, h: u32) -> TextureId;
-
-    /// Kiểm tra texture đã load chưa
-    pub fn has_texture(&self, key: &str) -> bool;
-
-    /// Render 1 frame từ danh sách draw commands
-    pub fn render(&mut self, commands: &[DrawCommand]) -> Vec<u8>;
-}
+```
+1. Visibility System     → determines which entities are active at current time
+2. Animation System      → evaluates keyframes, applies animated values
+3. Transform System      → computes world matrices (with parent-child hierarchy)
+4. Opacity System        → resolves final opacity per entity
+5. Draw/Composite        → software rasterizer composites visible layers
 ```
 
-### Không được làm
+### Parent-Child Hierarchy
 
-- ❌ Import bất kỳ type nào từ `core/`
-- ❌ Biết Entity, Component, World
-- ❌ Quyết định vẽ cái gì (chỉ vẽ theo lệnh)
-- ❌ Quản lý thời gian, timeline
+Entities can reference a parent via the `parent` component field. The transform system resolves the hierarchy using matrix multiplication (`Mat4::mul`), ensuring children inherit parent transforms.
+
+### Animation & Easing
+
+Keyframes support multiple easing functions:
+- `linear` — constant rate
+- `easeIn` / `easeOut` / `easeInOut` — cubic bezier presets
+- `cubicBezier: [x1, y1, x2, y2]` — custom cubic bezier (Newton-Raphson solver)
 
 ---
 
-## 3. ECS Core (`core/`)
+## Command System
 
-Trí tuệ của hệ thống. Quản lý data, logic, và **gọi render khi cần**.
-
-### Trách nhiệm
-
-| Việc | Chi tiết |
-|---|---|
-| Entity / Component / World | Cấu trúc dữ liệu ECS |
-| Unit system | Hệ tọa độ (0..1 normalized), convert → pixel |
-| Systems | Timeline, animation, transform resolve |
-| Pipeline | Orchestrate: resolve → build draw commands → gọi render |
-| Commands | Undo/redo, serialize, decouple mutation |
-| Asset registry | Map file path → asset ID (data only, không load GPU) |
-| Scene I/O | Serialize/deserialize scene JSON |
-
-### Unit System (0..1 Normalized)
+All mutations go through the Command pattern for undo/redo:
 
 ```
-Position: [0.0, 0.0] = góc trái trên
-          [1.0, 1.0] = góc phải dưới
-          [0.5, 0.5] = tâm canvas
-
-Scale:    [1.0, 1.0] = full canvas
-          [0.5, 0.5] = nửa canvas
-          [0.25, 0.25] = 1/4 canvas
-
-→ Core convert: unit × resolution = pixel
-  position [0.5, 0.3] × [1920, 1080] = pixel [960, 324]
+User Action → Command::execute() → World mutation
+                                  → History push
+Ctrl+Z      → Command::undo()   → Reverse mutation
+Ctrl+Y      → Command::redo()   → Re-apply mutation
 ```
 
-**Tại sao Core quản lý unit?**
-- Unit = business logic, không phải GPU concern
-- Cùng scene, đổi resolution → core tự tính lại pixel → render không thay đổi
-- User chỉ thấy unit, không biết pixel
-
-### Pipeline Flow
-
-```
-World + TimeState
-    │
-    ▼
-┌─ Systems ──────────────────┐
-│  1. TimelineSystem         │  → filter entities visible tại time T
-│  2. AnimationSystem        │  → interpolate keyframes
-│  3. TransformSystem        │  → resolve parent-child, anchors
-│  4. DrawCommandBuilder     │  → convert unit → pixel, tạo DrawCommand[]
-└────────────────────────────┘
-    │
-    ▼  DrawCommand[]
-    │
-┌─ Render Tool ──────────────┐
-│  renderer.render(commands) │  → GPU pipeline → pixels
-└────────────────────────────┘
-    │
-    ▼  Vec<u8> RGBA
-    │
-    trả về cho caller (editor/cli)
-```
-
-### Command System
-
-```rust
-pub trait Command {
-    fn execute(&self, world: &mut World);
-    fn undo(&self, world: &mut World);
-    fn description(&self) -> &str;
-}
-
-pub struct SetProperty {
-    pub entity_id: String,
-    pub field: PropertyPath,
-    pub old_value: Value,
-    pub new_value: Value,
-}
-
-pub struct CommandHistory {
-    pub undo_stack: Vec<Box<dyn Command>>,
-    pub redo_stack: Vec<Box<dyn Command>>,
-}
-```
-
-Editor gửi commands → core execute → undo/redo stack tự quản lý.
+Commands: `AddEntity`, `RemoveEntity`, `SetProperty`
 
 ---
 
-## 4. Editor (`editor/`)
-
-**Bên thứ 3**. GUI cho người dùng edit scene. Chỉ import `core/`.
-
-### Trách nhiệm
-
-| Việc | Chi tiết |
-|---|---|
-| GUI (egui) | Viewport, entity list, properties, timeline |
-| User interaction | Drag, click, input → tạo Commands |
-| Viewport display | Gọi `pipeline.render_frame()` → hiển thị pixels |
-| File I/O | Open/Save scene JSON (qua core API) |
-
-### Không được làm
-
-- ❌ Import `render/` trực tiếp
-- ❌ Tạo DrawCommand
-- ❌ Quản lý GPU context
-- ❌ Biết shader, texture cache internal
-
-### Flow
+## Export Pipeline
 
 ```
-User click "move entity" →
-  Editor tạo SetProperty command →
-    Core execute command, update World →
-      Editor gọi pipeline.render_frame(world) →
-        Core resolve + build DrawCommands →
-          Core gọi renderer.render(commands) →
-            Render Tool vẽ GPU → pixels →
-              Editor hiển thị pixels lên viewport
+SceneDescription → render_frame() loop → RGBA pixels → FFmpeg stdin pipe → video file
+                     ↑                                        ↓
+               progress callback                    codec (H264/VP9/ProRes)
 ```
 
----
-
-## 5. CLI (`cli/`)
-
-**Bên thứ 3**. Batch render, không GUI. Chỉ import `core/`.
-
-```
-ifol-render preview scene.json -o preview.png
-ifol-render export scene.json -o output.mp4 --fps 30
-ifol-render info scene.json
-```
-
----
-
-## 6. Folder Structure
-
-```
-ifol-render/
-├── render/                  ← Render Tool (GPU)
-│   ├── Cargo.toml           
-│   └── src/
-│       ├── lib.rs           ← GpuRenderer, DrawCommand
-│       ├── pipeline.rs      ← wgpu pipeline setup
-│       ├── texture.rs       ← texture cache
-│       ├── vertex.rs        ← quad geometry
-│       └── shaders/
-│           └── composite.wgsl
-│
-├── core/                    ← ECS Core
-│   ├── Cargo.toml           ← depends on render/
-│   └── src/
-│       ├── lib.rs
-│       ├── ecs/
-│       │   ├── mod.rs       ← Entity, Components, World
-│       │   ├── systems.rs   ← Timeline, Animation, Transform
-│       │   └── pipeline.rs  ← orchestrate systems + call render
-│       ├── commands/
-│       │   ├── mod.rs       ← Command trait, CommandHistory
-│       │   └── property.rs  ← SetProperty, AddEntity, etc.
-│       ├── types.rs         ← Vec2, Mat4, TimeRange
-│       ├── units.rs         ← Unit system, unit→pixel conversion
-│       ├── color.rs         ← Color4, ColorSpace
-│       ├── time.rs          ← TimeState
-│       └── scene.rs         ← SceneDescription, RenderSettings
-│
-├── editor/                  ← Editor (GUI, third-party)
-│   ├── Cargo.toml           ← depends on core/ ONLY
-│   └── src/
-│       ├── main.rs
-│       ├── app.rs
-│       └── ui/
-│
-├── cli/                     ← CLI (third-party)
-│   ├── Cargo.toml           ← depends on core/ ONLY
-│   └── src/
-│       └── main.rs
-│
-└── docs/
-    └── architecture.md      ← (file này)
-```
-
----
-
-## 7. Dependency Graph
-
-```mermaid
-graph BT
-    R["render/ (GPU primitives)"]
-    C["core/ (ECS + Pipeline)"] -->|"import"| R
-    E["editor/ (GUI)"] -->|"import"| C
-    CLI["cli/ (batch)"] -->|"import"| C
-    E -.->|"KHÔNG import"| R
-    CLI -.->|"KHÔNG import"| R
-```
-
-**1 chiều**: `render ← core ← editor/cli`
-
----
-
-## 8. Phân chia trách nhiệm
-
-| Trách nhiệm | Render | Core | Editor/CLI |
-|---|:---:|:---:|:---:|
-| GPU context, shaders | ✅ | | |
-| Texture cache (GPU memory) | ✅ | | |
-| Device check, fallback | ✅ | | |
-| Draw command execution | ✅ | | |
-| Entity, Component, World | | ✅ | |
-| Unit system (0..1) | | ✅ | |
-| Unit → pixel conversion | | ✅ | |
-| Timeline, animation systems | | ✅ | |
-| Command system (undo/redo) | | ✅ | |
-| Asset registry (path→ID) | | ✅ | |
-| Scene serialize / deserialize | | ✅ | |
-| Pipeline orchestration | | ✅ | |
-| GUI, user interaction | | | ✅ |
-| File dialogs | | | ✅ |
-| Viewport display | | | ✅ |
-
----
-
-## 9. Texture / Asset Flow
-
-```
-1. Editor: user adds image entity (path = "photo.png")
-       ↓
-2. Core:  asset_registry.register("photo.png") → asset_id
-       ↓
-3. Core:  pipeline.render_frame() 
-          → check renderer.has_texture(asset_id)?
-          → nếu chưa: đọc file bytes, gọi renderer.load_texture(id, bytes)
-          → tạo DrawCommand { source: Texture(asset_id) }
-       ↓
-4. Render: dùng cached GPU texture, vẽ
-       ↓
-5. Frame 2, 3, 4...: texture đã cache, không load lại
-```
-
-**Load 1 lần, dùng mãi** — render tool quản lý GPU memory, core quản lý "khi nào cần load".
-
----
-
-## 10. Error Handling & Device Safety
-
-```rust
-// Render Tool: tự handle GPU issues
-impl GpuRenderer {
-    pub fn new(w: u32, h: u32) -> Result<Self, RenderError> {
-        // 1. Try Vulkan
-        // 2. Try DX12  
-        // 3. Try OpenGL
-        // 4. Fallback CPU software rasterizer
-        // 5. Err nếu không gì works
-    }
-}
-
-// Core: wrap errors cho consumer
-pub enum CoreError {
-    RenderInit(RenderError),
-    AssetNotFound(String),
-    SceneParseError(String),
-}
-
-// Editor/CLI: chỉ thấy CoreError, không biết GPU detail
-```
+The export system supports configurable FFmpeg path (`--ffmpeg /path/to/ffmpeg`).
