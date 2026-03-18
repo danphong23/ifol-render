@@ -74,6 +74,9 @@ enum Commands {
         /// Override height.
         #[arg(long)]
         height: Option<u32>,
+        /// Path to FFmpeg binary (default: searches PATH).
+        #[arg(long)]
+        ffmpeg: Option<String>,
     },
 }
 
@@ -207,6 +210,7 @@ fn main() {
             fps,
             width,
             height,
+            ffmpeg,
         } => {
             let json = std::fs::read_to_string(&scene).expect("Failed to read scene file");
             let scene_desc = ifol_render_core::scene::SceneDescription::from_json(&json)
@@ -233,6 +237,7 @@ fn main() {
                 fps: Some(effective_fps),
                 width: Some(effective_w),
                 height: Some(effective_h),
+                ffmpeg_path: ffmpeg,
             };
 
             let mut renderer =

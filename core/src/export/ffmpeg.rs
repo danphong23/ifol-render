@@ -21,11 +21,13 @@ impl FfmpegPipe {
         pixel_format: &str,
         crf: u32,
         output_path: &str,
+        ffmpeg_path: Option<&str>,
     ) -> Result<Self, String> {
         let size = format!("{width}x{height}");
         let fps_str = format!("{fps}");
 
-        let mut cmd = Command::new("ffmpeg");
+        let bin = ffmpeg_path.unwrap_or("ffmpeg");
+        let mut cmd = Command::new(bin);
 
         // Overwrite output without asking
         cmd.arg("-y");

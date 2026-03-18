@@ -27,6 +27,8 @@ pub struct ExportConfig {
     pub width: Option<u32>,
     /// Override height (uses scene height if None).
     pub height: Option<u32>,
+    /// Path to the FFmpeg binary. If None, searches system PATH.
+    pub ffmpeg_path: Option<String>,
 }
 
 impl Default for ExportConfig {
@@ -39,6 +41,7 @@ impl Default for ExportConfig {
             fps: None,
             width: None,
             height: None,
+            ffmpeg_path: None,
         }
     }
 }
@@ -140,6 +143,7 @@ pub fn export_video(
         &config.pixel_format,
         config.crf,
         &config.output_path,
+        config.ffmpeg_path.as_deref(),
     )?;
 
     let mut time = TimeState::new(fps);
