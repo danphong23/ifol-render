@@ -395,6 +395,64 @@ fn main() {
                     println!("Saved: {}", out_path);
                     return;
                 }
+                "text" => {
+                    let font_data = ifol_render_core::text::default_font_data();
+
+                    // Rasterize several text lines at different sizes
+                    let texts = [
+                        ("ifol-render GPU Engine", 48.0, [1.0, 1.0, 1.0, 1.0]),
+                        (
+                            "Pure GPU Executor — No Shader Ownership",
+                            28.0,
+                            [0.7, 0.9, 1.0, 1.0],
+                        ),
+                        (
+                            "Shapes • Gradients • Masks • Text • Effects",
+                            22.0,
+                            [0.9, 0.8, 0.5, 1.0],
+                        ),
+                    ];
+
+                    // Draw gradient background first
+                    let mut cmds: Vec<ifol_render_core::DrawCommand> = vec![make_gradient_cmd(
+                        0.0,
+                        0.0,
+                        width as f32,
+                        height as f32,
+                        [0.05, 0.05, 0.15, 1.0],
+                        [0.15, 0.05, 0.2, 1.0],
+                        0.0,
+                        std::f32::consts::PI / 2.0,
+                        0.0,
+                        0.0,
+                        width,
+                        height,
+                    )];
+
+                    let mut y_offset = 80.0f32;
+                    for (i, (text, size, color)) in texts.iter().enumerate() {
+                        let key = format!("text_{}", i);
+                        match ifol_render_core::text::rasterize_text(text, font_data, *size, *color)
+                        {
+                            Ok((pixels, tw, th)) => {
+                                renderer.load_rgba(&key, &pixels, tw, th);
+                                // Draw as textured quad centered horizontally
+                                let x = (width as f32 - tw as f32) / 2.0;
+                                cmds.push(make_textured_cmd(
+                                    x, y_offset, tw as f32, th as f32, &key, 1.0, width, height,
+                                ));
+                                y_offset += th as f32 + 30.0;
+                            }
+                            Err(e) => eprintln!("Text rasterization failed: {}", e),
+                        }
+                    }
+
+                    let pixels = renderer.render_frame(&cmds);
+                    let out_path = output.to_str().unwrap();
+                    ifol_render_core::Renderer::save_png(&pixels, width, height, out_path).unwrap();
+                    println!("Saved: {}", out_path);
+                    return;
+                }
                 "effects" => {
                     let cmds = build_test_basic(width, height);
                     let effects = vec![ifol_render_core::EffectConfig {
@@ -410,7 +468,7 @@ fn main() {
                 }
                 _ => {
                     eprintln!(
-                        "Unknown test: '{}'. Available: basic, blend, shapes, gradients, resize, masking, effects",
+                        "Unknown test: '{}'. Available: basic, blend, shapes, gradients, resize, masking, text, effects",
                         test
                     );
                     std::process::exit(1);
@@ -1183,4 +1241,43 @@ fn build_test_masking(w: u32, h: u32) -> Vec<ifol_render_core::DrawCommand> {
     ));
 
     cmds
+}
+
+/// Build a textured composite DrawCommand — draws a pre-loaded texture at position.
+fn make_textured_cmd(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    texture_key: &str,
+    opacity: f32,
+    canvas_w: u32,
+    canvas_h: u32,
+) -> ifol_render_core::DrawCommand {
+    let sx = w / canvas_w as f32 * 2.0;
+    let sy = h / canvas_h as f32 * 2.0;
+    let tx = (x + w / 2.0) / canvas_w as f32 * 2.0 - 1.0;
+    let ty = 1.0 - (y + h / 2.0) / canvas_h as f32 * 2.0;
+
+    #[rustfmt::skip]
+    let transform = [
+        sx,  0.0, 0.0, 0.0,
+        0.0, sy,  0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        tx,  ty,  0.0, 1.0,
+    ];
+
+    let mut uniforms = Vec::with_capacity(24);
+    uniforms.extend_from_slice(&transform);
+    uniforms.extend_from_slice(&[1.0, 1.0, 1.0, 1.0]); // color (white = no tint)
+    uniforms.push(opacity); // opacity
+    uniforms.push(1.0); // use_texture = true
+    uniforms.push(0.0); // blend_mode = Normal
+    uniforms.push(0.0); // _pad
+
+    ifol_render_core::DrawCommand {
+        pipeline: "composite".into(),
+        uniforms,
+        textures: vec![texture_key.to_string()],
+    }
 }

@@ -16,6 +16,7 @@ pub mod commands;
 pub mod ecs;
 pub mod export;
 pub mod scene;
+pub mod text;
 pub mod time;
 pub mod types;
 
