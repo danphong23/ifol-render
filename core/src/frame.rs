@@ -18,9 +18,16 @@ pub struct RenderSettings {
     pub width: u32,
     /// Output height in pixels.
     pub height: u32,
+    /// Frames per second for playback/export.
+    #[serde(default = "default_fps")]
+    pub fps: f64,
     /// Background color (RGBA, 0..1). Default: transparent black.
     #[serde(default)]
     pub background: [f32; 4],
+}
+
+fn default_fps() -> f64 {
+    30.0
 }
 
 impl Default for RenderSettings {
@@ -28,6 +35,7 @@ impl Default for RenderSettings {
         Self {
             width: 1920,
             height: 1080,
+            fps: 30.0,
             background: [0.0, 0.0, 0.0, 1.0],
         }
     }

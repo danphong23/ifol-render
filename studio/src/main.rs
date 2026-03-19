@@ -1,23 +1,30 @@
-//! ifol-render-studio — Standalone GUI editor.
+//! ifol-render Studio — Minimal Frame JSON Viewer
 //!
-//! A third-party consumer that only depends on ifol-render-core.
+//! Load a flat scene JSON → seek → preview → render/export.
 
-pub mod app;
-pub mod panels;
+use eframe::egui;
+use std::path::PathBuf;
 
-fn main() -> eframe::Result<()> {
+mod app;
+
+fn main() {
     env_logger::init();
+
+    let scene_path = std::env::args().nth(1).map(PathBuf::from);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 720.0])
-            .with_min_inner_size([800.0, 500.0]),
+            .with_inner_size([1280.0, 800.0])
+            .with_title("ifol-render Studio"),
         ..Default::default()
     };
 
     eframe::run_native(
-        "ifol-render studio",
+        "ifol-render Studio",
         options,
-        Box::new(|_cc| Ok(Box::new(app::EditorApp::new()))),
+        Box::new(move |cc| {
+            Ok(Box::new(app::StudioApp::new(cc, scene_path)))
+        }),
     )
+    .expect("Failed to start Studio");
 }

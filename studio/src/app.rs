@@ -1,383 +1,429 @@
-//! Core editor application — a third-party consumer of ifol-render-core.
-//!
-//! Architecture:
-//!   ifol-render       (Render tool: GPU shaders, composite, pixel output — passive)
-//!   ifol-render-core  (ECS: datatypes, components, systems, pipeline orchestration)
-//!   ifol-render-studio (THIS: GUI editor that USES core as library)
-//!
-//! The studio does NOT know about the render crate. It calls core's pipeline API.
+//! Studio app — loads Frame JSON, renders viewport, seek/preview/play.
 
-use egui::{Color32, ColorImage, Key, Modifiers, TextureHandle, TextureOptions};
-use ifol_render_core::commands::{CommandHistory, RemoveEntity};
-use ifol_render_core::ecs::World;
-use ifol_render_core::scene::RenderSettings;
-use ifol_render_core::time::TimeState;
+use eframe::egui;
+use ifol_render_core::{CoreEngine, Frame, RenderSettings};
+use std::path::PathBuf;
 
-// ── Theme (matching VideoComposer: #18191C bg, #242529 panels, #303031 borders) ──
-pub const BG_APP: Color32 = Color32::from_rgb(24, 25, 28); // #18191C
-pub const BG_PANEL: Color32 = Color32::from_rgb(36, 37, 41); // #242529
-pub const BG_SURFACE: Color32 = Color32::from_rgb(42, 44, 50); // #2a2c32
-pub const BG_HOVER: Color32 = Color32::from_rgb(55, 58, 66); // #373a42
-pub const BORDER: Color32 = Color32::from_rgb(48, 48, 49); // #303031
-pub const TEXT_PRIMARY: Color32 = Color32::from_rgb(224, 224, 224); // #E0E0E0
-pub const TEXT_DIM: Color32 = Color32::from_rgb(130, 135, 150); // #828796
-pub const ACCENT: Color32 = Color32::from_rgb(88, 101, 242); // #5865f2
-pub const ACCENT_GREEN: Color32 = Color32::from_rgb(87, 242, 135); // #57f287
-pub const RED: Color32 = Color32::from_rgb(237, 66, 69); // #ed4245
-pub const TRACK_BG: Color32 = Color32::from_rgb(54, 57, 75); // #36394b
-pub const TRACK_SEL: Color32 = Color32::from_rgb(88, 101, 242); // #5865f2
+// ── Theme ──
+const BG_APP: egui::Color32 = egui::Color32::from_rgb(24, 25, 28);
+const BG_PANEL: egui::Color32 = egui::Color32::from_rgb(36, 37, 41);
+const BG_SURFACE: egui::Color32 = egui::Color32::from_rgb(42, 44, 50);
+const ACCENT: egui::Color32 = egui::Color32::from_rgb(88, 101, 242);
+const TEXT_PRIMARY: egui::Color32 = egui::Color32::from_rgb(224, 224, 224);
+const TEXT_DIM: egui::Color32 = egui::Color32::from_rgb(130, 135, 150);
+const GREEN: egui::Color32 = egui::Color32::from_rgb(87, 242, 135);
 
-/// Editor application state.
-pub struct EditorApp {
-    pub world: World,
-    pub settings: RenderSettings,
-    pub time: TimeState,
-    pub playing: bool,
-    pub selected: Option<usize>,
-    pub viewport_tex: Option<TextureHandle>,
-    pub pixels: Vec<u8>,
-    pub dirty: bool,
-    /// Whether the scene needs re-rendering (viewport update).
-    pub needs_render: bool,
-    pub status: String,
-    pub zoom: f32,
-    /// Persistent renderer — obtained through core's re-export.
-    pub renderer: Option<ifol_render_core::Renderer>,
-    /// Path to FFmpeg binary for export.
-    pub ffmpeg_path: Option<String>,
-    /// Command history for undo/redo.
-    pub commands: CommandHistory,
-    /// Advanced dockable workspace layout
-    pub workspace: crate::panels::WorkspaceLayout,
-    /// Pending workspace action from editor switcher/split menu
-    pub pending_workspace_action: Option<crate::panels::workspace::WorkspaceAction>,
-    /// Current scene file path (None = unsaved)
-    pub scene_path: Option<std::path::PathBuf>,
-    /// Show grid overlay in viewport
-    pub show_grid: bool,
-    /// Show safe zones in viewport
-    pub show_safe_zones: bool,
-    /// Multi-selection: set of selected entity indices
-    pub selected_indices: std::collections::HashSet<usize>,
-    /// Viewport camera (pan/zoom)
-    pub camera: ifol_render_core::ecs::components::Camera,
-    /// Collapsed property sections
-    pub collapsed_sections: std::collections::HashSet<String>,
-    /// Expanded entities in hierarchy tree
-    pub expanded_entities: std::collections::HashSet<String>,
+/// Scene data loaded from JSON.
+struct SceneData {
+    settings: RenderSettings,
+    frames: Vec<Frame>,
 }
 
-impl Default for EditorApp {
-    fn default() -> Self {
-        Self::new()
-    }
+/// Studio application state.
+pub struct StudioApp {
+    /// Loaded scene data.
+    scene: Option<SceneData>,
+    /// Core render engine.
+    engine: Option<CoreEngine>,
+    /// Current frame index.
+    current_frame: usize,
+    /// Whether playing.
+    playing: bool,
+    /// Viewport texture handle for egui.
+    viewport_tex: Option<egui::TextureHandle>,
+    /// Cached rendered pixels.
+    pixels: Vec<u8>,
+    /// Whether current frame needs re-render.
+    dirty: bool,
+    /// Status message.
+    status: String,
+    /// Playback start time (wall clock) and start frame.
+    play_start_time: Option<std::time::Instant>,
+    play_start_frame: usize,
+    /// Scene file path.
+    scene_path: Option<PathBuf>,
+    /// Render timing.
+    render_ms: f64,
 }
 
-impl EditorApp {
-    pub fn new() -> Self {
-        let world = World::new();
-
-        let settings = RenderSettings {
-            width: 640,
-            height: 360,
-            fps: 30.0,
-            duration: 10.0,
-            color_space: ifol_render_core::color::ColorSpace::LinearSrgb,
-            output_color_space: ifol_render_core::color::ColorSpace::Srgb,
-            ppu: 100.0,
-            preview_scale: 1.0,
-            background_color: ifol_render_core::color::Color4::default(),
-        };
-
-        Self {
-            world,
-            settings,
-            time: TimeState::new(30.0),
+impl StudioApp {
+    pub fn new(_cc: &eframe::CreationContext, scene_path: Option<PathBuf>) -> Self {
+        let mut app = Self {
+            scene: None,
+            engine: None,
+            current_frame: 0,
             playing: false,
-            selected: None,
             viewport_tex: None,
             pixels: Vec::new(),
-            dirty: false,
-            needs_render: true,
-            status: "Ready — New Scene".into(),
-            zoom: 1.0,
-            renderer: None,
-            ffmpeg_path: None,
-            commands: CommandHistory::new(),
-            workspace: crate::panels::WorkspaceLayout::new(),
-            pending_workspace_action: None,
+            dirty: true,
+            status: "No scene loaded. File → Open to load a Frame JSON.".into(),
+            play_start_time: None,
+            play_start_frame: 0,
             scene_path: None,
-            show_grid: false,
-            show_safe_zones: false,
-            selected_indices: std::collections::HashSet::new(),
-            camera: ifol_render_core::ecs::components::Camera::default(),
-            collapsed_sections: std::collections::HashSet::new(),
-            expanded_entities: std::collections::HashSet::new(),
+            render_ms: 0.0,
+        };
+
+        if let Some(path) = scene_path {
+            app.load_scene(&path);
         }
+
+        app
     }
 
-    fn ensure_renderer(&mut self) {
-        if self.renderer.is_none() {
-            let mut r = ifol_render_core::Renderer::new(self.settings.width, self.settings.height);
-            // Load images for entities that have image_source
-            for entity in &self.world.entities {
-                if let Some(ref img) = entity.components.image_source
-                    && let Err(e) = r.load_image(&entity.id, &img.path)
-                {
-                    log::warn!("Failed to load image for '{}': {}", entity.id, e);
-                }
+    fn load_scene(&mut self, path: &PathBuf) {
+        self.status = format!("Loading {:?}...", path.file_name().unwrap_or_default());
+
+        let json = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                self.status = format!("❌ Failed to read: {}", e);
+                return;
             }
-            self.renderer = Some(r);
-        }
-    }
+        };
 
-    fn render_scene(&mut self) {
-        self.ensure_renderer();
-        if let Some(ref mut r) = self.renderer {
-            self.pixels = ifol_render_core::ecs::pipeline::render_frame(
-                &mut self.world,
-                &self.time,
-                &self.settings,
-                r,
-            );
-        }
-        self.needs_render = false;
-    }
+        let doc: serde_json::Value = match serde_json::from_str(&json) {
+            Ok(v) => v,
+            Err(e) => {
+                self.status = format!("❌ Invalid JSON: {}", e);
+                return;
+            }
+        };
 
-    fn invalidate_renderer(&mut self) {
-        self.renderer = None;
-        self.needs_render = true;
-        self.dirty = true;
-    }
-
-    /// Split a tab tile into two side-by-side (or stacked) panels.
-    /// Creates a new pane of `pane_type`, wraps it in a tab tile,
-    /// then replaces `target_id` in its parent with a Linear container
-    /// holding both the original and the new tab tile.
-    fn split_tile(
-        tree: &mut egui_tiles::Tree<crate::panels::EditorPane>,
-        target_id: egui_tiles::TileId,
-        pane_type: crate::panels::EditorPane,
-        dir: egui_tiles::LinearDir,
-    ) {
-        // 1. Create the new pane wrapped in a tab
-        let new_pane = tree.tiles.insert_pane(pane_type);
-        let new_tab = tree.tiles.insert_tab_tile(vec![new_pane]);
-
-        // 2. Create a linear container with [original, new]
-        let linear_container = egui_tiles::Container::new_linear(dir, vec![target_id, new_tab]);
-        let linear_id = tree
-            .tiles
-            .insert_new(egui_tiles::Tile::Container(linear_container));
-
-        // 3. Find parent and replace target_id with linear_id
-        if let Some(parent_id) = tree.tiles.parent_of(target_id) {
-            if let Some(egui_tiles::Tile::Container(parent)) = tree.tiles.get_mut(parent_id) {
-                // Replace the child: remove old, insert new at same position
-                let children = parent.children_vec();
-                let mut new_children = Vec::with_capacity(children.len());
-                for child in children {
-                    if child == target_id {
-                        new_children.push(linear_id);
-                    } else {
-                        new_children.push(child);
-                    }
-                }
-                // Rebuild the container with new children
-                match parent {
-                    egui_tiles::Container::Linear(linear) => {
-                        linear.children = new_children;
-                    }
-                    egui_tiles::Container::Tabs(tabs) => {
-                        tabs.children = new_children;
-                    }
-                    egui_tiles::Container::Grid(_grid) => {
-                        // Grid: use container-level remove/add
-                        parent.remove_child(target_id);
-                        parent.add_child(linear_id);
-                    }
+        let settings: RenderSettings = if let Some(s) = doc.get("settings") {
+            match serde_json::from_value(s.clone()) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.status = format!("❌ Invalid settings: {}", e);
+                    return;
                 }
             }
         } else {
-            // target_id is the root — replace root
-            tree.root = Some(linear_id);
+            RenderSettings::default()
+        };
+
+        // Support both single frame ("frame") and multi-frame ("frames")
+        let frames: Vec<Frame> = if let Some(arr) = doc.get("frames") {
+            match serde_json::from_value(arr.clone()) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.status = format!("❌ Invalid frames: {}", e);
+                    return;
+                }
+            }
+        } else if let Some(f) = doc.get("frame") {
+            match serde_json::from_value(f.clone()) {
+                Ok(v) => vec![v],
+                Err(e) => {
+                    self.status = format!("❌ Invalid frame: {}", e);
+                    return;
+                }
+            }
+        } else {
+            self.status = "❌ Missing 'frames' or 'frame' key".into();
+            return;
+        };
+
+        let total = frames.len();
+
+        // Create engine
+        let mut engine = CoreEngine::new(settings.clone());
+        engine.setup_builtins();
+
+        self.scene = Some(SceneData { settings, frames });
+        self.engine = Some(engine);
+        self.current_frame = 0;
+        self.playing = false;
+        self.dirty = true;
+        self.scene_path = Some(path.clone());
+        self.status = format!(
+            "✅ Loaded: {} frames, {:.1}s",
+            total,
+            total as f64 / self.scene.as_ref().unwrap().settings.fps
+        );
+    }
+
+    fn render_current_frame(&mut self) {
+        if let (Some(scene), Some(engine)) = (&self.scene, &mut self.engine) {
+            if self.current_frame < scene.frames.len() {
+                let t = std::time::Instant::now();
+                self.pixels = engine.render_frame(&scene.frames[self.current_frame]);
+                self.render_ms = t.elapsed().as_secs_f64() * 1000.0;
+                self.dirty = false;
+            }
         }
+    }
+
+    fn total_frames(&self) -> usize {
+        self.scene.as_ref().map(|s| s.frames.len()).unwrap_or(0)
+    }
+
+    fn fps(&self) -> f64 {
+        self.scene.as_ref().map(|s| s.settings.fps).unwrap_or(30.0)
+    }
+
+    fn current_time(&self) -> f64 {
+        self.current_frame as f64 / self.fps()
+    }
+
+    fn duration(&self) -> f64 {
+        self.total_frames() as f64 / self.fps()
     }
 }
 
-fn apply_theme(ctx: &egui::Context) {
-    let mut style = (*ctx.style()).clone();
-    let v = &mut style.visuals;
-
-    v.panel_fill = BG_PANEL;
-    v.window_fill = BG_SURFACE;
-    v.extreme_bg_color = BG_APP;
-    v.faint_bg_color = BG_SURFACE;
-
-    v.widgets.noninteractive.bg_fill = BG_SURFACE;
-    v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, TEXT_DIM);
-    v.widgets.noninteractive.bg_stroke = egui::Stroke::new(0.5, BORDER);
-
-    v.widgets.inactive.bg_fill = BG_SURFACE;
-    v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, TEXT_PRIMARY);
-    v.widgets.inactive.bg_stroke = egui::Stroke::new(0.5, BORDER);
-
-    v.widgets.hovered.bg_fill = BG_HOVER;
-    v.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, Color32::WHITE);
-    v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, ACCENT);
-
-    v.widgets.active.bg_fill = ACCENT;
-    v.widgets.active.fg_stroke = egui::Stroke::new(1.0, Color32::WHITE);
-
-    v.selection.bg_fill = ACCENT.linear_multiply(0.4);
-    v.selection.stroke = egui::Stroke::new(1.0, ACCENT);
-
-    v.window_shadow = egui::epaint::Shadow::NONE;
-
-    style.spacing.item_spacing = egui::vec2(6.0, 3.0);
-    style.spacing.button_padding = egui::vec2(8.0, 3.0);
-    ctx.set_style(style);
-}
-
-impl eframe::App for EditorApp {
+impl eframe::App for StudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        apply_theme(ctx);
+        // ── Playback — wall-clock based ──
+        if self.playing && self.scene.is_some() {
+            let now = std::time::Instant::now();
+            if let Some(start) = self.play_start_time {
+                let elapsed = now.duration_since(start).as_secs_f64();
+                let target_frame = self.play_start_frame + (elapsed * self.fps()) as usize;
 
-        if self.playing {
-            let dt = ctx.input(|i| i.unstable_dt) as f64;
-            self.time.seek(self.time.global_time + dt);
-            if self.time.global_time >= self.settings.duration {
-                self.time.seek(0.0);
+                if target_frame >= self.total_frames() {
+                    // Loop
+                    self.play_start_frame = 0;
+                    self.play_start_time = Some(now);
+                    self.current_frame = 0;
+                    self.dirty = true;
+                } else if target_frame != self.current_frame {
+                    self.current_frame = target_frame;
+                    self.dirty = true;
+                }
+            } else {
+                self.play_start_time = Some(now);
+                self.play_start_frame = self.current_frame;
             }
-            self.needs_render = true;
-            ctx.request_repaint();
+            // Schedule next repaint at next frame boundary
+            let frame_dur = std::time::Duration::from_secs_f64(1.0 / self.fps());
+            ctx.request_repaint_after(frame_dur);
         }
 
         // ── Keyboard shortcuts ──
-        ctx.input_mut(|input| {
-            // Space = play/pause
-            if input.consume_key(Modifiers::NONE, Key::Space) {
+        ctx.input(|i| {
+            if i.key_pressed(egui::Key::Space) {
                 self.playing = !self.playing;
+                if self.playing {
+                    self.play_start_time = None;
+                }
             }
-            // Ctrl+Z = undo
-            if input.consume_key(Modifiers::CTRL, Key::Z)
-                && let Some(desc) = self.commands.undo(&mut self.world)
-            {
-                self.status = format!("↩ Undo: {}", desc);
-                self.needs_render = true;
+            if i.key_pressed(egui::Key::ArrowRight) && !self.playing {
+                if self.current_frame + 1 < self.total_frames() {
+                    self.current_frame += 1;
+                    self.dirty = true;
+                }
+            }
+            if i.key_pressed(egui::Key::ArrowLeft) && !self.playing {
+                if self.current_frame > 0 {
+                    self.current_frame -= 1;
+                    self.dirty = true;
+                }
+            }
+            if i.key_pressed(egui::Key::Home) {
+                self.current_frame = 0;
                 self.dirty = true;
             }
-            // Ctrl+Y = redo
-            if input.consume_key(Modifiers::CTRL, Key::Y)
-                && let Some(desc) = self.commands.redo(&mut self.world)
-            {
-                self.status = format!("↪ Redo: {}", desc);
-                self.needs_render = true;
+            if i.key_pressed(egui::Key::End) {
+                self.current_frame = self.total_frames().saturating_sub(1);
                 self.dirty = true;
-            }
-            // Ctrl+S = save
-            if input.consume_key(Modifiers::CTRL, Key::S) {
-                // Will be handled after panels
-            }
-            // Delete = remove selected entity
-            if input.consume_key(Modifiers::NONE, Key::Delete)
-                && let Some(i) = self.selected
-                && i < self.world.entities.len()
-            {
-                let eid = self.world.entities[i].id.clone();
-                self.commands
-                    .execute(Box::new(RemoveEntity::new(eid)), &mut self.world);
-                self.selected = None;
-                self.invalidate_renderer();
-                self.status = "Deleted entity".into();
             }
         });
 
-        if self.needs_render {
-            self.render_scene();
+        // ── Render if dirty ──
+        if self.dirty && self.scene.is_some() {
+            self.render_current_frame();
         }
 
-        if !self.pixels.is_empty() {
-            let img = ColorImage::from_rgba_unmultiplied(
-                [self.settings.width as usize, self.settings.height as usize],
-                &self.pixels,
-            );
-            let tex = ctx.load_texture("viewport", img, TextureOptions::LINEAR);
-            self.viewport_tex = Some(tex);
-        }
+        // ── Apply theme ──
+        let mut style = (*ctx.style()).clone();
+        style.visuals.window_fill = BG_APP;
+        style.visuals.panel_fill = BG_PANEL;
+        style.visuals.override_text_color = Some(TEXT_PRIMARY);
+        style.visuals.widgets.noninteractive.bg_fill = BG_SURFACE;
+        style.visuals.widgets.inactive.bg_fill = BG_SURFACE;
+        style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(55, 58, 66);
+        style.visuals.widgets.active.bg_fill = ACCENT;
+        ctx.set_style(style);
 
-        // ── Top bar ── (must render BEFORE CentralPanel to reserve space)
-        egui::TopBottomPanel::top("top")
-            .frame(
-                egui::Frame::new()
-                    .fill(BG_APP)
-                    .inner_margin(egui::Margin::symmetric(10, 4)),
-            )
-            .exact_height(40.0)
-            .show(ctx, |ui| {
-                crate::panels::top_bar::ui(self, ui);
-            });
-
-        // ── Status bar ──
-        egui::TopBottomPanel::bottom("status")
-            .frame(
-                egui::Frame::new()
-                    .fill(BG_APP)
-                    .inner_margin(egui::Margin::symmetric(10, 3)),
-            )
-            .exact_height(22.0)
-            .show(ctx, |ui| {
-                crate::panels::status_bar::ui(self, ui);
-            });
-
-        // ── Workspace Split System ──
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE)
-            .show(ctx, |ui| {
-                // Take the tree out of self so we can pass `self` mutably to behavior
-                let mut tree = std::mem::replace(
-                    &mut self.workspace.tree,
-                    egui_tiles::Tree::empty("ifol_workspace"),
-                );
-
-                let mut behavior = crate::panels::workspace::WorkspaceBehavior { app: self };
-                tree.ui(&mut behavior, ui);
-
-                // Put the tree back
-                self.workspace.tree = tree;
-
-                // Process pending workspace actions (add tab, split)
-                if let Some(action) = self.pending_workspace_action.take() {
-                    use crate::panels::workspace::WorkspaceAction;
-                    match action {
-                        WorkspaceAction::AddTab(tab_tile_id, pane_type) => {
-                            let new_pane_id = self.workspace.tree.tiles.insert_pane(pane_type);
-                            if let Some(egui_tiles::Tile::Container(egui_tiles::Container::Tabs(
-                                tabs,
-                            ))) = self.workspace.tree.tiles.get_mut(tab_tile_id)
-                            {
-                                tabs.add_child(new_pane_id);
-                                tabs.set_active(new_pane_id);
+        // ── Top bar ──
+        egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
+            egui::menu::bar(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("Open Frame JSON...").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("JSON", &["json"])
+                            .pick_file()
+                        {
+                            self.load_scene(&path);
+                        }
+                        ui.close_menu();
+                    }
+                    if ui.button("Export Frame as PNG...").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("PNG", &["png"])
+                            .set_file_name("frame.png")
+                            .save_file()
+                        {
+                            if let Some(scene) = &self.scene {
+                                let w = scene.settings.width;
+                                let h = scene.settings.height;
+                                match CoreEngine::save_png(&self.pixels, w, h, path.to_str().unwrap()) {
+                                    Ok(()) => self.status = format!("✅ Saved: {:?}", path),
+                                    Err(e) => self.status = format!("❌ Save error: {}", e),
+                                }
                             }
                         }
-                        WorkspaceAction::SplitH(tab_tile_id, pane_type) => {
-                            Self::split_tile(
-                                &mut self.workspace.tree,
-                                tab_tile_id,
-                                pane_type,
-                                egui_tiles::LinearDir::Horizontal,
-                            );
+                        ui.close_menu();
+                    }
+                });
+
+                ui.separator();
+
+                // Scene info
+                if let Some(scene) = &self.scene {
+                    ui.colored_label(TEXT_DIM, format!(
+                        "{}×{} | {:.0}fps | {:.1}s",
+                        scene.settings.width, scene.settings.height,
+                        scene.settings.fps, self.duration()
+                    ));
+                }
+            });
+        });
+
+        // ── Status bar ──
+        egui::TopBottomPanel::bottom("status_bar")
+            .max_height(24.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.colored_label(TEXT_DIM, &self.status);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.colored_label(TEXT_DIM, format!(
+                            "Render: {:.1}ms | GPU",
+                            self.render_ms
+                        ));
+                    });
+                });
+            });
+
+        // ── Timeline bar ──
+        egui::TopBottomPanel::bottom("timeline")
+            .min_height(60.0)
+            .max_height(80.0)
+            .show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    // Play/Pause button
+                    let play_label = if self.playing { "⏸" } else { "▶" };
+                    let btn = ui.add_sized(
+                        [36.0, 36.0],
+                        egui::Button::new(
+                            egui::RichText::new(play_label).size(18.0).color(egui::Color32::WHITE)
+                        ).fill(if self.playing { GREEN } else { ACCENT })
+                    );
+                    if btn.clicked() {
+                        self.playing = !self.playing;
+                        if self.playing {
+                            self.play_start_time = None;
                         }
-                        WorkspaceAction::SplitV(tab_tile_id, pane_type) => {
-                            Self::split_tile(
-                                &mut self.workspace.tree,
-                                tab_tile_id,
-                                pane_type,
-                                egui_tiles::LinearDir::Vertical,
-                            );
+                    }
+
+                    // Stop
+                    if ui.add_sized([36.0, 36.0], egui::Button::new(
+                        egui::RichText::new("⏹").size(18.0).color(egui::Color32::WHITE)
+                    ).fill(BG_SURFACE)).clicked() {
+                        self.playing = false;
+                        self.current_frame = 0;
+                        self.dirty = true;
+                    }
+
+                    ui.separator();
+
+                    // Frame display
+                    ui.colored_label(egui::Color32::WHITE, format!(
+                        "{:>4} / {}",
+                        self.current_frame, self.total_frames()
+                    ));
+
+                    // Time display
+                    ui.colored_label(TEXT_DIM, format!(
+                        "{:.2}s / {:.2}s",
+                        self.current_time(), self.duration()
+                    ));
+                });
+
+                // Seek slider
+                if self.total_frames() > 0 {
+                    let mut frame = self.current_frame as f64;
+                    let max = (self.total_frames() - 1) as f64;
+                    let response = ui.add(
+                        egui::Slider::new(&mut frame, 0.0..=max)
+                            .show_value(false)
+                            .step_by(1.0)
+                    );
+                    if response.changed() {
+                        self.current_frame = frame as usize;
+                        self.dirty = true;
+                        if self.playing {
+                            self.playing = false;
                         }
                     }
                 }
             });
+
+        // ── Viewport (central panel) ──
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if self.scene.is_none() {
+                ui.centered_and_justified(|ui| {
+                    ui.heading("No scene loaded.\n\nFile → Open to load a Frame JSON.");
+                });
+                return;
+            }
+
+            let scene = self.scene.as_ref().unwrap();
+            let w = scene.settings.width;
+            let h = scene.settings.height;
+
+            // Update viewport texture
+            if !self.pixels.is_empty() {
+                let image = egui::ColorImage::from_rgba_unmultiplied(
+                    [w as usize, h as usize],
+                    &self.pixels,
+                );
+
+                if let Some(tex) = &mut self.viewport_tex {
+                    tex.set(image, egui::TextureOptions::NEAREST);
+                } else {
+                    self.viewport_tex = Some(ctx.load_texture(
+                        "viewport",
+                        image,
+                        egui::TextureOptions::NEAREST,
+                    ));
+                }
+            }
+
+            // Draw viewport centered with aspect ratio preserved
+            if let Some(tex) = &self.viewport_tex {
+                let available = ui.available_size();
+                let aspect = w as f32 / h as f32;
+                let (draw_w, draw_h) = if available.x / available.y > aspect {
+                    (available.y * aspect, available.y)
+                } else {
+                    (available.x, available.x / aspect)
+                };
+
+                let offset_x = (available.x - draw_w) / 2.0;
+                let offset_y = (available.y - draw_h) / 2.0;
+
+                let rect = egui::Rect::from_min_size(
+                    ui.min_rect().min + egui::vec2(offset_x, offset_y),
+                    egui::vec2(draw_w, draw_h),
+                );
+
+                // Dark border around viewport
+                ui.painter().rect_filled(rect.expand(2.0), 0.0, egui::Color32::from_rgb(15, 15, 18));
+                ui.put(rect, egui::Image::new(egui::load::SizedTexture::new(
+                    tex.id(), egui::vec2(draw_w, draw_h)
+                )));
+            }
+        });
     }
 }
