@@ -101,6 +101,17 @@ impl ExportSettings {
     }
 }
 
+/// Active export state (non-blocking, one frame per update).
+struct ExportState {
+    ffmpeg: ifol_render_core::export::ffmpeg::FfmpegPipe,
+    current_frame: usize,
+    total_frames: usize,
+    start_time: std::time::Instant,
+    export_w: u32,
+    export_h: u32,
+    output_path: String,
+}
+
 /// Studio application state.
 pub struct StudioApp {
     scene: Option<SceneData>,
@@ -128,7 +139,8 @@ pub struct StudioApp {
     /// Export dialog.
     show_export_dialog: bool,
     export_settings: ExportSettings,
-    exporting: bool,
+    /// Active export (non-blocking, renders one frame per update).
+    export_state: Option<ExportState>,
 }
 
 impl StudioApp {
@@ -154,7 +166,7 @@ impl StudioApp {
             viewport_display_size: [640.0, 360.0],
             show_export_dialog: false,
             export_settings: ExportSettings::new(1920, 1080),
-            exporting: false,
+            export_state: None,
         };
 
         if let Some(path) = scene_path {
@@ -306,7 +318,7 @@ impl StudioApp {
         self.scene.as_ref().map(|s| (s.settings.width, s.settings.height)).unwrap_or((1280, 720))
     }
 
-    fn do_export(&mut self) {
+    fn start_export(&mut self) {
         let (Some(scene), Some(engine)) = (&self.scene, &mut self.engine)
         else { return; };
 
@@ -323,45 +335,116 @@ impl StudioApp {
             Some(es.ffmpeg_path.trim().to_string())
         };
 
-        let config = ifol_render_core::ExportConfig {
-            output_path: es.output_path.clone(),
-            codec: es.codec(),
-            pixel_format: es.pixel_format.clone(),
-            crf: es.crf,
-            fps: Some(scene.settings.fps),
-            width: Some(out_w),
-            height: Some(out_h),
-            ffmpeg_path,
-        };
-
-        self.exporting = true;
-        self.status = format!("Exporting {} frames → {} ...",
-            scene.frames.len(), es.output_path);
-
+        let codec = es.codec();
         let total = scene.frames.len();
-        match engine.export_video(&scene.frames, &config, |p| {
-            log::info!("Export: {:.0}% ({}/{})", p.percent(), p.current_frame, p.total_frames);
-        }) {
-            Ok(()) => {
-                self.status = format!("✅ Exported {} frames → {}", total, es.output_path);
+
+        match ifol_render_core::export::ffmpeg::FfmpegPipe::start(
+            out_w,
+            out_h,
+            scene.settings.fps,
+            &codec,
+            &es.pixel_format,
+            es.crf,
+            &es.output_path,
+            ffmpeg_path.as_deref(),
+        ) {
+            Ok(pipe) => {
+                self.export_state = Some(ExportState {
+                    ffmpeg: pipe,
+                    current_frame: 0,
+                    total_frames: total,
+                    start_time: std::time::Instant::now(),
+                    export_w: out_w,
+                    export_h: out_h,
+                    output_path: es.output_path.clone(),
+                });
+                self.playing = false;
+                self.status = format!("Exporting 0/{} frames → {} ...", total, es.output_path);
             }
             Err(e) => {
                 self.status = format!("❌ Export error: {}", e);
+                // Restore preview resolution
+                self.render_w = 0;
+                self.render_h = 0;
+                self.dirty = true;
             }
         }
+    }
 
-        // Restore preview resolution
+    fn cancel_export(&mut self) {
+        if let Some(mut state) = self.export_state.take() {
+            let _ = state.ffmpeg.finish();
+            self.status = format!("⚠️ Export cancelled at frame {}/{}", state.current_frame, state.total_frames);
+        }
         self.render_w = 0;
         self.render_h = 0;
-        self.exporting = false;
         self.dirty = true;
     }
 }
 
 impl eframe::App for StudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // ── Per-frame export processing (non-blocking) ──
+        if self.export_state.is_some() {
+            let mut finished = false;
+            let mut error = None;
+
+            if let (Some(state), Some(scene), Some(engine)) =
+                (&mut self.export_state, &self.scene, &mut self.engine)
+            {
+                if state.current_frame < state.total_frames {
+                    // Render one frame and pipe to FFmpeg
+                    let pixels = engine.render_frame(&scene.frames[state.current_frame]);
+                    if let Err(e) = state.ffmpeg.write_frame(&pixels) {
+                        error = Some(format!("FFmpeg write error: {}", e));
+                    } else {
+                        state.current_frame += 1;
+                        let elapsed = state.start_time.elapsed().as_secs_f64();
+                        let fps = if elapsed > 0.0 { state.current_frame as f64 / elapsed } else { 0.0 };
+                        let remaining = state.total_frames - state.current_frame;
+                        let eta = if fps > 0.0 { remaining as f64 / fps } else { 0.0 };
+                        let pct = state.current_frame as f64 / state.total_frames as f64 * 100.0;
+                        self.status = format!(
+                            "Exporting {}/{} ({:.0}%) | {:.1}s | ETA {:.1}s | {:.1} fps",
+                            state.current_frame, state.total_frames, pct, elapsed, eta, fps
+                        );
+                    }
+                }
+
+                if state.current_frame >= state.total_frames {
+                    finished = true;
+                }
+            }
+
+            if let Some(e) = error {
+                self.status = format!("❌ {}", e);
+                if let Some(mut state) = self.export_state.take() {
+                    let _ = state.ffmpeg.finish();
+                }
+                self.render_w = 0; self.render_h = 0; self.dirty = true;
+            } else if finished {
+                if let Some(mut state) = self.export_state.take() {
+                    match state.ffmpeg.finish() {
+                        Ok(()) => {
+                            let elapsed = state.start_time.elapsed().as_secs_f64();
+                            self.status = format!(
+                                "✅ Exported {} frames → {} ({:.1}s)",
+                                state.total_frames, state.output_path, elapsed
+                            );
+                        }
+                        Err(e) => {
+                            self.status = format!("❌ FFmpeg finalize error: {}", e);
+                        }
+                    }
+                }
+                self.render_w = 0; self.render_h = 0; self.dirty = true;
+            } else {
+                ctx.request_repaint(); // keep processing frames
+            }
+        }
+
         // ── Playback ──
-        if self.playing && self.scene.is_some() && !self.exporting {
+        if self.playing && self.scene.is_some() && self.export_state.is_none() {
             match self.playback_mode {
                 PlaybackMode::Realtime => {
                     // Jump to the correct frame based on wall-clock time
@@ -697,7 +780,7 @@ impl eframe::App for StudioApp {
         // Handle export after dialog is done rendering (avoids borrow issues)
         if start_export {
             self.show_export_dialog = false;
-            self.do_export();
+            self.start_export();
         }
         // ═══════════════ STATUS BAR ═══════════════
         egui::TopBottomPanel::bottom("status_bar")
@@ -835,17 +918,77 @@ impl eframe::App for StudioApp {
                 )));
             }
 
-            // Exporting overlay
-            if self.exporting {
+            // Export progress overlay
+            if let Some(state) = &self.export_state {
                 let rect = ui.max_rect();
-                ui.painter().rect_filled(rect, 0.0, egui::Color32::from_black_alpha(180));
+                // Dark overlay
+                ui.painter().rect_filled(rect, 0.0, egui::Color32::from_black_alpha(200));
+
+                let center = rect.center();
+                let pct = state.current_frame as f64 / state.total_frames.max(1) as f64;
+                let elapsed = state.start_time.elapsed().as_secs_f64();
+                let fps = if elapsed > 0.0 { state.current_frame as f64 / elapsed } else { 0.0 };
+                let remaining = state.total_frames - state.current_frame;
+                let eta = if fps > 0.0 { remaining as f64 / fps } else { 0.0 };
+
+                // Title
                 ui.painter().text(
-                    rect.center(),
+                    center + egui::vec2(0.0, -60.0),
                     egui::Align2::CENTER_CENTER,
                     "Exporting...",
-                    egui::FontId::proportional(32.0),
+                    egui::FontId::proportional(28.0),
                     egui::Color32::WHITE,
                 );
+
+                // Progress bar background
+                let bar_w = 360.0_f32;
+                let bar_h = 16.0_f32;
+                let bar_rect = egui::Rect::from_center_size(
+                    center + egui::vec2(0.0, -20.0),
+                    egui::vec2(bar_w, bar_h),
+                );
+                ui.painter().rect_filled(bar_rect, 4.0, BG_SURFACE);
+
+                // Progress bar fill
+                let fill_w = bar_w * pct as f32;
+                let fill_rect = egui::Rect::from_min_size(
+                    bar_rect.min,
+                    egui::vec2(fill_w, bar_h),
+                );
+                ui.painter().rect_filled(fill_rect, 4.0, ACCENT);
+
+                // Percent text on bar
+                ui.painter().text(
+                    bar_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    format!("{:.0}%", pct * 100.0),
+                    egui::FontId::proportional(11.0),
+                    egui::Color32::WHITE,
+                );
+
+                // Stats line
+                ui.painter().text(
+                    center + egui::vec2(0.0, 10.0),
+                    egui::Align2::CENTER_CENTER,
+                    format!(
+                        "{} / {} frames  |  {:.1}s elapsed  |  ETA {:.1}s  |  {:.1} fps",
+                        state.current_frame, state.total_frames, elapsed, eta, fps
+                    ),
+                    egui::FontId::proportional(13.0),
+                    TEXT_DIM,
+                );
+
+                // Cancel button
+                let cancel_rect = egui::Rect::from_center_size(
+                    center + egui::vec2(0.0, 45.0),
+                    egui::vec2(100.0, 30.0),
+                );
+                let cancel_resp = ui.put(cancel_rect, egui::Button::new(
+                    egui::RichText::new("Cancel").size(13.0).color(egui::Color32::WHITE)
+                ).fill(RED));
+                if cancel_resp.clicked() {
+                    self.cancel_export();
+                }
             }
         });
     }
