@@ -1,25 +1,54 @@
 //! # ifol-render-core
 //!
-//! Core module for the ifol-render engine. Provides:
-//! - **ECS**: Entity-Component-System architecture
-//! - **Components**: Transform, VideoSource, TextSource, Color, Timeline, Animation, etc.
-//! - **Systems**: Timeline, Animation, Transform, Sort processing
-//! - **Pipeline**: Full orchestration — ECS systems → DrawCommand build → GPU render
-//! - **Color Management**: sRGB, Linear, ACEScg, Rec709 color space conversions
-//! - **Datatypes**: Vec2, Vec3, Color4, Curve, TimeRange
+//! Thin render pipeline engine for 2D video composition.
 //!
-//! Core owns shader files and registers them into the render tool via
-//! `pipeline::setup_renderer()`. Consumers only need to import core.
+//! Core is a **stateless render machine**: receives flat frame data,
+//! renders via GPU, returns pixels. No ECS, no timeline, no animation.
+//!
+//! ## Architecture
+//!
+//! ```text
+//! Frontend (ECS, timeline, animation, camera)
+//!     ↓ Frame (flat pixel-based entities)
+//! Core (sort → pixel→clip → pack uniforms → GPU render)
+//!     ↓ DrawCommands
+//! Render (GPU execution → RGBA pixels)
+//! ```
+//!
+//! ## Usage
+//!
+//! ```rust,ignore
+//! use ifol_render_core::{CoreEngine, RenderSettings, Frame, FlatEntity};
+//!
+//! let mut engine = CoreEngine::new(RenderSettings::default());
+//! engine.setup_builtins();
+//!
+//! let frame = Frame { passes: vec![...], texture_updates: vec![] };
+//! let pixels = engine.render_frame(&frame);
+//! ```
 
 pub mod color;
-pub mod commands;
-pub mod ecs;
+pub mod draw;
+pub mod engine;
 pub mod export;
-pub mod scene;
+pub mod frame;
+pub mod shaders;
 pub mod text;
-pub mod time;
 pub mod types;
 
-// Re-export the Renderer so consumers can create and pass it to pipeline::render_frame()
-// without needing a direct dependency on the render crate.
-pub use ifol_render::{DrawCommand, EffectConfig, PipelineConfig, Renderer};
+// ── Legacy modules (for studio/frontend migration) ──
+// These modules contain the old ECS architecture.
+// They will be moved to studio/frontend in the next phase.
+// New consumers should use CoreEngine + Frame API instead.
+pub mod commands;
+pub mod ecs;
+pub mod scene;
+pub mod time;
+
+// ── Public re-exports (NEW API) ──
+pub use engine::CoreEngine;
+pub use export::{ExportConfig, ExportProgress, VideoCodec};
+pub use frame::{FlatEntity, Frame, PassType, RenderPass, RenderSettings, TextureUpdate};
+
+// Re-export render types for consumers that need them
+pub use ifol_render::{DrawCommand, EffectConfig, GpuCapabilities, PipelineConfig, Renderer};

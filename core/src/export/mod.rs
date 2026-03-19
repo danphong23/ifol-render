@@ -1,14 +1,9 @@
-//! Export pipeline — render scenes to video/image files.
+//! Export pipeline — render frames to video/image files.
 //!
-//! This module provides FFmpeg-based video export, image sequence export,
-//! and progress reporting for both CLI and GUI consumers.
+//! Uses FFmpeg for video encoding.
+//! Receives pre-computed frames (no ECS, no timeline logic).
 
 pub mod ffmpeg;
-
-use crate::Renderer;
-use crate::ecs::World;
-use crate::scene::RenderSettings;
-use crate::time::TimeState;
 
 /// Export configuration.
 #[derive(Debug, Clone)]
@@ -21,11 +16,11 @@ pub struct ExportConfig {
     pub pixel_format: String,
     /// Constant Rate Factor (quality). Lower = better. Typical: 18–28.
     pub crf: u32,
-    /// Override FPS (uses scene FPS if None).
+    /// FPS for the output video.
     pub fps: Option<f64>,
-    /// Override width (uses scene width if None).
+    /// Override width (uses engine width if None).
     pub width: Option<u32>,
-    /// Override height (uses scene height if None).
+    /// Override height (uses engine height if None).
     pub height: Option<u32>,
     /// Path to the FFmpeg binary. If None, searches system PATH.
     pub ffmpeg_path: Option<String>,
@@ -114,15 +109,16 @@ impl ExportProgress {
     }
 }
 
-/// Export a scene to video using FFmpeg.
-///
-/// The `on_progress` callback is called for each frame to report progress.
-/// Returns `Ok(())` on success or an error message.
+// ── Legacy export function (for studio migration) ──
+// This uses the old ECS pipeline. New code should use CoreEngine::export_video().
+
+/// Legacy: Export a scene to video using the old ECS pipeline.
+/// Will be removed when studio migrates to CoreEngine.
 pub fn export_video(
-    world: &mut World,
-    settings: &RenderSettings,
+    world: &mut crate::ecs::World,
+    settings: &crate::scene::RenderSettings,
     config: &ExportConfig,
-    renderer: &mut Renderer,
+    renderer: &mut crate::Renderer,
     mut on_progress: impl FnMut(ExportProgress),
 ) -> Result<(), String> {
     let fps = config.fps.unwrap_or(settings.fps);
@@ -134,8 +130,7 @@ pub fn export_video(
         return Err("Scene duration is 0.".into());
     }
 
-    // Start FFmpeg process
-    let mut ffmpeg = ffmpeg::FfmpegPipe::start(
+    let mut ffmpeg_pipe = ffmpeg::FfmpegPipe::start(
         width,
         height,
         fps,
@@ -146,18 +141,15 @@ pub fn export_video(
         config.ffmpeg_path.as_deref(),
     )?;
 
-    let mut time = TimeState::new(fps);
+    let mut time = crate::time::TimeState::new(fps);
     let start = std::time::Instant::now();
 
     for frame in 0..total_frames {
         time.seek(frame as f64 / fps);
 
         let pixels = crate::ecs::pipeline::render_frame(world, &time, settings, renderer);
+        ffmpeg_pipe.write_frame(&pixels)?;
 
-        // Write RGBA pixels to FFmpeg stdin
-        ffmpeg.write_frame(&pixels)?;
-
-        // Report progress
         let elapsed = start.elapsed().as_secs_f64();
         let export_fps = if elapsed > 0.0 {
             (frame + 1) as f64 / elapsed
@@ -179,25 +171,5 @@ pub fn export_video(
         });
     }
 
-    // Close FFmpeg and wait for it to finish
-    ffmpeg.finish()?;
-
-    Ok(())
-}
-
-/// Export a single frame as a PNG image.
-pub fn export_frame(
-    world: &mut World,
-    settings: &RenderSettings,
-    renderer: &mut Renderer,
-    timestamp: f64,
-    output_path: &str,
-) -> Result<(), String> {
-    let mut time = TimeState::new(settings.fps);
-    time.seek(timestamp);
-
-    let pixels = crate::ecs::pipeline::render_frame(world, &time, settings, renderer);
-
-    Renderer::save_png(&pixels, settings.width, settings.height, output_path)
-        .map_err(|e| format!("Failed to save PNG: {e}"))
+    ffmpeg_pipe.finish()
 }
