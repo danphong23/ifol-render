@@ -22,9 +22,7 @@ fn main() {
     eframe::run_native(
         "ifol-render Studio",
         options,
-        Box::new(move |cc| {
-            Ok(Box::new(app::StudioApp::new(cc, scene_path)))
-        }),
+        Box::new(move |cc| Ok(Box::new(app::StudioApp::new(cc, scene_path)))),
     )
     .expect("Failed to start Studio");
 }

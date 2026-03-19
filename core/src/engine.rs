@@ -8,8 +8,10 @@ use crate::export::ffmpeg::FfmpegPipe;
 use crate::export::{ExportConfig, ExportProgress};
 use crate::frame::{Frame, PassType, RenderSettings, TextureUpdate};
 use crate::shaders;
-use crate::text;
+use crate::text::{self, TextOptions};
+use crate::video;
 use ifol_render::{DrawCommand, GpuCapabilities, PipelineConfig, Renderer};
+use std::collections::HashMap;
 
 /// The core rendering engine.
 ///
@@ -18,6 +20,10 @@ use ifol_render::{DrawCommand, GpuCapabilities, PipelineConfig, Renderer};
 pub struct CoreEngine {
     renderer: Renderer,
     settings: RenderSettings,
+    /// Cached font data (key → raw font bytes).
+    font_cache: HashMap<String, Vec<u8>>,
+    /// Cached video metadata (path → VideoInfo).
+    video_info_cache: HashMap<String, video::VideoInfo>,
 }
 
 impl CoreEngine {
@@ -26,7 +32,12 @@ impl CoreEngine {
     /// Initializes the GPU (headless), allocates buffers.
     pub fn new(settings: RenderSettings) -> Self {
         let renderer = Renderer::new(settings.width, settings.height);
-        Self { renderer, settings }
+        Self {
+            renderer,
+            settings,
+            font_cache: HashMap::new(),
+            video_info_cache: HashMap::new(),
+        }
     }
 
     /// Register all built-in shaders (composite, shapes, effects, ...).
@@ -83,19 +94,60 @@ impl CoreEngine {
         self.renderer.load_rgba(key, data, width, height);
     }
 
-    /// Rasterize text to a texture using the built-in font.
-    /// Returns pixel dimensions [width, height].
+    /// Rasterize text to a texture with full layout options.
+    ///
+    /// Supports custom fonts, multi-line, word wrap, alignment.
     pub fn rasterize_text(
         &mut self,
         key: &str,
         content: &str,
-        font_size: f32,
-        color: [f32; 4],
+        opts: &TextOptions,
+        font_key: Option<&str>,
     ) -> Result<[u32; 2], String> {
-        let font_data = text::default_font_data();
-        let (pixels, tw, th) = text::rasterize_text(content, font_data, font_size, color)?;
+        let font_data = match font_key {
+            Some(fk) => self
+                .font_cache
+                .get(fk)
+                .map(|v| v.as_slice())
+                .ok_or_else(|| format!("Font '{}' not loaded", fk))?,
+            None => text::default_font_data(),
+        };
+        let (pixels, tw, th) = text::rasterize_text(content, font_data, opts)?;
         self.renderer.load_rgba(key, &pixels, tw, th);
         Ok([tw, th])
+    }
+
+    /// Load a font file into the font cache.
+    pub fn load_font(&mut self, key: &str, path: &str) -> Result<(), String> {
+        if !self.font_cache.contains_key(key) {
+            let data = std::fs::read(path)
+                .map_err(|e| format!("Failed to load font '{}': {}", path, e))?;
+            self.font_cache.insert(key.to_string(), data);
+        }
+        Ok(())
+    }
+
+    /// Decode a single video frame and upload as texture.
+    pub fn decode_video_frame(
+        &mut self,
+        key: &str,
+        path: &str,
+        timestamp_secs: f64,
+        width: Option<u32>,
+        height: Option<u32>,
+    ) -> Result<[u32; 2], String> {
+        let (pixels, w, h) = video::decode_frame(path, timestamp_secs, width, height, None)?;
+        self.renderer.load_rgba(key, &pixels, w, h);
+        Ok([w, h])
+    }
+
+    /// Get cached video info, probing if not yet cached.
+    pub fn video_info(&mut self, path: &str) -> Result<&video::VideoInfo, String> {
+        if !self.video_info_cache.contains_key(path) {
+            let info = video::probe(path, None)?;
+            self.video_info_cache.insert(path.to_string(), info);
+        }
+        Ok(&self.video_info_cache[path])
     }
 
     /// Check if a texture is in cache.
@@ -139,8 +191,11 @@ impl CoreEngine {
                     draw::sort_entities(&mut sorted);
 
                     // Build draw commands (pixel→clip + pack uniforms)
-                    let commands =
-                        draw::build_draw_commands(&sorted, self.settings.width, self.settings.height);
+                    let commands = draw::build_draw_commands(
+                        &sorted,
+                        self.settings.width,
+                        self.settings.height,
+                    );
 
                     // Render to pixels
                     let pixels = self.renderer.render_frame(&commands);
@@ -278,10 +333,10 @@ impl CoreEngine {
         for update in updates {
             match update {
                 TextureUpdate::LoadImage { key, path } => {
-                    if !self.renderer.has_texture(key) {
-                        if let Err(e) = self.renderer.load_image(key, path) {
-                            log::warn!("Failed to load image '{}': {}", path, e);
-                        }
+                    if !self.renderer.has_texture(key)
+                        && let Err(e) = self.renderer.load_image(key, path)
+                    {
+                        log::warn!("Failed to load image '{}': {}", path, e);
                     }
                 }
                 TextureUpdate::UploadRgba {
@@ -292,14 +347,43 @@ impl CoreEngine {
                 } => {
                     self.renderer.load_rgba(key, data, *width, *height);
                 }
+                TextureUpdate::LoadFont { key, path } => {
+                    if let Err(e) = self.load_font(key, path) {
+                        log::warn!("Failed to load font: {}", e);
+                    }
+                }
                 TextureUpdate::RasterizeText {
                     key,
                     content,
                     font_size,
                     color,
+                    font_key,
+                    max_width,
+                    line_height,
+                    alignment,
                 } => {
-                    if let Err(e) = self.rasterize_text(key, content, *font_size, *color) {
+                    let opts = TextOptions {
+                        font_size: *font_size,
+                        color: *color,
+                        max_width: *max_width,
+                        line_height: line_height.unwrap_or(1.2),
+                        alignment: *alignment,
+                    };
+                    if let Err(e) = self.rasterize_text(key, content, &opts, font_key.as_deref()) {
                         log::warn!("Failed to rasterize text: {}", e);
+                    }
+                }
+                TextureUpdate::DecodeVideoFrame {
+                    key,
+                    path,
+                    timestamp_secs,
+                    width,
+                    height,
+                } => {
+                    if let Err(e) =
+                        self.decode_video_frame(key, path, *timestamp_secs, *width, *height)
+                    {
+                        log::warn!("Failed to decode video frame: {}", e);
                     }
                 }
                 TextureUpdate::Evict { key } => {

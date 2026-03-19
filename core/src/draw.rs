@@ -49,10 +49,22 @@ fn pixel_to_clip_matrix(entity: &FlatEntity, out_w: f32, out_h: f32) -> [f32; 16
     if entity.rotation.abs() < 1e-6 {
         // No rotation — simple axis-aligned matrix
         [
-            sx * 2.0, 0.0, 0.0, 0.0, // column 0
-            0.0, sy * 2.0, 0.0, 0.0, // column 1
-            0.0, 0.0, 1.0, 0.0, // column 2
-            px, py, 0.0, 1.0, // column 3 (translation)
+            sx * 2.0,
+            0.0,
+            0.0,
+            0.0, // column 0
+            0.0,
+            sy * 2.0,
+            0.0,
+            0.0, // column 1
+            0.0,
+            0.0,
+            1.0,
+            0.0, // column 2
+            px,
+            py,
+            0.0,
+            1.0, // column 3 (translation)
         ]
     } else {
         let cos = entity.rotation.cos();
@@ -64,10 +76,22 @@ fn pixel_to_clip_matrix(entity: &FlatEntity, out_w: f32, out_h: f32) -> [f32; 16
         let sy2 = sy * 2.0;
 
         [
-            sx2 * cos,  sx2 * sin,  0.0, 0.0, // column 0
-            -sy2 * sin, sy2 * cos,  0.0, 0.0, // column 1
-            0.0,        0.0,        1.0, 0.0, // column 2
-            px,         py,         0.0, 1.0, // column 3
+            sx2 * cos,
+            sx2 * sin,
+            0.0,
+            0.0, // column 0
+            -sy2 * sin,
+            sy2 * cos,
+            0.0,
+            0.0, // column 1
+            0.0,
+            0.0,
+            1.0,
+            0.0, // column 2
+            px,
+            py,
+            0.0,
+            1.0, // column 3
         ]
     }
 }
@@ -75,9 +99,11 @@ fn pixel_to_clip_matrix(entity: &FlatEntity, out_w: f32, out_h: f32) -> [f32; 16
 /// Sort entities by (layer ascending, z_index ascending).
 pub fn sort_entities(entities: &mut [FlatEntity]) {
     entities.sort_by(|a, b| {
-        a.layer
-            .cmp(&b.layer)
-            .then(a.z_index.partial_cmp(&b.z_index).unwrap_or(std::cmp::Ordering::Equal))
+        a.layer.cmp(&b.layer).then(
+            a.z_index
+                .partial_cmp(&b.z_index)
+                .unwrap_or(std::cmp::Ordering::Equal),
+        )
     });
 }
 
@@ -85,22 +111,14 @@ pub fn sort_entities(entities: &mut [FlatEntity]) {
 ///
 /// Each entity becomes one DrawCommand for the composite shader.
 /// Output width/height needed for pixel→clip conversion.
-pub fn build_draw_commands(
-    entities: &[FlatEntity],
-    out_w: u32,
-    out_h: u32,
-) -> Vec<DrawCommand> {
+pub fn build_draw_commands(entities: &[FlatEntity], out_w: u32, out_h: u32) -> Vec<DrawCommand> {
     let w = out_w as f32;
     let h = out_h as f32;
     let mut commands = Vec::with_capacity(entities.len());
 
     for entity in entities {
         let transform = pixel_to_clip_matrix(entity, w, h);
-        let use_texture = if entity.textures.is_empty() {
-            0.0
-        } else {
-            1.0
-        };
+        let use_texture = if entity.textures.is_empty() { 0.0 } else { 1.0 };
 
         let mut uniforms = Vec::with_capacity(COMPOSITE_UNIFORM_FLOATS);
         uniforms.extend_from_slice(&transform); // 16

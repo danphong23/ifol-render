@@ -182,15 +182,51 @@ pub enum TextureUpdate {
         width: u32,
         height: u32,
     },
+    /// Load a font file into the font cache. Cached by key.
+    LoadFont { key: String, path: String },
     /// Rasterize text to a texture. Core handles font rendering.
     RasterizeText {
         key: String,
         content: String,
         font_size: f32,
         color: [f32; 4],
+        /// Font cache key (from LoadFont). None = built-in default.
+        #[serde(default)]
+        font_key: Option<String>,
+        /// Max width in pixels for word wrapping. None = no wrap.
+        #[serde(default)]
+        max_width: Option<f32>,
+        /// Line height multiplier (1.0 = default spacing).
+        #[serde(default)]
+        line_height: Option<f32>,
+        /// Text alignment: 0 = left (default), 1 = center, 2 = right.
+        #[serde(default)]
+        alignment: u32,
+    },
+    /// Decode a single video frame to texture via FFmpeg.
+    DecodeVideoFrame {
+        /// Texture cache key for the decoded frame.
+        key: String,
+        /// Path to video file.
+        path: String,
+        /// Timestamp in seconds to extract.
+        timestamp_secs: f64,
+        /// Optional output width (None = native video width).
+        #[serde(default)]
+        width: Option<u32>,
+        /// Optional output height (None = native video height).
+        #[serde(default)]
+        height: Option<u32>,
     },
     /// Remove a texture from cache.
     Evict { key: String },
+}
+
+/// Text alignment constants.
+pub mod text_align {
+    pub const LEFT: u32 = 0;
+    pub const CENTER: u32 = 1;
+    pub const RIGHT: u32 = 2;
 }
 
 // ══════════════════════════════════════

@@ -35,11 +35,13 @@ pub mod frame;
 pub mod shaders;
 pub mod text;
 pub mod types;
+pub mod video;
 
 // ── Public re-exports ──
 pub use engine::CoreEngine;
 pub use export::{ExportConfig, ExportProgress, VideoCodec};
 pub use frame::{FlatEntity, Frame, PassType, RenderPass, RenderSettings, TextureUpdate};
+pub use video::VideoInfo;
 
 // Re-export render types for consumers
 pub use ifol_render::{DrawCommand, EffectConfig, GpuCapabilities, PipelineConfig, Renderer};

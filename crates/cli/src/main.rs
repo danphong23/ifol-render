@@ -58,35 +58,46 @@ fn main() {
             println!("Frame render: {:?} → {:?}", frame, output);
 
             // Read JSON
-            let json = std::fs::read_to_string(&frame)
-                .unwrap_or_else(|e| { eprintln!("Failed to read {:?}: {}", frame, e); std::process::exit(1); });
+            let json = std::fs::read_to_string(&frame).unwrap_or_else(|e| {
+                eprintln!("Failed to read {:?}: {}", frame, e);
+                std::process::exit(1);
+            });
 
             // Parse Frame JSON format: { "settings": {...}, "frame": {...} }
-            let doc: serde_json::Value = serde_json::from_str(&json)
-                .unwrap_or_else(|e| { eprintln!("Invalid JSON: {}", e); std::process::exit(1); });
+            let doc: serde_json::Value = serde_json::from_str(&json).unwrap_or_else(|e| {
+                eprintln!("Invalid JSON: {}", e);
+                std::process::exit(1);
+            });
 
             let settings: ifol_render_core::RenderSettings = if let Some(s) = doc.get("settings") {
-                serde_json::from_value(s.clone())
-                    .unwrap_or_else(|e| { eprintln!("Invalid settings: {}", e); std::process::exit(1); })
+                serde_json::from_value(s.clone()).unwrap_or_else(|e| {
+                    eprintln!("Invalid settings: {}", e);
+                    std::process::exit(1);
+                })
             } else {
                 ifol_render_core::RenderSettings::default()
             };
 
             let frame_data: ifol_render_core::Frame = if let Some(f) = doc.get("frame") {
-                serde_json::from_value(f.clone())
-                    .unwrap_or_else(|e| { eprintln!("Invalid frame data: {}", e); std::process::exit(1); })
+                serde_json::from_value(f.clone()).unwrap_or_else(|e| {
+                    eprintln!("Invalid frame data: {}", e);
+                    std::process::exit(1);
+                })
             } else {
-                eprintln!("Missing 'frame' key in JSON"); std::process::exit(1);
+                eprintln!("Missing 'frame' key in JSON");
+                std::process::exit(1);
             };
 
             println!("Settings: {}x{}", settings.width, settings.height);
             let pass_count = frame_data.passes.len();
-            let entity_count: usize = frame_data.passes.iter().map(|p| {
-                match &p.pass_type {
+            let entity_count: usize = frame_data
+                .passes
+                .iter()
+                .map(|p| match &p.pass_type {
                     ifol_render_core::PassType::Entities { entities, .. } => entities.len(),
                     _ => 0,
-                }
-            }).sum();
+                })
+                .sum();
             println!("Passes: {}, Entities: {}", pass_count, entity_count);
 
             // Create CoreEngine
@@ -109,7 +120,8 @@ fn main() {
                 engine.settings().width,
                 engine.settings().height,
                 out_path,
-            ).expect("Failed to save PNG");
+            )
+            .expect("Failed to save PNG");
             println!("Saved: {}", out_path);
         }
         Commands::RenderTest {
@@ -227,8 +239,12 @@ fn main() {
                     let mut y_offset = 80.0f32;
                     for (i, (text, size, color)) in texts.iter().enumerate() {
                         let key = format!("text_{}", i);
-                        match ifol_render_core::text::rasterize_text(text, font_data, *size, *color)
-                        {
+                        let opts = ifol_render_core::text::TextOptions {
+                            font_size: *size,
+                            color: *color,
+                            ..Default::default()
+                        };
+                        match ifol_render_core::text::rasterize_text(text, font_data, &opts) {
                             Ok((pixels, tw, th)) => {
                                 renderer.load_rgba(&key, &pixels, tw, th);
                                 // Draw as textured quad centered horizontally
@@ -346,8 +362,6 @@ fn main() {
         }
     }
 }
-
-
 
 /// Build a composite DrawCommand with the standard uniform layout.
 /// Layout: [transform: f32x16, color: f32x4, opacity: f32, use_texture: f32, blend_mode: f32, _pad: f32]

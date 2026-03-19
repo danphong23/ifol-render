@@ -186,23 +186,33 @@ impl StudioApp {
     fn load_scene(&mut self, path: &PathBuf) {
         let json = match std::fs::read_to_string(path) {
             Ok(s) => s,
-            Err(e) => { self.status = format!("❌ Read error: {}", e); return; }
+            Err(e) => {
+                self.status = format!("❌ Read error: {}", e);
+                return;
+            }
         };
         let doc: serde_json::Value = match serde_json::from_str(&json) {
             Ok(v) => v,
-            Err(e) => { self.status = format!("❌ JSON error: {}", e); return; }
+            Err(e) => {
+                self.status = format!("❌ JSON error: {}", e);
+                return;
+            }
         };
 
-        let settings: RenderSettings = doc.get("settings")
+        let settings: RenderSettings = doc
+            .get("settings")
             .and_then(|s| serde_json::from_value(s.clone()).ok())
             .unwrap_or_default();
 
         let frames: Vec<Frame> = if let Some(arr) = doc.get("frames") {
             serde_json::from_value(arr.clone()).unwrap_or_default()
         } else if let Some(f) = doc.get("frame") {
-            serde_json::from_value(f.clone()).map(|v| vec![v]).unwrap_or_default()
+            serde_json::from_value(f.clone())
+                .map(|v| vec![v])
+                .unwrap_or_default()
         } else {
-            self.status = "❌ Missing 'frames' key".into(); return;
+            self.status = "❌ Missing 'frames' key".into();
+            return;
         };
 
         let total = frames.len();
@@ -215,8 +225,12 @@ impl StudioApp {
         self.playing = false;
         self.dirty = true;
         self.scene_path = Some(path.clone());
-        self.status = format!("✅ {} frames, {:.1}s @ {:.0}fps",
-            total, total as f64 / self.fps(), self.fps());
+        self.status = format!(
+            "✅ {} frames, {:.1}s @ {:.0}fps",
+            total,
+            total as f64 / self.fps(),
+            self.fps()
+        );
     }
 
     /// Compute preview render dimensions based on scale mode.
@@ -251,7 +265,9 @@ impl StudioApp {
         let (out_w, out_h) = self.output_size();
 
         if let (Some(scene), Some(engine)) = (&self.scene, &mut self.engine) {
-            if self.current_frame >= scene.frames.len() { return; }
+            if self.current_frame >= scene.frames.len() {
+                return;
+            }
 
             // Resize if needed
             if rw != self.render_w || rh != self.render_h {
@@ -284,28 +300,32 @@ impl StudioApp {
         let sx = sx as f32;
         let sy = sy as f32;
         Frame {
-            passes: frame.passes.iter().map(|pass| {
-                ifol_render_core::RenderPass {
+            passes: frame
+                .passes
+                .iter()
+                .map(|pass| ifol_render_core::RenderPass {
                     output: pass.output.clone(),
                     pass_type: match &pass.pass_type {
-                        PassType::Entities { clear_color, entities } => {
-                            PassType::Entities {
-                                clear_color: *clear_color,
-                                entities: entities.iter().map(|e| {
-                                    ifol_render_core::FlatEntity {
-                                        x: e.x * sx,
-                                        y: e.y * sy,
-                                        width: e.width * sx,
-                                        height: e.height * sy,
-                                        ..e.clone()
-                                    }
-                                }).collect(),
-                            }
-                        }
+                        PassType::Entities {
+                            clear_color,
+                            entities,
+                        } => PassType::Entities {
+                            clear_color: *clear_color,
+                            entities: entities
+                                .iter()
+                                .map(|e| ifol_render_core::FlatEntity {
+                                    x: e.x * sx,
+                                    y: e.y * sy,
+                                    width: e.width * sx,
+                                    height: e.height * sy,
+                                    ..e.clone()
+                                })
+                                .collect(),
+                        },
                         other => other.clone(),
                     },
-                }
-            }).collect(),
+                })
+                .collect(),
             texture_updates: frame.texture_updates.clone(),
         }
     }
@@ -323,15 +343,28 @@ impl StudioApp {
         self.total_frames() as f64 / self.fps()
     }
     fn output_size(&self) -> (u32, u32) {
-        self.scene.as_ref().map(|s| (s.settings.width, s.settings.height)).unwrap_or((1280, 720))
+        self.scene
+            .as_ref()
+            .map(|s| (s.settings.width, s.settings.height))
+            .unwrap_or((1280, 720))
     }
 
     fn start_export(&mut self) {
-        let Some(scene) = &self.scene else { return; };
+        let Some(scene) = &self.scene else {
+            return;
+        };
 
         let es = &self.export_settings;
-        let out_w = if es.use_custom_resolution { es.export_width } else { scene.settings.width };
-        let out_h = if es.use_custom_resolution { es.export_height } else { scene.settings.height };
+        let out_w = if es.use_custom_resolution {
+            es.export_width
+        } else {
+            scene.settings.width
+        };
+        let out_h = if es.use_custom_resolution {
+            es.export_height
+        } else {
+            scene.settings.height
+        };
 
         let ffmpeg_path = if es.ffmpeg_path.trim().is_empty() {
             None
@@ -362,10 +395,12 @@ impl StudioApp {
         let out_path = output_path.clone();
 
         // Create settings for the export engine
-        let mut settings = RenderSettings::default();
-        settings.width = out_w;
-        settings.height = out_h;
-        settings.fps = fps;
+        let settings = RenderSettings {
+            width: out_w,
+            height: out_h,
+            fps,
+            ..Default::default()
+        };
 
         let handle = std::thread::spawn(move || {
             // Create a dedicated CoreEngine for export (own GPU context)
@@ -374,8 +409,14 @@ impl StudioApp {
 
             // Start FFmpeg
             let mut ffmpeg = match ifol_render_core::export::ffmpeg::FfmpegPipe::start(
-                out_w, out_h, fps, &codec, &pixel_format, crf,
-                &out_path, ffmpeg_path.as_deref(),
+                out_w,
+                out_h,
+                fps,
+                &codec,
+                &pixel_format,
+                crf,
+                &out_path,
+                ffmpeg_path.as_deref(),
             ) {
                 Ok(pipe) => pipe,
                 Err(err) => {
@@ -400,10 +441,10 @@ impl StudioApp {
             }
 
             // Finalize FFmpeg
-            if e.lock().unwrap().is_none() {
-                if let Err(err) = ffmpeg.finish() {
-                    *e.lock().unwrap() = Some(format!("FFmpeg finalize: {}", err));
-                }
+            if e.lock().unwrap().is_none()
+                && let Err(err) = ffmpeg.finish()
+            {
+                *e.lock().unwrap() = Some(format!("FFmpeg finalize: {}", err));
             }
 
             d.store(true, Ordering::Release);
@@ -438,9 +479,17 @@ impl eframe::App for StudioApp {
             let is_done = state.done.load(Ordering::Relaxed);
 
             let elapsed = state.start_time.elapsed().as_secs_f64();
-            let fps = if elapsed > 0.0 { current as f64 / elapsed } else { 0.0 };
+            let fps = if elapsed > 0.0 {
+                current as f64 / elapsed
+            } else {
+                0.0
+            };
             let remaining = state.total_frames.saturating_sub(current);
-            let eta = if fps > 0.0 { remaining as f64 / fps } else { 0.0 };
+            let eta = if fps > 0.0 {
+                remaining as f64 / fps
+            } else {
+                0.0
+            };
             let pct = current as f64 / state.total_frames.max(1) as f64 * 100.0;
             self.status = format!(
                 "Exporting {}/{} ({:.0}%) | {:.1}s | ETA {:.1}s | {:.1} fps",
@@ -454,10 +503,10 @@ impl eframe::App for StudioApp {
                 let elapsed_final = elapsed;
 
                 // Join the thread
-                if let Some(mut state) = self.export_state.take() {
-                    if let Some(handle) = state.handle.take() {
-                        let _ = handle.join();
-                    }
+                if let Some(mut state) = self.export_state.take()
+                    && let Some(handle) = state.handle.take()
+                {
+                    let _ = handle.join();
                 }
 
                 if let Some(e) = error {
@@ -539,20 +588,20 @@ impl eframe::App for StudioApp {
                     self.smooth_last_render = None;
                 }
             }
-            if i.key_pressed(egui::Key::ArrowRight) && !self.playing {
-                if self.current_frame + 1 < self.total_frames() {
-                    self.current_frame += 1;
-                    self.dirty = true;
-                }
+            if i.key_pressed(egui::Key::ArrowRight)
+                && !self.playing
+                && self.current_frame + 1 < self.total_frames()
+            {
+                self.current_frame += 1;
+                self.dirty = true;
             }
-            if i.key_pressed(egui::Key::ArrowLeft) && !self.playing {
-                if self.current_frame > 0 {
-                    self.current_frame -= 1;
-                    self.dirty = true;
-                }
+            if i.key_pressed(egui::Key::ArrowLeft) && !self.playing && self.current_frame > 0 {
+                self.current_frame -= 1;
+                self.dirty = true;
             }
             if i.key_pressed(egui::Key::Home) {
-                self.current_frame = 0; self.dirty = true;
+                self.current_frame = 0;
+                self.dirty = true;
             }
             if i.key_pressed(egui::Key::End) {
                 self.current_frame = self.total_frames().saturating_sub(1);
@@ -595,18 +644,19 @@ impl eframe::App for StudioApp {
                             .add_filter("PNG", &["png"])
                             .set_file_name("frame.png")
                             .save_file()
+                            && let (Some(scene), Some(engine)) = (&self.scene, &mut self.engine)
                         {
-                            if let (Some(scene), Some(engine)) = (&self.scene, &mut self.engine) {
-                                // Export at full resolution
-                                let (ow, oh) = (scene.settings.width, scene.settings.height);
-                                engine.resize(ow, oh);
-                                let pixels = engine.render_frame(&scene.frames[self.current_frame]);
-                                match CoreEngine::save_png(&pixels, ow, oh, path.to_str().unwrap()) {
-                                    Ok(()) => self.status = format!("✅ Saved: {:?}", path),
-                                    Err(e) => self.status = format!("❌ {}", e),
-                                }
-                                self.render_w = 0; self.render_h = 0; self.dirty = true;
+                            // Export at full resolution
+                            let (ow, oh) = (scene.settings.width, scene.settings.height);
+                            engine.resize(ow, oh);
+                            let pixels = engine.render_frame(&scene.frames[self.current_frame]);
+                            match CoreEngine::save_png(&pixels, ow, oh, path.to_str().unwrap()) {
+                                Ok(()) => self.status = format!("✅ Saved: {:?}", path),
+                                Err(e) => self.status = format!("❌ {}", e),
                             }
+                            self.render_w = 0;
+                            self.render_h = 0;
+                            self.dirty = true;
                         }
                         ui.close_menu();
                     }
@@ -614,9 +664,8 @@ impl eframe::App for StudioApp {
                         ui.close_menu();
                         // Initialize export settings from scene
                         if let Some(scene) = &self.scene {
-                            self.export_settings = ExportSettings::new(
-                                scene.settings.width, scene.settings.height
-                            );
+                            self.export_settings =
+                                ExportSettings::new(scene.settings.width, scene.settings.height);
                         }
                         self.show_export_dialog = true;
                     }
@@ -626,12 +675,26 @@ impl eframe::App for StudioApp {
 
                 // Playback mode selector
                 ui.label("Mode:");
-                let rt_label = if self.playback_mode == PlaybackMode::Realtime { "⏩ Realtime ✓" } else { "⏩ Realtime" };
-                if ui.selectable_label(self.playback_mode == PlaybackMode::Realtime, rt_label).clicked() {
+                let rt_label = if self.playback_mode == PlaybackMode::Realtime {
+                    "⏩ Realtime ✓"
+                } else {
+                    "⏩ Realtime"
+                };
+                if ui
+                    .selectable_label(self.playback_mode == PlaybackMode::Realtime, rt_label)
+                    .clicked()
+                {
                     self.playback_mode = PlaybackMode::Realtime;
                 }
-                let sm_label = if self.playback_mode == PlaybackMode::Smooth { "🎞 Smooth ✓" } else { "🎞 Smooth" };
-                if ui.selectable_label(self.playback_mode == PlaybackMode::Smooth, sm_label).clicked() {
+                let sm_label = if self.playback_mode == PlaybackMode::Smooth {
+                    "🎞 Smooth ✓"
+                } else {
+                    "🎞 Smooth"
+                };
+                if ui
+                    .selectable_label(self.playback_mode == PlaybackMode::Smooth, sm_label)
+                    .clicked()
+                {
                     self.playback_mode = PlaybackMode::Smooth;
                 }
 
@@ -639,16 +702,29 @@ impl eframe::App for StudioApp {
 
                 // Preview resolution
                 ui.menu_button(format!("Res: {}", self.preview_scale.label()), |ui| {
-                    if ui.selectable_label(self.preview_scale == PreviewScale::Auto, "Auto (viewport)").clicked() {
+                    if ui
+                        .selectable_label(
+                            self.preview_scale == PreviewScale::Auto,
+                            "Auto (viewport)",
+                        )
+                        .clicked()
+                    {
                         self.preview_scale = PreviewScale::Auto;
-                        self.render_w = 0; self.render_h = 0; self.dirty = true;
+                        self.render_w = 0;
+                        self.render_h = 0;
+                        self.dirty = true;
                         ui.close_menu();
                     }
                     for pct in [25, 50, 75, 100] {
                         let ps = PreviewScale::Percent(pct);
-                        if ui.selectable_label(self.preview_scale == ps, format!("{}%", pct)).clicked() {
+                        if ui
+                            .selectable_label(self.preview_scale == ps, format!("{}%", pct))
+                            .clicked()
+                        {
                             self.preview_scale = ps;
-                            self.render_w = 0; self.render_h = 0; self.dirty = true;
+                            self.render_w = 0;
+                            self.render_h = 0;
+                            self.dirty = true;
                             ui.close_menu();
                         }
                     }
@@ -659,11 +735,18 @@ impl eframe::App for StudioApp {
                 // Scene info
                 if let Some(scene) = &self.scene {
                     let (ow, oh) = (scene.settings.width, scene.settings.height);
-                    ui.colored_label(TEXT_DIM, format!(
-                        "Output: {}×{} | Preview: {}×{} | {:.0}fps | {:.1}s",
-                        ow, oh, self.render_w, self.render_h,
-                        scene.settings.fps, self.duration()
-                    ));
+                    ui.colored_label(
+                        TEXT_DIM,
+                        format!(
+                            "Output: {}×{} | Preview: {}×{} | {:.0}fps | {:.1}s",
+                            ow,
+                            oh,
+                            self.render_w,
+                            self.render_h,
+                            scene.settings.fps,
+                            self.duration()
+                        ),
+                    );
                 }
             });
         });
@@ -684,16 +767,19 @@ impl eframe::App for StudioApp {
                     // ── Output path ──
                     ui.horizontal(|ui| {
                         ui.label("Output:");
-                        ui.add(egui::TextEdit::singleline(&mut self.export_settings.output_path)
-                            .desired_width(280.0));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.export_settings.output_path)
+                                .desired_width(280.0),
+                        );
                         if ui.button("📂").clicked() {
                             let ext = self.export_settings.extension().to_string();
                             if let Some(path) = rfd::FileDialog::new()
-                                .add_filter(&ext.to_uppercase(), &[&ext])
-                                .set_file_name(&format!("output.{}", ext))
+                                .add_filter(ext.to_uppercase(), &[&ext])
+                                .set_file_name(format!("output.{}", ext))
                                 .save_file()
                             {
-                                self.export_settings.output_path = path.to_string_lossy().to_string();
+                                self.export_settings.output_path =
+                                    path.to_string_lossy().to_string();
                             }
                         }
                     });
@@ -707,7 +793,11 @@ impl eframe::App for StudioApp {
                             .selected_text(CODECS[self.export_settings.codec_index].0)
                             .show_ui(ui, |ui| {
                                 for (i, (label, _)) in CODECS.iter().enumerate() {
-                                    ui.selectable_value(&mut self.export_settings.codec_index, i, *label);
+                                    ui.selectable_value(
+                                        &mut self.export_settings.codec_index,
+                                        i,
+                                        *label,
+                                    );
                                 }
                             });
                     });
@@ -728,7 +818,13 @@ impl eframe::App for StudioApp {
                     ui.horizontal(|ui| {
                         ui.label("Quality (CRF):");
                         let mut crf = self.export_settings.crf as f32;
-                        let quality = if crf < 18.0 { "high" } else if crf < 28.0 { "medium" } else { "low" };
+                        let quality = if crf < 18.0 {
+                            "high"
+                        } else if crf < 28.0 {
+                            "medium"
+                        } else {
+                            "low"
+                        };
                         ui.add(egui::Slider::new(&mut crf, 0.0..=51.0).step_by(1.0));
                         ui.colored_label(TEXT_DIM, format!("({})", quality));
                         self.export_settings.crf = crf as u32;
@@ -741,7 +837,11 @@ impl eframe::App for StudioApp {
                             .selected_text(&self.export_settings.pixel_format)
                             .show_ui(ui, |ui| {
                                 for fmt in &["yuv420p", "yuv444p", "rgb24", "rgba"] {
-                                    ui.selectable_value(&mut self.export_settings.pixel_format, fmt.to_string(), *fmt);
+                                    ui.selectable_value(
+                                        &mut self.export_settings.pixel_format,
+                                        fmt.to_string(),
+                                        *fmt,
+                                    );
                                 }
                             });
                     });
@@ -749,20 +849,33 @@ impl eframe::App for StudioApp {
                     ui.separator();
 
                     // ── Resolution ──
-                    ui.checkbox(&mut self.export_settings.use_custom_resolution, "Custom resolution");
+                    ui.checkbox(
+                        &mut self.export_settings.use_custom_resolution,
+                        "Custom resolution",
+                    );
                     if self.export_settings.use_custom_resolution {
                         ui.horizontal(|ui| {
                             ui.label("Width:");
-                            ui.add(egui::DragValue::new(&mut self.export_settings.export_width)
-                                .range(64..=7680).speed(2));
+                            ui.add(
+                                egui::DragValue::new(&mut self.export_settings.export_width)
+                                    .range(64..=7680)
+                                    .speed(2),
+                            );
                             ui.label("Height:");
-                            ui.add(egui::DragValue::new(&mut self.export_settings.export_height)
-                                .range(64..=4320).speed(2));
+                            ui.add(
+                                egui::DragValue::new(&mut self.export_settings.export_height)
+                                    .range(64..=4320)
+                                    .speed(2),
+                            );
                         });
                     } else if let Some(scene) = &self.scene {
-                        ui.colored_label(TEXT_DIM, format!(
-                            "Resolution: {}×{} (from scene)", scene.settings.width, scene.settings.height
-                        ));
+                        ui.colored_label(
+                            TEXT_DIM,
+                            format!(
+                                "Resolution: {}×{} (from scene)",
+                                scene.settings.width, scene.settings.height
+                            ),
+                        );
                     }
 
                     ui.separator();
@@ -770,16 +883,17 @@ impl eframe::App for StudioApp {
                     // ── FFmpeg path ──
                     ui.horizontal(|ui| {
                         ui.label("FFmpeg:");
-                        ui.add(egui::TextEdit::singleline(&mut self.export_settings.ffmpeg_path)
-                            .desired_width(250.0)
-                            .hint_text("(system PATH)"));
-                        if ui.button("📂").clicked() {
-                            if let Some(path) = rfd::FileDialog::new()
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.export_settings.ffmpeg_path)
+                                .desired_width(250.0)
+                                .hint_text("(system PATH)"),
+                        );
+                        if ui.button("📂").clicked()
+                            && let Some(path) = rfd::FileDialog::new()
                                 .add_filter("Executable", &["exe", ""])
                                 .pick_file()
-                            {
-                                self.export_settings.ffmpeg_path = path.to_string_lossy().to_string();
-                            }
+                        {
+                            self.export_settings.ffmpeg_path = path.to_string_lossy().to_string();
                         }
                     });
 
@@ -787,23 +901,42 @@ impl eframe::App for StudioApp {
 
                     // ── Info ──
                     if let Some(scene) = &self.scene {
-                        ui.colored_label(TEXT_DIM, format!(
-                            "{} frames | {:.1}s | {:.0}fps",
-                            scene.frames.len(), self.duration(), scene.settings.fps
-                        ));
+                        ui.colored_label(
+                            TEXT_DIM,
+                            format!(
+                                "{} frames | {:.1}s | {:.0}fps",
+                                scene.frames.len(),
+                                self.duration(),
+                                scene.settings.fps
+                            ),
+                        );
                     }
 
                     // ── Buttons ──
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
-                        if ui.add_sized([120.0, 32.0], egui::Button::new(
-                            egui::RichText::new("🚀 Export").size(14.0).color(egui::Color32::WHITE)
-                        ).fill(GREEN)).clicked() {
+                        if ui
+                            .add_sized(
+                                [120.0, 32.0],
+                                egui::Button::new(
+                                    egui::RichText::new("🚀 Export")
+                                        .size(14.0)
+                                        .color(egui::Color32::WHITE),
+                                )
+                                .fill(GREEN),
+                            )
+                            .clicked()
+                        {
                             start_export = true;
                         }
-                        if ui.add_sized([100.0, 32.0], egui::Button::new(
-                            egui::RichText::new("Cancel").size(14.0)
-                        ).fill(BG_SURFACE)).clicked() {
+                        if ui
+                            .add_sized(
+                                [100.0, 32.0],
+                                egui::Button::new(egui::RichText::new("Cancel").size(14.0))
+                                    .fill(BG_SURFACE),
+                            )
+                            .clicked()
+                        {
                             self.show_export_dialog = false;
                         }
                     });
@@ -828,9 +961,10 @@ impl eframe::App for StudioApp {
                             PlaybackMode::Realtime => "Realtime",
                             PlaybackMode::Smooth => "Smooth",
                         };
-                        ui.colored_label(TEXT_DIM, format!(
-                            "{:.1}ms | {} | GPU", self.render_ms, mode_str
-                        ));
+                        ui.colored_label(
+                            TEXT_DIM,
+                            format!("{:.1}ms | {} | GPU", self.render_ms, mode_str),
+                        );
                     });
                 });
             });
@@ -845,9 +979,18 @@ impl eframe::App for StudioApp {
                     // Play/Pause
                     let play_label = if self.playing { "⏸" } else { "▶" };
                     let play_color = if self.playing { GREEN } else { ACCENT };
-                    if ui.add_sized([34.0, 34.0], egui::Button::new(
-                        egui::RichText::new(play_label).size(16.0).color(egui::Color32::WHITE)
-                    ).fill(play_color)).clicked() {
+                    if ui
+                        .add_sized(
+                            [34.0, 34.0],
+                            egui::Button::new(
+                                egui::RichText::new(play_label)
+                                    .size(16.0)
+                                    .color(egui::Color32::WHITE),
+                            )
+                            .fill(play_color),
+                        )
+                        .clicked()
+                    {
                         self.playing = !self.playing;
                         if self.playing {
                             self.play_start_time = None;
@@ -856,9 +999,18 @@ impl eframe::App for StudioApp {
                     }
 
                     // Stop
-                    if ui.add_sized([34.0, 34.0], egui::Button::new(
-                        egui::RichText::new("⏹").size(16.0).color(egui::Color32::WHITE)
-                    ).fill(BG_SURFACE)).clicked() {
+                    if ui
+                        .add_sized(
+                            [34.0, 34.0],
+                            egui::Button::new(
+                                egui::RichText::new("⏹")
+                                    .size(16.0)
+                                    .color(egui::Color32::WHITE),
+                            )
+                            .fill(BG_SURFACE),
+                        )
+                        .clicked()
+                    {
                         self.playing = false;
                         self.current_frame = 0;
                         self.dirty = true;
@@ -867,12 +1019,14 @@ impl eframe::App for StudioApp {
                     ui.separator();
 
                     // Frame / time
-                    ui.colored_label(egui::Color32::WHITE, format!(
-                        "{:>4} / {}", self.current_frame, self.total_frames()
-                    ));
-                    ui.colored_label(TEXT_DIM, format!(
-                        "{:.2}s / {:.2}s", self.current_time(), self.duration()
-                    ));
+                    ui.colored_label(
+                        egui::Color32::WHITE,
+                        format!("{:>4} / {}", self.current_frame, self.total_frames()),
+                    );
+                    ui.colored_label(
+                        TEXT_DIM,
+                        format!("{:.2}s / {:.2}s", self.current_time(), self.duration()),
+                    );
                 });
 
                 // Seek slider
@@ -881,12 +1035,15 @@ impl eframe::App for StudioApp {
                     let max = (self.total_frames() - 1) as f64;
                     let resp = ui.add(
                         egui::Slider::new(&mut frame, 0.0..=max)
-                            .show_value(false).step_by(1.0)
+                            .show_value(false)
+                            .step_by(1.0),
                     );
                     if resp.changed() {
                         self.current_frame = frame as usize;
                         self.dirty = true;
-                        if self.playing { self.playing = false; }
+                        if self.playing {
+                            self.playing = false;
+                        }
                     }
                 }
             });
@@ -917,7 +1074,8 @@ impl eframe::App for StudioApp {
             {
                 self.viewport_display_size = [draw_w, draw_h];
                 if self.preview_scale == PreviewScale::Auto {
-                    self.render_w = 0; self.render_h = 0;
+                    self.render_w = 0;
+                    self.render_h = 0;
                     self.dirty = true;
                 }
             }
@@ -931,9 +1089,8 @@ impl eframe::App for StudioApp {
                 if let Some(tex) = &mut self.viewport_tex {
                     tex.set(image, egui::TextureOptions::LINEAR);
                 } else {
-                    self.viewport_tex = Some(ctx.load_texture(
-                        "viewport", image, egui::TextureOptions::LINEAR,
-                    ));
+                    self.viewport_tex =
+                        Some(ctx.load_texture("viewport", image, egui::TextureOptions::LINEAR));
                 }
             }
 
@@ -947,25 +1104,42 @@ impl eframe::App for StudioApp {
                 );
 
                 // Border
-                ui.painter().rect_filled(rect.expand(1.0), 0.0, egui::Color32::from_rgb(15, 15, 18));
-                ui.put(rect, egui::Image::new(egui::load::SizedTexture::new(
-                    tex.id(), egui::vec2(draw_w, draw_h)
-                )));
+                ui.painter().rect_filled(
+                    rect.expand(1.0),
+                    0.0,
+                    egui::Color32::from_rgb(15, 15, 18),
+                );
+                ui.put(
+                    rect,
+                    egui::Image::new(egui::load::SizedTexture::new(
+                        tex.id(),
+                        egui::vec2(draw_w, draw_h),
+                    )),
+                );
             }
 
             // Export progress overlay
             if let Some(state) = &self.export_state {
                 let rect = ui.max_rect();
                 // Dark overlay
-                ui.painter().rect_filled(rect, 0.0, egui::Color32::from_black_alpha(200));
+                ui.painter()
+                    .rect_filled(rect, 0.0, egui::Color32::from_black_alpha(200));
 
                 let center = rect.center();
                 let current = state.progress.load(Ordering::Relaxed);
                 let pct = current as f64 / state.total_frames.max(1) as f64;
                 let elapsed = state.start_time.elapsed().as_secs_f64();
-                let fps = if elapsed > 0.0 { current as f64 / elapsed } else { 0.0 };
+                let fps = if elapsed > 0.0 {
+                    current as f64 / elapsed
+                } else {
+                    0.0
+                };
                 let remaining = state.total_frames.saturating_sub(current);
-                let eta = if fps > 0.0 { remaining as f64 / fps } else { 0.0 };
+                let eta = if fps > 0.0 {
+                    remaining as f64 / fps
+                } else {
+                    0.0
+                };
 
                 // Title
                 ui.painter().text(
@@ -987,10 +1161,7 @@ impl eframe::App for StudioApp {
 
                 // Progress bar fill
                 let fill_w = bar_w * pct as f32;
-                let fill_rect = egui::Rect::from_min_size(
-                    bar_rect.min,
-                    egui::vec2(fill_w, bar_h),
-                );
+                let fill_rect = egui::Rect::from_min_size(bar_rect.min, egui::vec2(fill_w, bar_h));
                 ui.painter().rect_filled(fill_rect, 4.0, ACCENT);
 
                 // Percent text on bar
@@ -1019,9 +1190,15 @@ impl eframe::App for StudioApp {
                     center + egui::vec2(0.0, 45.0),
                     egui::vec2(100.0, 30.0),
                 );
-                let cancel_resp = ui.put(cancel_rect, egui::Button::new(
-                    egui::RichText::new("Cancel").size(13.0).color(egui::Color32::WHITE)
-                ).fill(RED));
+                let cancel_resp = ui.put(
+                    cancel_rect,
+                    egui::Button::new(
+                        egui::RichText::new("Cancel")
+                            .size(13.0)
+                            .color(egui::Color32::WHITE),
+                    )
+                    .fill(RED),
+                );
                 if cancel_resp.clicked() {
                     self.cancel_export();
                 }
