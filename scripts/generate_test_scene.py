@@ -339,6 +339,11 @@ def main():
             "fps": FPS,
             "background": [0.0, 0.0, 0.0, 1.0],
         },
+        "audio_clips": [{
+            "path": VIDEO_PATH, # use the video file itself as audio source
+            "start_time": 0.0,
+            "volume": 0.5,
+        }],
         "frames": frames,
     }
 

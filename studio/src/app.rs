@@ -1,10 +1,13 @@
 //! Studio app — loads Frame JSON, renders viewport, seek/preview/play/export.
 
 use eframe::egui;
-use ifol_render_core::{CoreEngine, Frame, RenderSettings};
+use ifol_render_core::{AudioClip, AudioConfig, CoreEngine, Frame, RenderSettings};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+// ── Audio playback ──
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 
 // ── Theme ──
 const BG_APP: egui::Color32 = egui::Color32::from_rgb(24, 25, 28);
@@ -163,6 +166,168 @@ struct ExportState {
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
+/// Audio player — pre-decodes audio, plays via rodio in sync with timeline.
+struct AudioPlayer {
+    /// rodio output stream (must be kept alive).
+    _stream: OutputStream,
+    /// Stream handle for creating sinks.
+    stream_handle: OutputStreamHandle,
+    /// Current sink for playback.
+    sink: Option<Sink>,
+    /// Pre-decoded interleaved PCM f32 samples.
+    pcm_data: Arc<Vec<f32>>,
+    /// Audio configuration (sample rate, channels).
+    config: AudioConfig,
+    /// Total scene duration in seconds.
+    total_duration: f64,
+}
+
+impl AudioPlayer {
+    /// Create a new AudioPlayer (initializes audio output device).
+    fn new() -> Option<Self> {
+        match OutputStream::try_default() {
+            Ok((stream, handle)) => Some(Self {
+                _stream: stream,
+                stream_handle: handle,
+                sink: None,
+                pcm_data: Arc::new(Vec::new()),
+                config: AudioConfig::default(),
+                total_duration: 0.0,
+            }),
+            Err(e) => {
+                log::warn!("Failed to open audio device: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Load audio from clips (pre-decode and mix).
+    fn load_clips(
+        &mut self,
+        clips: &[AudioClip],
+        total_duration: f64,
+        ffmpeg_bin: Option<&str>,
+    ) {
+        self.total_duration = total_duration;
+        self.stop();
+
+        match ifol_render_core::audio::mix_clips(clips, total_duration, &self.config, ffmpeg_bin) {
+            Ok(pcm) => {
+                log::info!("Audio loaded: {} samples, {:.1}s", pcm.len(), total_duration);
+                self.pcm_data = Arc::new(pcm);
+            }
+            Err(e) => {
+                log::warn!("Failed to mix audio clips: {}", e);
+                self.pcm_data = Arc::new(Vec::new());
+            }
+        }
+    }
+
+    /// Check if audio data is loaded.
+    fn has_audio(&self) -> bool {
+        !self.pcm_data.is_empty()
+    }
+
+    /// Start or resume playback from a specific time position.
+    fn play_from(&mut self, time_secs: f64) {
+        if !self.has_audio() {
+            return;
+        }
+        self.stop();
+
+        // Calculate sample offset
+        let start_sample = (time_secs * self.config.sample_rate as f64) as usize
+            * self.config.channels as usize;
+
+        if start_sample >= self.pcm_data.len() {
+            return;
+        }
+
+        // Create a new source from the PCM data starting at offset
+        let data = self.pcm_data.clone();
+        let source = PcmSource {
+            data,
+            pos: start_sample,
+            sample_rate: self.config.sample_rate,
+            channels: self.config.channels as u16,
+        };
+
+        if let Ok(sink) = Sink::try_new(&self.stream_handle) {
+            sink.append(source);
+            self.sink = Some(sink);
+        }
+    }
+
+    /// Pause audio playback.
+    fn pause(&mut self) {
+        if let Some(sink) = &self.sink {
+            sink.pause();
+        }
+    }
+
+    /// Resume audio playback.
+    fn resume(&mut self) {
+        if let Some(sink) = &self.sink {
+            sink.play();
+        }
+    }
+
+    /// Stop audio playback completely.
+    fn stop(&mut self) {
+        if let Some(sink) = self.sink.take() {
+            sink.stop();
+        }
+    }
+
+    /// Check if sink is currently playing.
+    fn is_playing(&self) -> bool {
+        self.sink.as_ref().is_some_and(|s| !s.is_paused() && !s.empty())
+    }
+}
+
+/// Custom PCM audio source for rodio.
+struct PcmSource {
+    data: Arc<Vec<f32>>,
+    pos: usize,
+    sample_rate: u32,
+    channels: u16,
+}
+
+impl Iterator for PcmSource {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
+        if self.pos < self.data.len() {
+            let sample = self.data[self.pos];
+            self.pos += 1;
+            Some(sample)
+        } else {
+            None
+        }
+    }
+}
+
+impl Source for PcmSource {
+    fn current_frame_len(&self) -> Option<usize> {
+        Some(self.data.len() - self.pos)
+    }
+
+    fn channels(&self) -> u16 {
+        self.channels
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        let total_samples = self.data.len() / self.channels as usize;
+        Some(std::time::Duration::from_secs_f64(
+            total_samples as f64 / self.sample_rate as f64,
+        ))
+    }
+}
+
 /// Studio application state.
 pub struct StudioApp {
     scene: Option<SceneData>,
@@ -192,10 +357,19 @@ pub struct StudioApp {
     export_settings: ExportSettings,
     /// Active export (non-blocking, renders one frame per update).
     export_state: Option<ExportState>,
+    /// Audio player for real-time audio playback.
+    audio_player: Option<AudioPlayer>,
+    /// Audio clips from scene (stored separately for reload).
+    audio_clips: Vec<AudioClip>,
 }
 
 impl StudioApp {
     pub fn new(_cc: &eframe::CreationContext, scene_path: Option<PathBuf>) -> Self {
+        let audio_player = AudioPlayer::new();
+        if audio_player.is_some() {
+            log::info!("Audio output device initialized");
+        }
+
         let mut app = Self {
             scene: None,
             engine: None,
@@ -218,6 +392,8 @@ impl StudioApp {
             show_export_dialog: false,
             export_settings: ExportSettings::new(1920, 1080),
             export_state: None,
+            audio_player,
+            audio_clips: Vec::new(),
         };
 
         if let Some(path) = scene_path {
@@ -258,6 +434,12 @@ impl StudioApp {
             return;
         };
 
+        // Parse audio clips from scene JSON
+        let audio_clips: Vec<AudioClip> = doc
+            .get("audio_clips")
+            .and_then(|a| serde_json::from_value(a.clone()).ok())
+            .unwrap_or_default();
+
         let total = frames.len();
         let mut engine = CoreEngine::new(settings.clone());
         engine.setup_builtins();
@@ -267,17 +449,40 @@ impl StudioApp {
             engine.set_ffmpeg_path(fpath);
         }
 
+        let duration = total as f64 / settings.fps;
+
         self.scene = Some(SceneData { settings, frames });
         self.engine = Some(engine);
         self.current_frame = 0;
         self.playing = false;
         self.dirty = true;
         self.scene_path = Some(path.clone());
+
+        // Load audio if clips are present
+        let audio_count = audio_clips.len();
+        if !audio_clips.is_empty() {
+            let ffmpeg_bin = if fpath.is_empty() {
+                None
+            } else {
+                Some(fpath)
+            };
+            if let Some(player) = &mut self.audio_player {
+                player.load_clips(&audio_clips, duration, ffmpeg_bin);
+            }
+        }
+        self.audio_clips = audio_clips;
+
+        let audio_status = if audio_count > 0 {
+            format!(" | 🔊 {} audio clip(s)", audio_count)
+        } else {
+            String::new()
+        };
         self.status = format!(
-            "✅ {} frames, {:.1}s @ {:.0}fps",
+            "✅ {} frames, {:.1}s @ {:.0}fps{}",
             total,
-            total as f64 / self.fps(),
-            self.fps()
+            duration,
+            self.fps(),
+            audio_status
         );
     }
 
@@ -639,6 +844,16 @@ impl eframe::App for StudioApp {
                 if self.playing {
                     self.play_start_time = None;
                     self.smooth_last_render = None;
+                    // Start audio from current position
+                    let time = self.current_time();
+                    if let Some(player) = &mut self.audio_player {
+                        player.play_from(time);
+                    }
+                } else {
+                    // Pause audio
+                    if let Some(player) = &mut self.audio_player {
+                        player.pause();
+                    }
                 }
             }
             if i.key_pressed(egui::Key::ArrowRight)
@@ -655,10 +870,16 @@ impl eframe::App for StudioApp {
             if i.key_pressed(egui::Key::Home) {
                 self.current_frame = 0;
                 self.dirty = true;
+                if let Some(player) = &mut self.audio_player {
+                    player.stop();
+                }
             }
             if i.key_pressed(egui::Key::End) {
                 self.current_frame = self.total_frames().saturating_sub(1);
                 self.dirty = true;
+                if let Some(player) = &mut self.audio_player {
+                    player.stop();
+                }
             }
         });
 
@@ -1048,6 +1269,16 @@ impl eframe::App for StudioApp {
                         if self.playing {
                             self.play_start_time = None;
                             self.smooth_last_render = None;
+                            // Start audio from current position
+                            let time = self.current_time();
+                            if let Some(player) = &mut self.audio_player {
+                                player.play_from(time);
+                            }
+                        } else {
+                            // Pause audio
+                            if let Some(player) = &mut self.audio_player {
+                                player.pause();
+                            }
                         }
                     }
 
@@ -1067,6 +1298,10 @@ impl eframe::App for StudioApp {
                         self.playing = false;
                         self.current_frame = 0;
                         self.dirty = true;
+                        // Stop audio
+                        if let Some(player) = &mut self.audio_player {
+                            player.stop();
+                        }
                     }
 
                     ui.separator();
@@ -1096,6 +1331,10 @@ impl eframe::App for StudioApp {
                         self.dirty = true;
                         if self.playing {
                             self.playing = false;
+                            // Stop audio on seek
+                            if let Some(player) = &mut self.audio_player {
+                                player.stop();
+                            }
                         }
                     }
                 }

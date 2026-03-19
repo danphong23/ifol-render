@@ -2,33 +2,71 @@
 //!
 //! Uses FFmpeg CLI for decoding audio files, then mixes in-process.
 //! Completely separate from the GPU render pipeline.
+//!
+//! ## JSON Input
+//!
+//! The audio system accepts an `AudioScene` JSON:
+//! ```json
+//! {
+//!   "config": { "sample_rate": 44100, "channels": 2 },
+//!   "total_duration": 10.0,
+//!   "clips": [
+//!     { "path": "audio.mp3", "start_time": 0.0, "volume": 0.8 },
+//!     { "path": "video.mp4", "start_time": 2.0, "duration": 5.0, "fade_in": 0.5 }
+//!   ]
+//! }
+//! ```
 
+use serde::{Deserialize, Serialize};
 use std::process::{Command, Stdio};
 
+// ══════════════════════════════════════
+// Data Types (JSON-serializable)
+// ══════════════════════════════════════
+
 /// An audio clip instruction (flat, pre-computed by frontend).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioClip {
-    /// Path to source audio file.
+    /// Path to source audio file (supports any format FFmpeg can decode).
     pub path: String,
     /// Start time in the output timeline (seconds).
+    #[serde(default)]
     pub start_time: f64,
-    /// Duration to play (seconds). None = play to end.
+    /// Duration to play (seconds). None = play to end of source.
+    #[serde(default)]
     pub duration: Option<f64>,
     /// Offset within the source file (seconds).
+    #[serde(default)]
     pub offset: f64,
     /// Volume: 0.0 (silent) to 1.0 (full).
+    #[serde(default = "default_volume")]
     pub volume: f32,
     /// Fade in duration (seconds).
+    #[serde(default)]
     pub fade_in: f64,
     /// Fade out duration (seconds).
+    #[serde(default)]
     pub fade_out: f64,
 }
 
+fn default_volume() -> f32 {
+    1.0
+}
+
 /// Audio output configuration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioConfig {
+    #[serde(default = "default_sample_rate")]
     pub sample_rate: u32,
+    #[serde(default = "default_channels")]
     pub channels: u32,
+}
+
+fn default_sample_rate() -> u32 {
+    44100
+}
+fn default_channels() -> u32 {
+    2
 }
 
 impl Default for AudioConfig {
@@ -40,9 +78,55 @@ impl Default for AudioConfig {
     }
 }
 
+/// Complete audio scene — the JSON input format for the audio system.
+///
+/// This is the audio equivalent of `Frame` for the render engine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioScene {
+    /// Audio output configuration.
+    #[serde(default)]
+    pub config: AudioConfig,
+    /// Total output duration in seconds.
+    pub total_duration: f64,
+    /// Audio clips to mix together.
+    #[serde(default)]
+    pub clips: Vec<AudioClip>,
+}
+
+// ══════════════════════════════════════
+// Processing
+// ══════════════════════════════════════
+
+/// Process an AudioScene JSON string → mixed PCM f32 samples.
+///
+/// This is the main entry point — equivalent to `CoreEngine::render_frame()`.
+pub fn process_audio_scene(
+    json: &str,
+    ffmpeg_bin: Option<&str>,
+) -> Result<(Vec<f32>, AudioConfig), String> {
+    let scene: AudioScene =
+        serde_json::from_str(json).map_err(|e| format!("Invalid audio JSON: {e}"))?;
+
+    process_audio(&scene, ffmpeg_bin)
+}
+
+/// Process an AudioScene struct → mixed PCM f32 samples.
+pub fn process_audio(
+    scene: &AudioScene,
+    ffmpeg_bin: Option<&str>,
+) -> Result<(Vec<f32>, AudioConfig), String> {
+    let pcm = mix_clips(&scene.clips, scene.total_duration, &scene.config, ffmpeg_bin)?;
+    Ok((pcm, scene.config.clone()))
+}
+
+// ══════════════════════════════════════
+// Decode
+// ══════════════════════════════════════
+
 /// Decode an audio file to raw PCM f32 samples using FFmpeg.
 ///
 /// Returns interleaved f32 samples at the given sample rate and channels.
+/// Supports any format FFmpeg can decode (mp3, wav, aac, video files, etc.).
 pub fn decode_audio(
     path: &str,
     offset: f64,
@@ -64,6 +148,7 @@ pub fn decode_audio(
         cmd.args(["-t", &format!("{:.4}", dur)]);
     }
 
+    cmd.args(["-vn"]); // disable video decoding (audio-only, faster)
     cmd.args(["-f", "f32le"]); // raw 32-bit float PCM
     cmd.args(["-acodec", "pcm_f32le"]);
     cmd.args(["-ar", &config.sample_rate.to_string()]);
@@ -95,8 +180,19 @@ pub fn decode_audio(
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect();
 
+    log::debug!(
+        "Decoded {} samples from '{}' (offset={:.2}s)",
+        samples.len(),
+        path,
+        offset
+    );
+
     Ok(samples)
 }
+
+// ══════════════════════════════════════
+// Mix
+// ══════════════════════════════════════
 
 /// Mix multiple audio clips into a single PCM buffer.
 ///
@@ -111,20 +207,27 @@ pub fn mix_clips(
         (total_duration * config.sample_rate as f64) as usize * config.channels as usize;
     let mut output = vec![0.0f32; total_samples];
 
-    for clip in clips {
+    for (clip_idx, clip) in clips.iter().enumerate() {
+        log::info!(
+            "Decoding audio clip {}/{}: '{}' (start={:.2}s, vol={:.1})",
+            clip_idx + 1,
+            clips.len(),
+            clip.path,
+            clip.start_time,
+            clip.volume
+        );
+
         // Decode source audio
         let samples = decode_audio(&clip.path, clip.offset, clip.duration, config, ffmpeg_bin)?;
 
         if samples.is_empty() {
+            log::warn!("Audio clip '{}' decoded to 0 samples", clip.path);
             continue;
         }
 
         // Calculate sample positions
         let start_sample =
             (clip.start_time * config.sample_rate as f64) as usize * config.channels as usize;
-        let _clip_duration = clip
-            .duration
-            .unwrap_or(samples.len() as f64 / (config.sample_rate as f64 * config.channels as f64));
         let fade_in_samples =
             (clip.fade_in * config.sample_rate as f64) as usize * config.channels as usize;
         let fade_out_samples =
@@ -162,6 +265,10 @@ pub fn mix_clips(
 
     Ok(output)
 }
+
+// ══════════════════════════════════════
+// Export
+// ══════════════════════════════════════
 
 /// Export mixed audio to a WAV file using FFmpeg.
 pub fn export_wav(

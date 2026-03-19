@@ -29,6 +29,9 @@ pub struct CoreEngine {
     video_streams: HashMap<String, VideoStream>,
     /// Path to FFmpeg binary. Engine-level config.
     ffmpeg_path: Option<String>,
+    /// Text content cache — skip re-rasterization when content hasn't changed.
+    /// Maps texture key → (content, font_size, alignment) signature.
+    text_cache: HashMap<String, (String, u32, u32)>,
 }
 
 impl CoreEngine {
@@ -44,6 +47,7 @@ impl CoreEngine {
             video_info_cache: HashMap::new(),
             video_streams: HashMap::new(),
             ffmpeg_path: None,
+            text_cache: HashMap::new(),
         }
     }
 
@@ -399,6 +403,18 @@ impl CoreEngine {
                     line_height,
                     alignment,
                 } => {
+                    // Cache check: skip re-rasterization if content hasn't changed
+                    let cache_sig = (
+                        content.clone(),
+                        (*font_size * 100.0) as u32, // quantize font_size
+                        *alignment,
+                    );
+                    if let Some(cached) = self.text_cache.get(key.as_str()) {
+                        if *cached == cache_sig && self.renderer.has_texture(key) {
+                            continue;
+                        }
+                    }
+
                     let opts = TextOptions {
                         font_size: *font_size,
                         color: *color,
@@ -408,6 +424,8 @@ impl CoreEngine {
                     };
                     if let Err(e) = self.rasterize_text(key, content, &opts, font_key.as_deref()) {
                         log::warn!("Failed to rasterize text: {}", e);
+                    } else {
+                        self.text_cache.insert(key.clone(), cache_sig);
                     }
                 }
                 TextureUpdate::DecodeVideoFrame {
