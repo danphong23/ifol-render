@@ -45,6 +45,25 @@ pub struct RenderSettings {
     /// Output color space (default: Srgb).
     #[serde(default)]
     pub output_color_space: ColorSpace,
+    /// Pixels Per Unit — conversion factor for unit-based coordinates.
+    /// Default 100: 1 unit = 100 pixels. An 1920x1080 image → 19.2 x 10.8 units.
+    /// When user changes PPU or resolution, entities keep their unit size.
+    #[serde(default = "default_ppu")]
+    pub ppu: f32,
+    /// Preview resolution scale (0.25 = quarter, 0.5 = half, 1.0 = full).
+    /// Only affects preview rendering, export always uses full resolution.
+    #[serde(default = "default_preview_scale")]
+    pub preview_scale: f32,
+    /// Scene background color (default: transparent black).
+    #[serde(default)]
+    pub background_color: crate::color::Color4,
+}
+
+fn default_ppu() -> f32 {
+    100.0
+}
+fn default_preview_scale() -> f32 {
+    1.0
 }
 
 fn default_fps() -> f64 {

@@ -44,6 +44,9 @@ pub struct Components {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color_source: Option<components::ColorSource>,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_source: Option<components::AudioSource>,
+
     // ── Layout & Timing ──
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeline: Option<components::Timeline>,
@@ -80,6 +83,10 @@ pub struct Components {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effect_stack: Option<components::EffectStack>,
 
+    // ── Camera ──
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera: Option<components::Camera>,
+
     // ── Hierarchy ──
     /// Parent entity ID for transform hierarchy.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -101,6 +108,7 @@ impl Default for Components {
             image_source: None,
             text_source: None,
             color_source: None,
+            audio_source: None,
             timeline: None,
             transform: None,
             opacity: None,
@@ -111,6 +119,7 @@ impl Default for Components {
             animation: None,
             effects: None,
             effect_stack: None,
+            camera: None,
             parent: None,
             children: Vec::new(),
         }
@@ -139,6 +148,9 @@ pub struct ResolvedState {
     pub layer: i32,
     /// Z-index for depth sorting within the same layer.
     pub z_index: f32,
+    /// Content size in units (computed from pixel_size / PPU).
+    /// Used by draw.rs to apply correct size transform.
+    pub content_size: Option<[f32; 2]>,
 }
 
 /// The world: collection of all entities.

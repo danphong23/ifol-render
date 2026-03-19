@@ -84,6 +84,9 @@ impl EditorApp {
             duration: 10.0,
             color_space: ifol_render_core::color::ColorSpace::LinearSrgb,
             output_color_space: ifol_render_core::color::ColorSpace::Srgb,
+            ppu: 100.0,
+            preview_scale: 1.0,
+            background_color: ifol_render_core::color::Color4::default(),
         };
 
         Self {

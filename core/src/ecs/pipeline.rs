@@ -7,8 +7,10 @@
 use super::draw;
 use super::systems;
 use crate::ecs::World;
+use crate::ecs::components::Camera;
 use crate::scene::RenderSettings;
 use crate::time::TimeState;
+use crate::types::Mat4;
 use ifol_render::{PipelineConfig, Renderer};
 
 /// Register core's built-in shaders into the renderer.
@@ -125,7 +127,17 @@ pub fn run(world: &mut World, time: &TimeState) {
     systems::effects_system(world, time);
 }
 
-/// Full pipeline: run ECS systems → build draw commands → render → return pixels.
+/// Find the camera entity or return a default camera.
+fn resolve_camera(world: &World) -> Camera {
+    for entity in &world.entities {
+        if let Some(ref camera) = entity.components.camera {
+            return camera.clone();
+        }
+    }
+    Camera::default()
+}
+
+/// Full pipeline: run ECS systems → load resources → build draw commands → render → return pixels.
 ///
 /// This is the main entry point for consumers (editor/CLI).
 pub fn render_frame(
@@ -140,9 +152,52 @@ pub fn render_frame(
     // Step 1: Run ECS systems
     run(world, time);
 
-    // Step 2: Build draw commands (unit→pixel conversion happens here)
-    let commands = draw::build_draw_commands(world, settings);
+    // Step 2: Load/update resources (textures, text rasterization)
+    draw::load_resources(world, settings, renderer);
 
-    // Step 3: Call passive render tool
+    // Step 3: Resolve camera
+    let camera = resolve_camera(world);
+    let camera_matrix = camera.to_view_matrix();
+
+    // Step 4: Build draw commands (unit→clip conversion happens here)
+    let commands = draw::build_draw_commands(world, settings, &camera_matrix);
+
+    // Step 5: Call passive render tool
     renderer.render_frame(&commands)
+}
+
+/// Render a frame at preview resolution (scaled down for performance).
+///
+/// Uses `settings.preview_scale` to reduce GPU work during editing.
+/// The output pixel buffer is at the preview resolution.
+pub fn render_preview(
+    world: &mut World,
+    time: &TimeState,
+    settings: &RenderSettings,
+    renderer: &mut Renderer,
+) -> Vec<u8> {
+    let scale = settings.preview_scale;
+    if (scale - 1.0).abs() < 0.01 {
+        return render_frame(world, time, settings, renderer);
+    }
+
+    // Create scaled settings
+    let preview_settings = RenderSettings {
+        width: (settings.width as f32 * scale) as u32,
+        height: (settings.height as f32 * scale) as u32,
+        ..settings.clone()
+    };
+
+    // Resize renderer for preview
+    renderer.resize(preview_settings.width, preview_settings.height);
+    let pixels = render_frame(world, time, &preview_settings, renderer);
+    // Restore full resolution
+    renderer.resize(settings.width, settings.height);
+    pixels
+}
+
+/// Get the camera view matrix without rendering.
+/// Useful for editor viewport overlays.
+pub fn get_camera_matrix(world: &World) -> Mat4 {
+    resolve_camera(world).to_view_matrix()
 }

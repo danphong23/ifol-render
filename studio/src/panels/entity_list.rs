@@ -23,6 +23,7 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                     };
                     e.components.color_source = Some(components::ColorSource {
                         color: ifol_render_core::color::Color4::new(0.5, 0.5, 0.5, 1.0),
+                        size: None,
                     });
                     e.components.timeline = Some(components::Timeline {
                         start_time: app.time.global_time,
@@ -54,6 +55,7 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                         };
                         e.components.image_source = Some(components::ImageSource {
                             path: path.to_string_lossy().to_string(),
+                            pixel_size: None,
                         });
                         e.components.timeline = Some(components::Timeline {
                             start_time: app.time.global_time,
@@ -82,11 +84,12 @@ pub fn ui(app: &mut EditorApp, ui: &mut Ui) {
                     };
                     e.components.text_source = Some(components::TextSource {
                         content: "Hello".into(),
-                        font: "Inter".into(),
+                        font: "NotoSans".into(),
                         font_size: 48.0,
                         color: ifol_render_core::color::Color4::white(),
                         bold: false,
                         italic: false,
+                        pixel_size: None,
                     });
                     e.components.timeline = Some(components::Timeline {
                         start_time: app.time.global_time,
