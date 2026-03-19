@@ -176,6 +176,7 @@ impl StudioApp {
 
     fn render_current_frame(&mut self) {
         let (rw, rh) = self.compute_render_size();
+        let (out_w, out_h) = self.output_size();
 
         if let (Some(scene), Some(engine)) = (&self.scene, &mut self.engine) {
             if self.current_frame >= scene.frames.len() { return; }
@@ -187,10 +188,53 @@ impl StudioApp {
                 self.render_h = rh;
             }
 
+            // Scale entity coordinates if preview resolution differs from output
+            let scale_x = rw as f64 / out_w as f64;
+            let scale_y = rh as f64 / out_h as f64;
+            let needs_scale = (scale_x - 1.0).abs() > 0.001 || (scale_y - 1.0).abs() > 0.001;
+
+            let frame_data = if needs_scale {
+                Self::scale_frame(&scene.frames[self.current_frame], scale_x, scale_y)
+            } else {
+                scene.frames[self.current_frame].clone()
+            };
+
             let t = std::time::Instant::now();
-            self.pixels = engine.render_frame(&scene.frames[self.current_frame]);
+            self.pixels = engine.render_frame(&frame_data);
             self.render_ms = t.elapsed().as_secs_f64() * 1000.0;
             self.dirty = false;
+        }
+    }
+
+    /// Scale all entity coordinates in a frame by the given factors.
+    fn scale_frame(frame: &Frame, sx: f64, sy: f64) -> Frame {
+        use ifol_render_core::PassType;
+        let sx = sx as f32;
+        let sy = sy as f32;
+        Frame {
+            passes: frame.passes.iter().map(|pass| {
+                ifol_render_core::RenderPass {
+                    output: pass.output.clone(),
+                    pass_type: match &pass.pass_type {
+                        PassType::Entities { clear_color, entities } => {
+                            PassType::Entities {
+                                clear_color: *clear_color,
+                                entities: entities.iter().map(|e| {
+                                    ifol_render_core::FlatEntity {
+                                        x: e.x * sx,
+                                        y: e.y * sy,
+                                        width: e.width * sx,
+                                        height: e.height * sy,
+                                        ..e.clone()
+                                    }
+                                }).collect(),
+                            }
+                        }
+                        other => other.clone(),
+                    },
+                }
+            }).collect(),
+            texture_updates: frame.texture_updates.clone(),
         }
     }
 
@@ -299,8 +343,15 @@ impl eframe::App for StudioApp {
                     }
                 }
             }
-            let frame_dur = std::time::Duration::from_secs_f64(1.0 / self.fps());
-            ctx.request_repaint_after(frame_dur);
+            // Realtime: repaint immediately (wall-clock handles frame skipping)
+            // Smooth: schedule at frame interval
+            match self.playback_mode {
+                PlaybackMode::Realtime => ctx.request_repaint(),
+                PlaybackMode::Smooth => {
+                    let frame_dur = std::time::Duration::from_secs_f64(1.0 / self.fps());
+                    ctx.request_repaint_after(frame_dur);
+                }
+            }
         }
 
         // ── Keyboard ──
