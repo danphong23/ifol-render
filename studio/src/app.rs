@@ -3,6 +3,8 @@
 use eframe::egui;
 use ifol_render_core::{CoreEngine, Frame, RenderSettings};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 // ── Theme ──
 const BG_APP: egui::Color32 = egui::Color32::from_rgb(24, 25, 28);
@@ -101,15 +103,21 @@ impl ExportSettings {
     }
 }
 
-/// Active export state (non-blocking, one frame per update).
+/// Active export state — background thread does all rendering.
 struct ExportState {
-    ffmpeg: ifol_render_core::export::ffmpeg::FfmpegPipe,
-    current_frame: usize,
+    /// Shared progress counter (updated by background thread).
+    progress: Arc<AtomicUsize>,
     total_frames: usize,
     start_time: std::time::Instant,
-    export_w: u32,
-    export_h: u32,
     output_path: String,
+    /// Set to true when background thread finishes.
+    done: Arc<AtomicBool>,
+    /// Error message from background thread (if any).
+    error: Arc<std::sync::Mutex<Option<String>>>,
+    /// Cancel flag — main thread sets, background thread checks.
+    cancel: Arc<AtomicBool>,
+    /// Thread join handle.
+    handle: Option<std::thread::JoinHandle<()>>,
 }
 
 /// Studio application state.
@@ -319,15 +327,11 @@ impl StudioApp {
     }
 
     fn start_export(&mut self) {
-        let (Some(scene), Some(engine)) = (&self.scene, &mut self.engine)
-        else { return; };
+        let Some(scene) = &self.scene else { return; };
 
         let es = &self.export_settings;
         let out_w = if es.use_custom_resolution { es.export_width } else { scene.settings.width };
         let out_h = if es.use_custom_resolution { es.export_height } else { scene.settings.height };
-
-        // Resize engine to export resolution
-        engine.resize(out_w, out_h);
 
         let ffmpeg_path = if es.ffmpeg_path.trim().is_empty() {
             None
@@ -336,110 +340,141 @@ impl StudioApp {
         };
 
         let codec = es.codec();
+        let pixel_format = es.pixel_format.clone();
+        let crf = es.crf;
+        let fps = scene.settings.fps;
+        let output_path = es.output_path.clone();
         let total = scene.frames.len();
 
-        match ifol_render_core::export::ffmpeg::FfmpegPipe::start(
-            out_w,
-            out_h,
-            scene.settings.fps,
-            &codec,
-            &es.pixel_format,
-            es.crf,
-            &es.output_path,
-            ffmpeg_path.as_deref(),
-        ) {
-            Ok(pipe) => {
-                self.export_state = Some(ExportState {
-                    ffmpeg: pipe,
-                    current_frame: 0,
-                    total_frames: total,
-                    start_time: std::time::Instant::now(),
-                    export_w: out_w,
-                    export_h: out_h,
-                    output_path: es.output_path.clone(),
-                });
-                self.playing = false;
-                self.status = format!("Exporting 0/{} frames → {} ...", total, es.output_path);
+        // Clone frame data for the background thread
+        let frames: Vec<Frame> = scene.frames.clone();
+
+        // Shared state
+        let progress = Arc::new(AtomicUsize::new(0));
+        let done = Arc::new(AtomicBool::new(false));
+        let error: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        let p = progress.clone();
+        let d = done.clone();
+        let e = error.clone();
+        let c = cancel.clone();
+        let out_path = output_path.clone();
+
+        // Create settings for the export engine
+        let mut settings = RenderSettings::default();
+        settings.width = out_w;
+        settings.height = out_h;
+        settings.fps = fps;
+
+        let handle = std::thread::spawn(move || {
+            // Create a dedicated CoreEngine for export (own GPU context)
+            let mut engine = CoreEngine::new(settings);
+            engine.setup_builtins();
+
+            // Start FFmpeg
+            let mut ffmpeg = match ifol_render_core::export::ffmpeg::FfmpegPipe::start(
+                out_w, out_h, fps, &codec, &pixel_format, crf,
+                &out_path, ffmpeg_path.as_deref(),
+            ) {
+                Ok(pipe) => pipe,
+                Err(err) => {
+                    *e.lock().unwrap() = Some(err);
+                    d.store(true, Ordering::Release);
+                    return;
+                }
+            };
+
+            // Render all frames at full GPU speed
+            for (i, frame) in frames.iter().enumerate() {
+                if c.load(Ordering::Relaxed) {
+                    *e.lock().unwrap() = Some("Cancelled".into());
+                    break;
+                }
+                let pixels = engine.render_frame(frame);
+                if let Err(err) = ffmpeg.write_frame(&pixels) {
+                    *e.lock().unwrap() = Some(format!("FFmpeg write: {}", err));
+                    break;
+                }
+                p.store(i + 1, Ordering::Release);
             }
-            Err(e) => {
-                self.status = format!("❌ Export error: {}", e);
-                // Restore preview resolution
-                self.render_w = 0;
-                self.render_h = 0;
-                self.dirty = true;
+
+            // Finalize FFmpeg
+            if e.lock().unwrap().is_none() {
+                if let Err(err) = ffmpeg.finish() {
+                    *e.lock().unwrap() = Some(format!("FFmpeg finalize: {}", err));
+                }
             }
-        }
+
+            d.store(true, Ordering::Release);
+        });
+
+        self.playing = false;
+        self.export_state = Some(ExportState {
+            progress,
+            total_frames: total,
+            start_time: std::time::Instant::now(),
+            output_path,
+            done,
+            error,
+            cancel,
+            handle: Some(handle),
+        });
+        self.status = format!("Exporting 0/{} frames...", total);
     }
 
     fn cancel_export(&mut self) {
-        if let Some(mut state) = self.export_state.take() {
-            let _ = state.ffmpeg.finish();
-            self.status = format!("⚠️ Export cancelled at frame {}/{}", state.current_frame, state.total_frames);
+        if let Some(state) = &self.export_state {
+            state.cancel.store(true, Ordering::Release);
         }
-        self.render_w = 0;
-        self.render_h = 0;
-        self.dirty = true;
     }
 }
 
 impl eframe::App for StudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // ── Per-frame export processing (non-blocking) ──
-        if self.export_state.is_some() {
-            let mut finished = false;
-            let mut error = None;
+        // ── Export progress polling (background thread does GPU work) ──
+        if let Some(state) = &self.export_state {
+            let current = state.progress.load(Ordering::Relaxed);
+            let is_done = state.done.load(Ordering::Relaxed);
 
-            if let (Some(state), Some(scene), Some(engine)) =
-                (&mut self.export_state, &self.scene, &mut self.engine)
-            {
-                if state.current_frame < state.total_frames {
-                    // Render one frame and pipe to FFmpeg
-                    let pixels = engine.render_frame(&scene.frames[state.current_frame]);
-                    if let Err(e) = state.ffmpeg.write_frame(&pixels) {
-                        error = Some(format!("FFmpeg write error: {}", e));
+            let elapsed = state.start_time.elapsed().as_secs_f64();
+            let fps = if elapsed > 0.0 { current as f64 / elapsed } else { 0.0 };
+            let remaining = state.total_frames.saturating_sub(current);
+            let eta = if fps > 0.0 { remaining as f64 / fps } else { 0.0 };
+            let pct = current as f64 / state.total_frames.max(1) as f64 * 100.0;
+            self.status = format!(
+                "Exporting {}/{} ({:.0}%) | {:.1}s | ETA {:.1}s | {:.1} fps",
+                current, state.total_frames, pct, elapsed, eta, fps
+            );
+
+            if is_done {
+                let error = state.error.lock().unwrap().take();
+                let total = state.total_frames;
+                let output = state.output_path.clone();
+                let elapsed_final = elapsed;
+
+                // Join the thread
+                if let Some(mut state) = self.export_state.take() {
+                    if let Some(handle) = state.handle.take() {
+                        let _ = handle.join();
+                    }
+                }
+
+                if let Some(e) = error {
+                    if e == "Cancelled" {
+                        self.status = format!("⚠️ Export cancelled at {}/{}", current, total);
                     } else {
-                        state.current_frame += 1;
-                        let elapsed = state.start_time.elapsed().as_secs_f64();
-                        let fps = if elapsed > 0.0 { state.current_frame as f64 / elapsed } else { 0.0 };
-                        let remaining = state.total_frames - state.current_frame;
-                        let eta = if fps > 0.0 { remaining as f64 / fps } else { 0.0 };
-                        let pct = state.current_frame as f64 / state.total_frames as f64 * 100.0;
-                        self.status = format!(
-                            "Exporting {}/{} ({:.0}%) | {:.1}s | ETA {:.1}s | {:.1} fps",
-                            state.current_frame, state.total_frames, pct, elapsed, eta, fps
-                        );
+                        self.status = format!("❌ {}", e);
                     }
+                } else {
+                    self.status = format!(
+                        "✅ Exported {} frames → {} ({:.1}s)",
+                        total, output, elapsed_final
+                    );
                 }
-
-                if state.current_frame >= state.total_frames {
-                    finished = true;
-                }
-            }
-
-            if let Some(e) = error {
-                self.status = format!("❌ {}", e);
-                if let Some(mut state) = self.export_state.take() {
-                    let _ = state.ffmpeg.finish();
-                }
-                self.render_w = 0; self.render_h = 0; self.dirty = true;
-            } else if finished {
-                if let Some(mut state) = self.export_state.take() {
-                    match state.ffmpeg.finish() {
-                        Ok(()) => {
-                            let elapsed = state.start_time.elapsed().as_secs_f64();
-                            self.status = format!(
-                                "✅ Exported {} frames → {} ({:.1}s)",
-                                state.total_frames, state.output_path, elapsed
-                            );
-                        }
-                        Err(e) => {
-                            self.status = format!("❌ FFmpeg finalize error: {}", e);
-                        }
-                    }
-                }
-                self.render_w = 0; self.render_h = 0; self.dirty = true;
+                self.dirty = true;
             } else {
-                ctx.request_repaint(); // keep processing frames
+                ctx.request_repaint(); // keep polling
             }
         }
 
@@ -925,10 +960,11 @@ impl eframe::App for StudioApp {
                 ui.painter().rect_filled(rect, 0.0, egui::Color32::from_black_alpha(200));
 
                 let center = rect.center();
-                let pct = state.current_frame as f64 / state.total_frames.max(1) as f64;
+                let current = state.progress.load(Ordering::Relaxed);
+                let pct = current as f64 / state.total_frames.max(1) as f64;
                 let elapsed = state.start_time.elapsed().as_secs_f64();
-                let fps = if elapsed > 0.0 { state.current_frame as f64 / elapsed } else { 0.0 };
-                let remaining = state.total_frames - state.current_frame;
+                let fps = if elapsed > 0.0 { current as f64 / elapsed } else { 0.0 };
+                let remaining = state.total_frames.saturating_sub(current);
                 let eta = if fps > 0.0 { remaining as f64 / fps } else { 0.0 };
 
                 // Title
@@ -972,7 +1008,7 @@ impl eframe::App for StudioApp {
                     egui::Align2::CENTER_CENTER,
                     format!(
                         "{} / {} frames  |  {:.1}s elapsed  |  ETA {:.1}s  |  {:.1} fps",
-                        state.current_frame, state.total_frames, elapsed, eta, fps
+                        current, state.total_frames, elapsed, eta, fps
                     ),
                     egui::FontId::proportional(13.0),
                     TEXT_DIM,
