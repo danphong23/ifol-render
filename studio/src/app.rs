@@ -218,6 +218,11 @@ impl StudioApp {
         let total = frames.len();
         let mut engine = CoreEngine::new(settings.clone());
         engine.setup_builtins();
+        // Set FFmpeg path from export settings
+        let fpath = self.export_settings.ffmpeg_path.trim();
+        if !fpath.is_empty() {
+            engine.set_ffmpeg_path(fpath);
+        }
 
         self.scene = Some(SceneData { settings, frames });
         self.engine = Some(engine);
@@ -394,19 +399,23 @@ impl StudioApp {
         let c = cancel.clone();
         let out_path = output_path.clone();
 
-        // Create settings for the export engine
         let settings = RenderSettings {
             width: out_w,
             height: out_h,
             fps,
-            ffmpeg_path: scene.settings.ffmpeg_path.clone(),
             ..Default::default()
         };
+
+        // Clone ffmpeg path for the background thread
+        let export_ffmpeg = ffmpeg_path.clone();
 
         let handle = std::thread::spawn(move || {
             // Create a dedicated CoreEngine for export (own GPU context)
             let mut engine = CoreEngine::new(settings);
             engine.setup_builtins();
+            if let Some(ref fp) = export_ffmpeg {
+                engine.set_ffmpeg_path(fp);
+            }
 
             // Start FFmpeg
             let mut ffmpeg = match ifol_render_core::export::ffmpeg::FfmpegPipe::start(

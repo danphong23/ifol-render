@@ -27,6 +27,7 @@
 //! let pixels = engine.render_frame(&frame);
 //! ```
 
+pub mod audio;
 pub mod color;
 pub mod draw;
 pub mod engine;
@@ -36,6 +37,7 @@ pub mod shaders;
 pub mod text;
 pub mod types;
 pub mod video;
+pub mod video_stream;
 
 // ── Public re-exports ──
 pub use engine::CoreEngine;

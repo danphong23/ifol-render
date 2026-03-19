@@ -24,9 +24,6 @@ pub struct RenderSettings {
     /// Background color (RGBA, 0..1). Default: transparent black.
     #[serde(default)]
     pub background: [f32; 4],
-    /// Path to FFmpeg binary. None = use system PATH.
-    #[serde(default)]
-    pub ffmpeg_path: Option<String>,
 }
 
 fn default_fps() -> f64 {
@@ -40,7 +37,6 @@ impl Default for RenderSettings {
             height: 1080,
             fps: 30.0,
             background: [0.0, 0.0, 0.0, 1.0],
-            ffmpeg_path: None,
         }
     }
 }

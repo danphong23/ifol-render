@@ -10,6 +10,7 @@ use crate::frame::{Frame, PassType, RenderSettings, TextureUpdate};
 use crate::shaders;
 use crate::text::{self, TextOptions};
 use crate::video;
+use crate::video_stream::VideoStream;
 use ifol_render::{DrawCommand, GpuCapabilities, PipelineConfig, Renderer};
 use std::collections::HashMap;
 
@@ -24,6 +25,10 @@ pub struct CoreEngine {
     font_cache: HashMap<String, Vec<u8>>,
     /// Cached video metadata (path → VideoInfo).
     video_info_cache: HashMap<String, video::VideoInfo>,
+    /// Persistent video stream decoders (stream_key → VideoStream).
+    video_streams: HashMap<String, VideoStream>,
+    /// Path to FFmpeg binary. Engine-level config.
+    ffmpeg_path: Option<String>,
 }
 
 impl CoreEngine {
@@ -37,7 +42,19 @@ impl CoreEngine {
             settings,
             font_cache: HashMap::new(),
             video_info_cache: HashMap::new(),
+            video_streams: HashMap::new(),
+            ffmpeg_path: None,
         }
+    }
+
+    /// Set the FFmpeg binary path (engine-level config).
+    pub fn set_ffmpeg_path(&mut self, path: &str) {
+        self.ffmpeg_path = Some(path.to_string());
+    }
+
+    /// Get the configured FFmpeg binary path.
+    pub fn ffmpeg_bin(&self) -> &str {
+        self.ffmpeg_path.as_deref().unwrap_or("ffmpeg")
     }
 
     /// Register all built-in shaders (composite, shapes, effects, ...).
@@ -127,7 +144,10 @@ impl CoreEngine {
         Ok(())
     }
 
-    /// Decode a single video frame and upload as texture.
+    /// Decode a video frame and upload as texture.
+    ///
+    /// Uses persistent VideoStream for fast sequential reads (~5ms).
+    /// Falls back to single-frame decode for random access.
     pub fn decode_video_frame(
         &mut self,
         key: &str,
@@ -136,18 +156,28 @@ impl CoreEngine {
         width: Option<u32>,
         height: Option<u32>,
     ) -> Result<[u32; 2], String> {
-        let ffmpeg = self.settings.ffmpeg_path.as_deref();
-        let (pixels, w, h) = video::decode_frame(path, timestamp_secs, width, height, ffmpeg)?;
-        self.renderer.load_rgba(key, &pixels, w, h);
+        let w = width.unwrap_or(self.settings.width);
+        let h = height.unwrap_or(self.settings.height);
+        let stream_key = format!("{}:{}x{}", path, w, h);
+        let ffmpeg_bin = self.ffmpeg_bin().to_string();
+        let fps = self.settings.fps;
+
+        // Get or create VideoStream
+        if !self.video_streams.contains_key(&stream_key) {
+            let stream = VideoStream::start(path, timestamp_secs, w, h, fps, &ffmpeg_bin)?;
+            self.video_streams.insert(stream_key.clone(), stream);
+        }
+
+        let stream = self.video_streams.get_mut(&stream_key).unwrap();
+        let pixels = stream.frame_at(timestamp_secs)?;
+        self.renderer.load_rgba(key, pixels, w, h);
         Ok([w, h])
     }
 
     /// Get cached video info, probing if not yet cached.
     pub fn video_info(&mut self, path: &str) -> Result<&video::VideoInfo, String> {
         if !self.video_info_cache.contains_key(path) {
-            // Derive ffprobe path from ffmpeg_path
             let probe_path = self
-                .settings
                 .ffmpeg_path
                 .as_ref()
                 .map(|p| p.replace("ffmpeg", "ffprobe"));
