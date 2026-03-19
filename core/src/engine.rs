@@ -136,7 +136,8 @@ impl CoreEngine {
         width: Option<u32>,
         height: Option<u32>,
     ) -> Result<[u32; 2], String> {
-        let (pixels, w, h) = video::decode_frame(path, timestamp_secs, width, height, None)?;
+        let ffmpeg = self.settings.ffmpeg_path.as_deref();
+        let (pixels, w, h) = video::decode_frame(path, timestamp_secs, width, height, ffmpeg)?;
         self.renderer.load_rgba(key, &pixels, w, h);
         Ok([w, h])
     }
@@ -144,7 +145,13 @@ impl CoreEngine {
     /// Get cached video info, probing if not yet cached.
     pub fn video_info(&mut self, path: &str) -> Result<&video::VideoInfo, String> {
         if !self.video_info_cache.contains_key(path) {
-            let info = video::probe(path, None)?;
+            // Derive ffprobe path from ffmpeg_path
+            let probe_path = self
+                .settings
+                .ffmpeg_path
+                .as_ref()
+                .map(|p| p.replace("ffmpeg", "ffprobe"));
+            let info = video::probe(path, probe_path.as_deref())?;
             self.video_info_cache.insert(path.to_string(), info);
         }
         Ok(&self.video_info_cache[path])

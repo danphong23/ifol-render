@@ -399,6 +399,7 @@ impl StudioApp {
             width: out_w,
             height: out_h,
             fps,
+            ffmpeg_path: scene.settings.ffmpeg_path.clone(),
             ..Default::default()
         };
 
