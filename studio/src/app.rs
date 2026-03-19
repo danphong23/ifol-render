@@ -51,6 +51,56 @@ impl PreviewScale {
     }
 }
 
+/// Export settings dialog state.
+struct ExportSettings {
+    output_path: String,
+    codec_index: usize,
+    crf: u32,
+    pixel_format: String,
+    ffmpeg_path: String,
+    use_custom_resolution: bool,
+    export_width: u32,
+    export_height: u32,
+}
+
+const CODECS: &[(&str, &str)] = &[
+    ("H.264 (MP4)", "h264"),
+    ("H.265/HEVC (MP4)", "h265"),
+    ("VP9 (WebM)", "vp9"),
+    ("ProRes (MOV)", "prores"),
+    ("PNG Sequence", "png"),
+];
+
+impl ExportSettings {
+    fn new(width: u32, height: u32) -> Self {
+        Self {
+            output_path: "output.mp4".into(),
+            codec_index: 0,
+            crf: 23,
+            pixel_format: "yuv420p".into(),
+            ffmpeg_path: String::new(),
+            use_custom_resolution: false,
+            export_width: width,
+            export_height: height,
+        }
+    }
+
+    fn codec(&self) -> ifol_render_core::VideoCodec {
+        match CODECS[self.codec_index].1 {
+            "h264" => ifol_render_core::VideoCodec::H264,
+            "h265" => ifol_render_core::VideoCodec::H265,
+            "vp9" => ifol_render_core::VideoCodec::VP9,
+            "prores" => ifol_render_core::VideoCodec::ProRes,
+            "png" => ifol_render_core::VideoCodec::PngSequence,
+            _ => ifol_render_core::VideoCodec::H264,
+        }
+    }
+
+    fn extension(&self) -> &str {
+        self.codec().extension()
+    }
+}
+
 /// Studio application state.
 pub struct StudioApp {
     scene: Option<SceneData>,
@@ -75,9 +125,10 @@ pub struct StudioApp {
     render_ms: f64,
     /// Last known viewport display size (for auto resolution).
     viewport_display_size: [f32; 2],
-    /// Export state.
+    /// Export dialog.
+    show_export_dialog: bool,
+    export_settings: ExportSettings,
     exporting: bool,
-    export_progress: f64,
 }
 
 impl StudioApp {
@@ -101,8 +152,9 @@ impl StudioApp {
             scene_path: None,
             render_ms: 0.0,
             viewport_display_size: [640.0, 360.0],
+            show_export_dialog: false,
+            export_settings: ExportSettings::new(1920, 1080),
             exporting: false,
-            export_progress: 0.0,
         };
 
         if let Some(path) = scene_path {
@@ -255,37 +307,43 @@ impl StudioApp {
     }
 
     fn do_export(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("MP4", &["mp4"])
-            .add_filter("WebM", &["webm"])
-            .set_file_name("output.mp4")
-            .save_file()
-        else { return; };
-
         let (Some(scene), Some(engine)) = (&self.scene, &mut self.engine)
         else { return; };
 
-        let (out_w, out_h) = (scene.settings.width, scene.settings.height);
+        let es = &self.export_settings;
+        let out_w = if es.use_custom_resolution { es.export_width } else { scene.settings.width };
+        let out_h = if es.use_custom_resolution { es.export_height } else { scene.settings.height };
 
-        // Resize engine to full output resolution for export
+        // Resize engine to export resolution
         engine.resize(out_w, out_h);
 
+        let ffmpeg_path = if es.ffmpeg_path.trim().is_empty() {
+            None
+        } else {
+            Some(es.ffmpeg_path.trim().to_string())
+        };
+
         let config = ifol_render_core::ExportConfig {
-            output_path: path.to_string_lossy().to_string(),
+            output_path: es.output_path.clone(),
+            codec: es.codec(),
+            pixel_format: es.pixel_format.clone(),
+            crf: es.crf,
             fps: Some(scene.settings.fps),
             width: Some(out_w),
             height: Some(out_h),
-            ..Default::default()
+            ffmpeg_path,
         };
 
         self.exporting = true;
-        self.status = format!("Exporting {} frames → {:?}...", scene.frames.len(), path.file_name().unwrap_or_default());
+        self.status = format!("Exporting {} frames → {} ...",
+            scene.frames.len(), es.output_path);
 
+        let total = scene.frames.len();
         match engine.export_video(&scene.frames, &config, |p| {
             log::info!("Export: {:.0}% ({}/{})", p.percent(), p.current_frame, p.total_frames);
         }) {
             Ok(()) => {
-                self.status = format!("✅ Exported: {:?}", path);
+                self.status = format!("✅ Exported {} frames → {}", total, es.output_path);
             }
             Err(e) => {
                 self.status = format!("❌ Export error: {}", e);
@@ -293,7 +351,7 @@ impl StudioApp {
         }
 
         // Restore preview resolution
-        self.render_w = 0; // force re-compute on next render
+        self.render_w = 0;
         self.render_h = 0;
         self.exporting = false;
         self.dirty = true;
@@ -434,9 +492,15 @@ impl eframe::App for StudioApp {
                         }
                         ui.close_menu();
                     }
-                    if ui.button("🎬 Export Video (MP4)...").clicked() {
+                    if ui.button("🎬 Export Video...").clicked() {
                         ui.close_menu();
-                        self.do_export();
+                        // Initialize export settings from scene
+                        if let Some(scene) = &self.scene {
+                            self.export_settings = ExportSettings::new(
+                                scene.settings.width, scene.settings.height
+                            );
+                        }
+                        self.show_export_dialog = true;
                     }
                 });
 
@@ -486,6 +550,155 @@ impl eframe::App for StudioApp {
             });
         });
 
+        // ═══════════════ EXPORT DIALOG ═══════════════
+        let mut start_export = false;
+        if self.show_export_dialog {
+            let mut open = true;
+            egui::Window::new("🎬 Export Video")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .min_width(420.0)
+                .show(ctx, |ui| {
+                    ui.spacing_mut().item_spacing.y = 6.0;
+
+                    // ── Output path ──
+                    ui.horizontal(|ui| {
+                        ui.label("Output:");
+                        ui.add(egui::TextEdit::singleline(&mut self.export_settings.output_path)
+                            .desired_width(280.0));
+                        if ui.button("📂").clicked() {
+                            let ext = self.export_settings.extension().to_string();
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter(&ext.to_uppercase(), &[&ext])
+                                .set_file_name(&format!("output.{}", ext))
+                                .save_file()
+                            {
+                                self.export_settings.output_path = path.to_string_lossy().to_string();
+                            }
+                        }
+                    });
+
+                    ui.separator();
+
+                    // ── Codec ──
+                    ui.horizontal(|ui| {
+                        ui.label("Codec:");
+                        egui::ComboBox::from_id_salt("codec_select")
+                            .selected_text(CODECS[self.export_settings.codec_index].0)
+                            .show_ui(ui, |ui| {
+                                for (i, (label, _)) in CODECS.iter().enumerate() {
+                                    ui.selectable_value(&mut self.export_settings.codec_index, i, *label);
+                                }
+                            });
+                    });
+
+                    // Update extension when codec changes
+                    {
+                        let ext = self.export_settings.extension().to_string();
+                        if let Some(dot_pos) = self.export_settings.output_path.rfind('.') {
+                            let current_ext = &self.export_settings.output_path[dot_pos + 1..];
+                            if current_ext != ext {
+                                self.export_settings.output_path.truncate(dot_pos + 1);
+                                self.export_settings.output_path.push_str(&ext);
+                            }
+                        }
+                    }
+
+                    // ── CRF ──
+                    ui.horizontal(|ui| {
+                        ui.label("Quality (CRF):");
+                        let mut crf = self.export_settings.crf as f32;
+                        let quality = if crf < 18.0 { "high" } else if crf < 28.0 { "medium" } else { "low" };
+                        ui.add(egui::Slider::new(&mut crf, 0.0..=51.0).step_by(1.0));
+                        ui.colored_label(TEXT_DIM, format!("({})", quality));
+                        self.export_settings.crf = crf as u32;
+                    });
+
+                    // ── Pixel Format ──
+                    ui.horizontal(|ui| {
+                        ui.label("Pixel Format:");
+                        egui::ComboBox::from_id_salt("pix_fmt")
+                            .selected_text(&self.export_settings.pixel_format)
+                            .show_ui(ui, |ui| {
+                                for fmt in &["yuv420p", "yuv444p", "rgb24", "rgba"] {
+                                    ui.selectable_value(&mut self.export_settings.pixel_format, fmt.to_string(), *fmt);
+                                }
+                            });
+                    });
+
+                    ui.separator();
+
+                    // ── Resolution ──
+                    ui.checkbox(&mut self.export_settings.use_custom_resolution, "Custom resolution");
+                    if self.export_settings.use_custom_resolution {
+                        ui.horizontal(|ui| {
+                            ui.label("Width:");
+                            ui.add(egui::DragValue::new(&mut self.export_settings.export_width)
+                                .range(64..=7680).speed(2));
+                            ui.label("Height:");
+                            ui.add(egui::DragValue::new(&mut self.export_settings.export_height)
+                                .range(64..=4320).speed(2));
+                        });
+                    } else if let Some(scene) = &self.scene {
+                        ui.colored_label(TEXT_DIM, format!(
+                            "Resolution: {}×{} (from scene)", scene.settings.width, scene.settings.height
+                        ));
+                    }
+
+                    ui.separator();
+
+                    // ── FFmpeg path ──
+                    ui.horizontal(|ui| {
+                        ui.label("FFmpeg:");
+                        ui.add(egui::TextEdit::singleline(&mut self.export_settings.ffmpeg_path)
+                            .desired_width(250.0)
+                            .hint_text("(system PATH)"));
+                        if ui.button("📂").clicked() {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter("Executable", &["exe", ""])
+                                .pick_file()
+                            {
+                                self.export_settings.ffmpeg_path = path.to_string_lossy().to_string();
+                            }
+                        }
+                    });
+
+                    ui.separator();
+
+                    // ── Info ──
+                    if let Some(scene) = &self.scene {
+                        ui.colored_label(TEXT_DIM, format!(
+                            "{} frames | {:.1}s | {:.0}fps",
+                            scene.frames.len(), self.duration(), scene.settings.fps
+                        ));
+                    }
+
+                    // ── Buttons ──
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        if ui.add_sized([120.0, 32.0], egui::Button::new(
+                            egui::RichText::new("🚀 Export").size(14.0).color(egui::Color32::WHITE)
+                        ).fill(GREEN)).clicked() {
+                            start_export = true;
+                        }
+                        if ui.add_sized([100.0, 32.0], egui::Button::new(
+                            egui::RichText::new("Cancel").size(14.0)
+                        ).fill(BG_SURFACE)).clicked() {
+                            self.show_export_dialog = false;
+                        }
+                    });
+                });
+            if !open {
+                self.show_export_dialog = false;
+            }
+        }
+        // Handle export after dialog is done rendering (avoids borrow issues)
+        if start_export {
+            self.show_export_dialog = false;
+            self.do_export();
+        }
         // ═══════════════ STATUS BAR ═══════════════
         egui::TopBottomPanel::bottom("status_bar")
             .max_height(24.0)
