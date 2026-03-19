@@ -22,67 +22,19 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Render all frames to raw RGBA output.
-    Render {
+    /// Render a Frame JSON file to PNG using CoreEngine.
+    FrameRender {
+        /// Path to Frame JSON file.
         #[arg(short, long)]
-        scene: PathBuf,
-        #[arg(long, default_value = "30")]
-        fps: f64,
-        #[arg(long)]
-        width: Option<u32>,
-        #[arg(long)]
-        height: Option<u32>,
-        #[arg(short, long, default_value = "pipe:1")]
-        output: String,
-    },
-
-    /// Print scene information.
-    Info {
-        #[arg(short, long)]
-        scene: PathBuf,
-    },
-
-    /// Render a single frame at a specific timestamp.
-    Preview {
-        #[arg(short, long)]
-        scene: PathBuf,
-        #[arg(short, long)]
-        timestamp: f64,
-        #[arg(short, long, default_value = "preview.png")]
+        frame: PathBuf,
+        /// Output PNG path.
+        #[arg(short, long, default_value = "output.png")]
         output: PathBuf,
     },
 
-    /// Export scene to video file using FFmpeg.
-    Export {
-        /// Path to scene JSON file.
-        #[arg(short, long)]
-        scene: PathBuf,
-        /// Output video file path.
-        #[arg(short, long, default_value = "output.mp4")]
-        output: String,
-        /// Video codec: h264, h265, vp9, prores, png.
-        #[arg(short, long, default_value = "h264")]
-        codec: String,
-        /// Constant Rate Factor (quality). Lower = better quality. Range: 0–51.
-        #[arg(long, default_value = "23")]
-        crf: u32,
-        /// Override FPS.
-        #[arg(long)]
-        fps: Option<f64>,
-        /// Override width.
-        #[arg(long)]
-        width: Option<u32>,
-        /// Override height.
-        #[arg(long)]
-        height: Option<u32>,
-        /// Path to FFmpeg binary (default: searches PATH).
-        #[arg(long)]
-        ffmpeg: Option<String>,
-    },
-
-    /// Test render directly (no ECS). Draws test patterns to verify GPU output.
+    /// Test render directly. Draws test patterns to verify GPU output.
     RenderTest {
-        /// Test name: basic, blend, effects
+        /// Test name: basic, blend, shapes, gradients, resize, masking, text, effects, perf
         #[arg(short, long, default_value = "basic")]
         test: String,
         /// Output image path.
@@ -102,42 +54,64 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Render { scene, .. } => {
-            eprintln!("Scene rendering requires frontend ECS to bake frames.");
-            eprintln!("Use 'render-test' commands for direct GPU tests.");
-            eprintln!("Scene file: {:?}", scene);
-            std::process::exit(1);
-        }
+        Commands::FrameRender { frame, output } => {
+            println!("Frame render: {:?} → {:?}", frame, output);
 
-        Commands::Info { scene } => {
-            let json = std::fs::read_to_string(&scene).expect("Failed to read scene file");
-            println!("Scene file: {:?}", scene);
-            println!("JSON length: {} bytes", json.len());
-            println!("(Scene info requires frontend ECS parser — use JSON viewer)");
-        }
+            // Read JSON
+            let json = std::fs::read_to_string(&frame)
+                .unwrap_or_else(|e| { eprintln!("Failed to read {:?}: {}", frame, e); std::process::exit(1); });
 
-        Commands::Preview {
-            scene,
-            timestamp,
-            output,
-        } => {
-            eprintln!("Scene preview requires frontend ECS to bake frame at t={timestamp}s.");
-            eprintln!("Use 'render-test' commands for direct GPU tests.");
-            eprintln!("Scene: {:?}, Output: {:?}", scene, output);
-            std::process::exit(1);
-        }
+            // Parse Frame JSON format: { "settings": {...}, "frame": {...} }
+            let doc: serde_json::Value = serde_json::from_str(&json)
+                .unwrap_or_else(|e| { eprintln!("Invalid JSON: {}", e); std::process::exit(1); });
 
-        Commands::Export {
-            scene,
-            output,
-            codec,
-            ..
-        } => {
-            eprintln!("Scene export requires frontend ECS to bake all frames.");
-            eprintln!("Scene: {:?}, Output: {}, Codec: {}", scene, output, codec);
-            std::process::exit(1);
-        }
+            let settings: ifol_render_core::RenderSettings = if let Some(s) = doc.get("settings") {
+                serde_json::from_value(s.clone())
+                    .unwrap_or_else(|e| { eprintln!("Invalid settings: {}", e); std::process::exit(1); })
+            } else {
+                ifol_render_core::RenderSettings::default()
+            };
 
+            let frame_data: ifol_render_core::Frame = if let Some(f) = doc.get("frame") {
+                serde_json::from_value(f.clone())
+                    .unwrap_or_else(|e| { eprintln!("Invalid frame data: {}", e); std::process::exit(1); })
+            } else {
+                eprintln!("Missing 'frame' key in JSON"); std::process::exit(1);
+            };
+
+            println!("Settings: {}x{}", settings.width, settings.height);
+            let pass_count = frame_data.passes.len();
+            let entity_count: usize = frame_data.passes.iter().map(|p| {
+                match &p.pass_type {
+                    ifol_render_core::PassType::Entities { entities, .. } => entities.len(),
+                    _ => 0,
+                }
+            }).sum();
+            println!("Passes: {}, Entities: {}", pass_count, entity_count);
+
+            // Create CoreEngine
+            let mut engine = ifol_render_core::CoreEngine::new(settings);
+            engine.setup_builtins();
+
+            let caps = engine.capabilities();
+            println!("GPU: {} ({})", caps.gpu_name, caps.backend);
+
+            // Render
+            let t = std::time::Instant::now();
+            let pixels = engine.render_frame(&frame_data);
+            let render_ms = t.elapsed().as_secs_f64() * 1000.0;
+            println!("Render: {:.2}ms", render_ms);
+
+            // Save
+            let out_path = output.to_str().unwrap();
+            ifol_render_core::CoreEngine::save_png(
+                &pixels,
+                engine.settings().width,
+                engine.settings().height,
+                out_path,
+            ).expect("Failed to save PNG");
+            println!("Saved: {}", out_path);
+        }
         Commands::RenderTest {
             test,
             output,

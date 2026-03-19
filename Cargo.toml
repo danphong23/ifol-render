@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "render",
     "core",
-    "studio",
+    # "studio",  # Temporarily removed — will rebuild with new Core API
     "crates/wasm",
     "crates/cli",
 ]

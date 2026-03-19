@@ -36,19 +36,10 @@ pub mod shaders;
 pub mod text;
 pub mod types;
 
-// ── Legacy modules (for studio/frontend migration) ──
-// These modules contain the old ECS architecture.
-// They will be moved to studio/frontend in the next phase.
-// New consumers should use CoreEngine + Frame API instead.
-pub mod commands;
-pub mod ecs;
-pub mod scene;
-pub mod time;
-
-// ── Public re-exports (NEW API) ──
+// ── Public re-exports ──
 pub use engine::CoreEngine;
 pub use export::{ExportConfig, ExportProgress, VideoCodec};
 pub use frame::{FlatEntity, Frame, PassType, RenderPass, RenderSettings, TextureUpdate};
 
-// Re-export render types for consumers that need them
+// Re-export render types for consumers
 pub use ifol_render::{DrawCommand, EffectConfig, GpuCapabilities, PipelineConfig, Renderer};
