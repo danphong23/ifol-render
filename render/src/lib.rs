@@ -394,6 +394,45 @@ impl Renderer {
         self.texture_cache_bytes += size_bytes;
     }
 
+    /// Update an existing texture's pixel data WITHOUT recreating it.
+    ///
+    /// If the texture exists with matching dimensions, just writes new data (fast).
+    /// If dimensions changed or texture doesn't exist, falls back to full load.
+    ///
+    /// This is the key optimization for video frames — avoids GPU texture
+    /// creation/destruction at 30fps (8MB allocation per frame).
+    pub fn update_rgba(&mut self, key: &str, data: &[u8], width: u32, height: u32) {
+        if let Some(entry) = self.texture_cache.get_mut(key) {
+            let expected_size = (width as u64) * (height as u64) * 4;
+            if entry.size_bytes == expected_size {
+                // Same dimensions — just update the data (fast path)
+                self.engine.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &entry.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    data,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(4 * width),
+                        rows_per_image: Some(height),
+                    },
+                    wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                entry.last_used_frame = self.frame_number;
+                return;
+            }
+        }
+        // Dimensions changed or texture doesn't exist — full recreation
+        self.load_rgba(key, data, width, height);
+    }
+
     /// Check if a texture is cached.
     pub fn has_texture(&self, key: &str) -> bool {
         self.texture_cache.contains_key(key)

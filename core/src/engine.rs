@@ -130,7 +130,7 @@ impl CoreEngine {
             None => text::default_font_data(),
         };
         let (pixels, tw, th) = text::rasterize_text(content, font_data, opts)?;
-        self.renderer.load_rgba(key, &pixels, tw, th);
+        self.renderer.update_rgba(key, &pixels, tw, th);
         Ok([tw, th])
     }
 
@@ -170,7 +170,7 @@ impl CoreEngine {
 
         let stream = self.video_streams.get_mut(&stream_key).unwrap();
         let pixels = stream.frame_at(timestamp_secs)?;
-        self.renderer.load_rgba(key, pixels, w, h);
+        self.renderer.update_rgba(key, pixels, w, h);
         Ok([w, h])
     }
 

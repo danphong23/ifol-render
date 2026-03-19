@@ -75,16 +75,59 @@ const CODECS: &[(&str, &str)] = &[
 
 impl ExportSettings {
     fn new(width: u32, height: u32) -> Self {
+        // Auto-detect FFmpeg from tool/ directory relative to executable
+        let ffmpeg_path = Self::detect_ffmpeg();
         Self {
             output_path: "output.mp4".into(),
             codec_index: 0,
             crf: 23,
             pixel_format: "yuv420p".into(),
-            ffmpeg_path: String::new(),
+            ffmpeg_path,
             use_custom_resolution: false,
             export_width: width,
             export_height: height,
         }
+    }
+
+    /// Try to find ffmpeg in common locations relative to executable.
+    fn detect_ffmpeg() -> String {
+        // Check tool/ directory relative to current working directory
+        let candidates = [
+            "tool/ffmpeg.exe",
+            "tool/ffmpeg",
+            "../tool/ffmpeg.exe",
+            "../tool/ffmpeg",
+        ];
+
+        for candidate in &candidates {
+            let path = std::path::Path::new(candidate);
+            if path.exists() {
+                if let Ok(abs) = std::fs::canonicalize(path) {
+                    return abs.to_string_lossy().to_string();
+                }
+            }
+        }
+
+        // Also check relative to executable location
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                for name in &["ffmpeg.exe", "ffmpeg"] {
+                    let tool_path = exe_dir.join("tool").join(name);
+                    if tool_path.exists() {
+                        return tool_path.to_string_lossy().to_string();
+                    }
+                    // One level up
+                    if let Some(parent) = exe_dir.parent() {
+                        let tool_path = parent.join("tool").join(name);
+                        if tool_path.exists() {
+                            return tool_path.to_string_lossy().to_string();
+                        }
+                    }
+                }
+            }
+        }
+
+        String::new() // fallback: use system PATH
     }
 
     fn codec(&self) -> ifol_render_core::VideoCodec {
