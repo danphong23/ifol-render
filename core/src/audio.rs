@@ -191,6 +191,100 @@ pub fn decode_audio(
 }
 
 // ══════════════════════════════════════
+// Streaming
+// ══════════════════════════════════════
+
+/// A real-time audio stream from FFmpeg. Reads f32 PCM samples on demand.
+pub struct StreamingAudio {
+    process: std::process::Child,
+    pub sample_rate: u32,
+    pub channels: u32,
+}
+
+impl StreamingAudio {
+    /// Start a new streaming audio process.
+    pub fn new(
+        path: &str,
+        offset: f64,
+        config: &AudioConfig,
+        ffmpeg_bin: Option<&str>,
+    ) -> Result<Self, String> {
+        let bin = ffmpeg_bin.unwrap_or("ffmpeg");
+        let mut cmd = Command::new(bin);
+
+        if offset > 0.0 {
+            cmd.args(["-ss", &format!("{:.4}", offset)]);
+        }
+
+        cmd.args(["-i", path]);
+        cmd.args(["-vn"]); // disable video
+        cmd.args(["-f", "f32le"]);
+        cmd.args(["-acodec", "pcm_f32le"]);
+        cmd.args(["-ar", &config.sample_rate.to_string()]);
+        cmd.args(["-ac", &config.channels.to_string()]);
+        cmd.arg("-v").arg("quiet");
+        cmd.arg("pipe:1");
+
+        cmd.stdin(Stdio::null());
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+
+        let process = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to spawn FFmpeg audio stream: {e}"))?;
+
+        log::debug!(
+            "Started streaming audio from '{}' (offset={:.2}s)",
+            path,
+            offset
+        );
+
+        Ok(Self {
+            process,
+            sample_rate: config.sample_rate,
+            channels: config.channels,
+        })
+    }
+
+    /// Read raw f32 samples. Returns 0 if EOF or error.
+    pub fn read_samples(&mut self, buffer: &mut [f32]) -> usize {
+        use std::io::Read;
+        if let Some(stdout) = self.process.stdout.as_mut() {
+            // f32 is 4 bytes
+            let bytes_needed = buffer.len() * 4;
+            let mut byte_buf = vec![0u8; bytes_needed];
+            
+            let mut total_bytes_read = 0;
+            while total_bytes_read < bytes_needed {
+                match stdout.read(&mut byte_buf[total_bytes_read..]) {
+                    Ok(0) => break, // EOF
+                    Ok(n) => total_bytes_read += n,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
+
+            let samples_read = total_bytes_read / 4;
+            for i in 0..samples_read {
+                let chunk = &byte_buf[i * 4..(i + 1) * 4];
+                buffer[i] = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            }
+            
+            samples_read
+        } else {
+            0
+        }
+    }
+}
+
+impl Drop for StreamingAudio {
+    fn drop(&mut self) {
+        let _ = self.process.kill();
+        let _ = self.process.wait();
+    }
+}
+
+// ══════════════════════════════════════
 // Mix
 // ══════════════════════════════════════
 

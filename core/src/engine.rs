@@ -3,16 +3,18 @@
 //! Wraps the GPU renderer, manages shaders & textures,
 //! and exposes a simple API: receive Frame → render → return pixels.
 
+use crate::backend::{FfmpegMediaBackend, MediaBackend};
 use crate::draw;
-use crate::export::ffmpeg::FfmpegPipe;
 use crate::export::{ExportConfig, ExportProgress};
 use crate::frame::{Frame, PassType, RenderSettings, TextureUpdate};
 use crate::shaders;
+use crate::sysinfo::SysInfo;
 use crate::text::{self, TextOptions};
 use crate::video;
 use crate::video_stream::VideoStream;
 use ifol_render::{DrawCommand, GpuCapabilities, PipelineConfig, Renderer};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// The core rendering engine.
 ///
@@ -32,6 +34,8 @@ pub struct CoreEngine {
     /// Text content cache — skip re-rasterization when content hasn't changed.
     /// Maps texture key → (content, font_size, alignment) signature.
     text_cache: HashMap<String, (String, u32, u32)>,
+    /// Polymorphic Media Backend (defaults to FFmpeg)
+    pub backend: Arc<Box<dyn MediaBackend>>,
 }
 
 impl CoreEngine {
@@ -40,6 +44,7 @@ impl CoreEngine {
     /// Initializes the GPU (headless), allocates buffers.
     pub fn new(settings: RenderSettings) -> Self {
         let renderer = Renderer::new(settings.width, settings.height);
+        let default_backend = Box::new(FfmpegMediaBackend::new("ffmpeg")) as Box<dyn MediaBackend>;
         Self {
             renderer,
             settings,
@@ -48,12 +53,14 @@ impl CoreEngine {
             video_streams: HashMap::new(),
             ffmpeg_path: None,
             text_cache: HashMap::new(),
+            backend: Arc::new(default_backend),
         }
     }
 
     /// Set the FFmpeg binary path (engine-level config).
     pub fn set_ffmpeg_path(&mut self, path: &str) {
         self.ffmpeg_path = Some(path.to_string());
+        self.backend = Arc::new(Box::new(FfmpegMediaBackend::new(path)) as Box<dyn MediaBackend>);
     }
 
     /// Get the configured FFmpeg binary path.
@@ -294,16 +301,22 @@ impl CoreEngine {
     // ── Export ──
 
     /// Export a sequence of frames to video via FFmpeg.
-    pub fn export_video(
+    /// If `audio_clips` is provided, it will statically mix them and mux the final audio into the output video.
+    /// `frames` is an Iterator, allowing infinite-length batch generation to save memory.
+    pub fn export_video<I>(
         &mut self,
-        frames: &[Frame],
+        frames: I,
+        total_frames: usize,
+        audio_clips: &[crate::audio::AudioClip],
         config: &ExportConfig,
-        mut on_progress: impl FnMut(ExportProgress),
-    ) -> Result<(), String> {
+        mut on_progress: impl FnMut(ExportProgress) -> bool,
+    ) -> Result<(), String> 
+    where
+        I: IntoIterator<Item = Frame>,
+    {
         let fps = config.fps.unwrap_or(30.0);
         let width = config.width.unwrap_or(self.settings.width);
         let height = config.height.unwrap_or(self.settings.height);
-        let total_frames = frames.len() as u64;
 
         if total_frames == 0 {
             return Err("No frames to export.".into());
@@ -314,22 +327,26 @@ impl CoreEngine {
             self.resize(width, height);
         }
 
-        let mut ffmpeg = FfmpegPipe::start(
-            width,
-            height,
-            fps,
-            &config.codec,
-            &config.pixel_format,
-            config.crf,
-            &config.output_path,
-            config.ffmpeg_path.as_deref(),
-        )?;
+        let sys_info = SysInfo::probe(self.ffmpeg_bin());
+        log::info!("Export Hardware detected: {:?}", sys_info);
+
+        let final_path = config.output_path.clone();
+        let video_path = if audio_clips.is_empty() {
+            final_path.clone()
+        } else {
+            final_path.replace(".mp4", "_temp_video.mp4").replace(".mov", "_temp_video.mov").replace(".webm", "_temp.webm")
+        };
+
+        let mut temp_config = config.clone();
+        temp_config.output_path = video_path.clone();
+
+        let mut encoder = self.backend.start_export(width, height, fps, &temp_config, &sys_info)?;
 
         let start = std::time::Instant::now();
 
-        for (i, frame) in frames.iter().enumerate() {
-            let pixels = self.render_frame(frame);
-            ffmpeg.write_frame(&pixels)?;
+        for (i, frame) in frames.into_iter().enumerate() {
+            let pixels = self.render_frame(&frame);
+            encoder.write_rgba_frame(&pixels)?;
 
             let elapsed = start.elapsed().as_secs_f64();
             let export_fps = if elapsed > 0.0 {
@@ -337,22 +354,40 @@ impl CoreEngine {
             } else {
                 0.0
             };
-            let remaining = total_frames - i as u64 - 1;
+            let remaining: u64 = if total_frames > i + 1 { (total_frames - i - 1) as u64 } else { 0 };
             let eta = if export_fps > 0.0 {
                 remaining as f64 / export_fps
             } else {
                 0.0
             };
 
-            on_progress(ExportProgress {
+            if !on_progress(ExportProgress {
                 current_frame: i as u64,
-                total_frames,
+                total_frames: total_frames as u64,
                 eta_seconds: eta,
                 export_fps,
-            });
+            }) {
+                log::info!("Export cancelled via progress callback.");
+                break;
+            }
         }
 
-        ffmpeg.finish()
+        encoder.close()?;
+
+        if !audio_clips.is_empty() {
+            log::info!("Mixing audio for export...");
+            let audio_path = final_path.replace(".mp4", "_temp_audio.wav").replace(".mov", "_temp_audio.wav").replace(".webm", "_temp_audio.wav");
+            let duration = total_frames as f64 / fps;
+            
+            self.backend.export_mixed_audio(audio_clips, duration, 48000, 2, &audio_path)?;
+            self.backend.mux_video_audio(&video_path, &audio_path, &final_path)?;
+            
+            // Clean up temps
+            let _ = std::fs::remove_file(video_path);
+            let _ = std::fs::remove_file(audio_path);
+        }
+
+        Ok(())
     }
 
     /// Export a single frame as PNG.

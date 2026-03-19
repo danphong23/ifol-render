@@ -61,6 +61,7 @@ struct ExportSettings {
     output_path: String,
     codec_index: usize,
     crf: u32,
+    preset_index: usize,
     pixel_format: String,
     ffmpeg_path: String,
     use_custom_resolution: bool,
@@ -76,6 +77,17 @@ const CODECS: &[(&str, &str)] = &[
     ("PNG Sequence", "png"),
 ];
 
+const PRESETS: &[(&str, &str)] = &[
+    ("Ultrafast (Fastest, Largest)", "ultrafast"),
+    ("Superfast", "superfast"),
+    ("Veryfast", "veryfast"),
+    ("Faster", "faster"),
+    ("Fast", "fast"),
+    ("Medium (Balanced)", "medium"),
+    ("Slow", "slow"),
+    ("Slower", "slower"),
+];
+
 impl ExportSettings {
     fn new(width: u32, height: u32) -> Self {
         // Auto-detect FFmpeg from tool/ directory relative to executable
@@ -84,6 +96,7 @@ impl ExportSettings {
             output_path: "output.mp4".into(),
             codec_index: 0,
             crf: 23,
+            preset_index: 5, // "medium" defaults to index 5
             pixel_format: "yuv420p".into(),
             ffmpeg_path,
             use_custom_resolution: false,
@@ -166,18 +179,20 @@ struct ExportState {
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
-/// Audio player — pre-decodes audio, plays via rodio in sync with timeline.
+/// Audio player — streams audio clips dynamically, plays via rodio in sync with timeline.
 struct AudioPlayer {
     /// rodio output stream (must be kept alive).
     _stream: OutputStream,
     /// Stream handle for creating sinks.
     stream_handle: OutputStreamHandle,
-    /// Current sink for playback.
-    sink: Option<Sink>,
-    /// Pre-decoded interleaved PCM f32 samples.
-    pcm_data: Arc<Vec<f32>>,
+    /// Current sinks for playback (one per playing clip).
+    sinks: Vec<Sink>,
+    /// Stored from scene
+    clips: Vec<AudioClip>,
     /// Audio configuration (sample rate, channels).
     config: AudioConfig,
+    /// FFmpeg binary path.
+    ffmpeg_bin: Option<String>,
     /// Total scene duration in seconds.
     total_duration: f64,
 }
@@ -189,9 +204,10 @@ impl AudioPlayer {
             Ok((stream, handle)) => Some(Self {
                 _stream: stream,
                 stream_handle: handle,
-                sink: None,
-                pcm_data: Arc::new(Vec::new()),
+                sinks: Vec::new(),
+                clips: Vec::new(),
                 config: AudioConfig::default(),
+                ffmpeg_bin: None,
                 total_duration: 0.0,
             }),
             Err(e) => {
@@ -201,31 +217,23 @@ impl AudioPlayer {
         }
     }
 
-    /// Load audio from clips (pre-decode and mix).
+    /// Load audio from clips (metadata only, no decoding).
     fn load_clips(
         &mut self,
         clips: &[AudioClip],
         total_duration: f64,
         ffmpeg_bin: Option<&str>,
     ) {
-        self.total_duration = total_duration;
         self.stop();
-
-        match ifol_render_core::audio::mix_clips(clips, total_duration, &self.config, ffmpeg_bin) {
-            Ok(pcm) => {
-                log::info!("Audio loaded: {} samples, {:.1}s", pcm.len(), total_duration);
-                self.pcm_data = Arc::new(pcm);
-            }
-            Err(e) => {
-                log::warn!("Failed to mix audio clips: {}", e);
-                self.pcm_data = Arc::new(Vec::new());
-            }
-        }
+        self.clips = clips.to_vec();
+        self.ffmpeg_bin = ffmpeg_bin.map(|s| s.to_string());
+        self.total_duration = total_duration;
+        log::info!("Audio initialized for streaming ({} clips)", clips.len());
     }
 
-    /// Check if audio data is loaded.
+    /// Check if audio clips are present.
     fn has_audio(&self) -> bool {
-        !self.pcm_data.is_empty()
+        !self.clips.is_empty()
     }
 
     /// Start or resume playback from a specific time position.
@@ -235,81 +243,96 @@ impl AudioPlayer {
         }
         self.stop();
 
-        // Calculate sample offset
-        let start_sample = (time_secs * self.config.sample_rate as f64) as usize
-            * self.config.channels as usize;
+        for clip in &self.clips {
+            let clip_dur = clip.duration.unwrap_or(self.total_duration);
+            let end_time = clip.start_time + clip_dur;
 
-        if start_sample >= self.pcm_data.len() {
-            return;
-        }
-
-        // Create a new source from the PCM data starting at offset
-        let data = self.pcm_data.clone();
-        let source = PcmSource {
-            data,
-            pos: start_sample,
-            sample_rate: self.config.sample_rate,
-            channels: self.config.channels as u16,
-        };
-
-        if let Ok(sink) = Sink::try_new(&self.stream_handle) {
-            sink.append(source);
-            self.sink = Some(sink);
+            if time_secs >= clip.start_time && time_secs < end_time {
+                // Determine offset into the source clip
+                let play_offset = clip.offset + (time_secs - clip.start_time);
+                
+                // Spawn streaming audio
+                if let Ok(stream) = ifol_render_core::StreamingAudio::new(
+                    &clip.path, 
+                    play_offset, 
+                    &self.config, 
+                    self.ffmpeg_bin.as_deref()
+                ) {
+                    let source = StreamingAudioSource {
+                        sample_rate: stream.sample_rate,
+                        channels: stream.channels as u16,
+                        stream,
+                        buffer: Vec::new(),
+                        pos: 0,
+                    };
+                    
+                    if let Ok(sink) = Sink::try_new(&self.stream_handle) {
+                        sink.set_volume(clip.volume);
+                        sink.append(source);
+                        self.sinks.push(sink);
+                    }
+                }
+            }
         }
     }
 
     /// Pause audio playback.
     fn pause(&mut self) {
-        if let Some(sink) = &self.sink {
+        for sink in &self.sinks {
             sink.pause();
         }
     }
 
     /// Resume audio playback.
     fn resume(&mut self) {
-        if let Some(sink) = &self.sink {
+        for sink in &self.sinks {
             sink.play();
         }
     }
 
     /// Stop audio playback completely.
     fn stop(&mut self) {
-        if let Some(sink) = self.sink.take() {
-            sink.stop();
-        }
+        self.sinks.clear(); // Drop all sinks to stop playback and kill FFmpeg process
     }
 
-    /// Check if sink is currently playing.
+    /// Check if any sink is currently playing.
     fn is_playing(&self) -> bool {
-        self.sink.as_ref().is_some_and(|s| !s.is_paused() && !s.empty())
+        self.sinks.iter().any(|s| !s.is_paused() && !s.empty())
     }
 }
 
-/// Custom PCM audio source for rodio.
-struct PcmSource {
-    data: Arc<Vec<f32>>,
+/// Custom PCM audio source for rodio using in-flight streaming FFmpeg decoder.
+struct StreamingAudioSource {
+    stream: ifol_render_core::StreamingAudio,
+    buffer: Vec<f32>,
     pos: usize,
     sample_rate: u32,
     channels: u16,
 }
 
-impl Iterator for PcmSource {
+impl Iterator for StreamingAudioSource {
     type Item = f32;
 
     fn next(&mut self) -> Option<f32> {
-        if self.pos < self.data.len() {
-            let sample = self.data[self.pos];
-            self.pos += 1;
-            Some(sample)
-        } else {
-            None
+        if self.pos >= self.buffer.len() {
+            let mut chunk = vec![0.0; 4096];
+            let n = self.stream.read_samples(&mut chunk);
+            if n == 0 {
+                return None; // EOF Stream ended
+            }
+            chunk.truncate(n);
+            self.buffer = chunk;
+            self.pos = 0;
         }
+        let sample = self.buffer[self.pos];
+        self.pos += 1;
+        Some(sample)
     }
 }
 
-impl Source for PcmSource {
+impl Source for StreamingAudioSource {
     fn current_frame_len(&self) -> Option<usize> {
-        Some(self.data.len() - self.pos)
+        None // Indicates continuous streaming
     }
 
     fn channels(&self) -> u16 {
@@ -321,10 +344,7 @@ impl Source for PcmSource {
     }
 
     fn total_duration(&self) -> Option<std::time::Duration> {
-        let total_samples = self.data.len() / self.channels as usize;
-        Some(std::time::Duration::from_secs_f64(
-            total_samples as f64 / self.sample_rate as f64,
-        ))
+        None // Unknown streaming duration
     }
 }
 
@@ -628,12 +648,14 @@ impl StudioApp {
         let codec = es.codec();
         let pixel_format = es.pixel_format.clone();
         let crf = es.crf;
+        let preset_flag = PRESETS[es.preset_index].1.to_string();
         let fps = scene.settings.fps;
         let output_path = es.output_path.clone();
         let total = scene.frames.len();
 
         // Clone frame data for the background thread
         let frames: Vec<Frame> = scene.frames.clone();
+        let audio_clips = self.audio_clips.clone();
 
         // Shared state
         let progress = Arc::new(AtomicUsize::new(0));
@@ -665,44 +687,32 @@ impl StudioApp {
                 engine.set_ffmpeg_path(fp);
             }
 
-            // Start FFmpeg
-            let mut ffmpeg = match ifol_render_core::export::ffmpeg::FfmpegPipe::start(
-                out_w,
-                out_h,
-                fps,
-                &codec,
-                &pixel_format,
+            let export_config = ifol_render_core::export::ExportConfig {
+                output_path: out_path,
+                codec,
+                pixel_format,
                 crf,
-                &out_path,
-                ffmpeg_path.as_deref(),
-            ) {
-                Ok(pipe) => pipe,
-                Err(err) => {
-                    *e.lock().unwrap() = Some(err);
-                    d.store(true, Ordering::Release);
-                    return;
-                }
+                preset: Some(preset_flag),
+                fps: Some(fps),
+                width: Some(out_w),
+                height: Some(out_h),
+                ffmpeg_path: export_ffmpeg,
             };
 
-            // Render all frames at full GPU speed
-            for (i, frame) in frames.iter().enumerate() {
-                if c.load(Ordering::Relaxed) {
-                    *e.lock().unwrap() = Some("Cancelled".into());
-                    break;
+            if let Err(err) = engine.export_video(
+                frames.into_iter(),
+                total,
+                &audio_clips,
+                &export_config,
+                |prog| {
+                    if c.load(Ordering::Relaxed) {
+                        return false; 
+                    }
+                    p.store(prog.current_frame as usize + 1, Ordering::Release);
+                    true
                 }
-                let pixels = engine.render_frame(frame);
-                if let Err(err) = ffmpeg.write_frame(&pixels) {
-                    *e.lock().unwrap() = Some(format!("FFmpeg write: {}", err));
-                    break;
-                }
-                p.store(i + 1, Ordering::Release);
-            }
-
-            // Finalize FFmpeg
-            if e.lock().unwrap().is_none()
-                && let Err(err) = ffmpeg.finish()
-            {
-                *e.lock().unwrap() = Some(format!("FFmpeg finalize: {}", err));
+            ) {
+                *e.lock().unwrap() = Some(err);
             }
 
             d.store(true, Ordering::Release);
@@ -1102,6 +1112,22 @@ impl eframe::App for StudioApp {
                         ui.add(egui::Slider::new(&mut crf, 0.0..=51.0).step_by(1.0));
                         ui.colored_label(TEXT_DIM, format!("({})", quality));
                         self.export_settings.crf = crf as u32;
+                    });
+
+                    // ── Preset ──
+                    ui.horizontal(|ui| {
+                        ui.label("Speed Preset:");
+                        egui::ComboBox::from_id_salt("preset_select")
+                            .selected_text(PRESETS[self.export_settings.preset_index].0)
+                            .show_ui(ui, |ui| {
+                                for (i, (label, _)) in PRESETS.iter().enumerate() {
+                                    ui.selectable_value(
+                                        &mut self.export_settings.preset_index,
+                                        i,
+                                        *label,
+                                    );
+                                }
+                            });
                     });
 
                     // ── Pixel Format ──

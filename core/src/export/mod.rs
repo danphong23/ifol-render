@@ -16,6 +16,8 @@ pub struct ExportConfig {
     pub pixel_format: String,
     /// Constant Rate Factor (quality). Lower = better. Typical: 18–28.
     pub crf: u32,
+    /// Encoding preset (e.g., "fast", "medium", "ultrafast"). Maps to FFmpeg -preset.
+    pub preset: Option<String>,
     /// FPS for the output video.
     pub fps: Option<f64>,
     /// Override width (uses engine width if None).
@@ -33,6 +35,7 @@ impl Default for ExportConfig {
             codec: VideoCodec::H264,
             pixel_format: "yuv420p".into(),
             crf: 23,
+            preset: None,
             fps: None,
             width: None,
             height: None,
