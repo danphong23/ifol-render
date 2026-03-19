@@ -1,135 +1,386 @@
-# Architecture — ifol-render
+# ifol-render — System Architecture
 
-## Tổng quan
+## Overview
 
-```
-┌──────────────────────────────────────────────────────────┐
-│  Consumers                                                │
-│  ┌─────────┐  ┌──────────┐  ┌──────┐  ┌──────────────┐  │
-│  │ Studio  │  │   CLI    │  │ WASM │  │  Your App    │  │
-│  └────┬────┘  └────┬─────┘  └──┬───┘  └──────┬───────┘  │
-│       │            │           │              │           │
-│  ┌────┴────────────┴───────────┴──────────────┴────────┐ │
-│  │  core (owns shaders + ECS + logic)                   │ │
-│  │  → register shaders vào render                       │ │
-│  │  → build DrawCommand[] từ ECS                        │ │
-│  └───────────────────────┬──────────────────────────────┘ │
-│                          │ register_pipeline + render_frame│
-│  ┌───────────────────────▼──────────────────────────────┐ │
-│  │  render (pure GPU executor)                           │ │
-│  │  → compile shader, cache pipeline, execute, trả pixels│ │
-│  └──────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────┘
-```
-
----
-
-## Nguyên tắc tách biệt
-
-### Render = Pure GPU Executor
-
-| Render LÀM | Render KHÔNG LÀM |
-|-------------|-------------------|
-| Compile WGSL → pipeline | Sở hữu/quản lý shader |
-| Cache pipeline + texture | Biết "blur", "composite" là gì |
-| Execute draw commands | Quyết định vẽ gì |
-| Readback pixels | Biết ECS, Entity, timeline |
-| Detect GPU capabilities | Hard-code rendering logic |
-
-### Core = Quyết định + Cung cấp
-
-| Core LÀM | Core KHÔNG LÀM |
-|-----------|-----------------|
-| Sở hữu shader files | Biết GPU, VRAM |
-| Register shaders vào render | Compile shader |
-| Build DrawCommand[] từ ECS | Quản lý pipeline cache |
-| Culling (cắt ngoài viewport) | Tạo GPU texture |
-| Điều phối video export loop | Readback pixels |
-
-### Quy tắc đơn giản
+ifol-render is a GPU-accelerated rendering engine for video composition and visual effects.
+The system follows a **3-layer architecture** where each layer has a single responsibility:
 
 ```
-Core:   "dùng shader này, vẽ cái này"  →  Render
-Render: "đây pixels"                    →  Core
+┌─────────────────────────────────────────────────────────────────┐
+│  Layer 3: Frontend (Web App / Studio / CLI)                    │
+│  ─────────────────────────────────────────                     │
+│  Owns: Scene editing, ECS, timeline, animation, camera,        │
+│        keyframes, bone systems, particle systems, plugins      │
+│  Output: FrameData (flat, pixel-based, pre-computed)           │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ FrameData (JSON / Rust struct)
+┌────────────────────────────▼────────────────────────────────────┐
+│  Layer 2: Core Engine (Rust / WASM)                            │
+│  ──────────────────────────────────                            │
+│  Owns: Shader registry, texture cache, text rasterization,    │
+│        pixel→clip conversion, render pass orchestration,      │
+│        video export (FFmpeg)                                   │
+│  Output: DrawCommands per pass                                │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ DrawCommands
+┌────────────────────────────▼────────────────────────────────────┐
+│  Layer 1: Render Tool (GPU / wgpu)                             │
+│  ─────────────────────────────────                             │
+│  Owns: GPU pipeline execution, vertex/index buffers,           │
+│        uniform ring buffer, texture upload, readback           │
+│  Output: RGBA pixels                                          │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
----
+## Design Principles
 
-## Shader Ownership
+1. **Data flows down, pixels flow up**
+   - Frontend produces data → Core processes → Render executes → pixels returned
+   - No layer reaches upward; dependencies are strictly one-directional
 
-```
-shaders/                     ← Root workspace, core sở hữu
-├── composite.wgsl              Core register khi init
-├── shapes/
-│   ├── rect.wgsl
-│   └── circle.wgsl
-└── effects/
-    ├── blur.wgsl
-    ├── color_grade.wgsl
-    ├── vignette.wgsl
-    └── chromatic_aberration.wgsl
+2. **Frontend owns complexity, Core owns speed**
+   - Complex logic (ECS, animation, physics) lives in frontend — easy to change
+   - Hot path (sort, pack uniforms, GPU dispatch) lives in Core — compiled Rust
 
-render/                     ← KHÔNG có shader files
-├── src/
-│   ├── engine/             GPU context
-│   ├── pipeline/           Compile + cache + execute
-│   └── lib.rs              API
-```
+3. **Flat data contract**
+   - Core does NOT know about timelines, keyframes, bone systems, or any domain logic
+   - Core receives `FrameData`: a flat list of "what to draw, where, how"
+   - All positions are in **pixels**, pre-computed by frontend
 
-| Loại shader | Ai sở hữu | Ai chạy |
-|-------------|-----------|---------|
-| Composite (quad) | Core/root | Render |
-| SDF shapes | Core/root | Render |
-| Built-in effects | Core/root | Render |
-| Custom effects | User/plugin | Render |
-| Custom draw | User/plugin | Render |
+4. **Shader-agnostic execution**
+   - Core ships with built-in shaders but frontend can register custom ones
+   - Core doesn't interpret shader params — just packs them as uniforms
 
-**Render không import, embed, hay biết tên bất kỳ shader nào.**
+5. **Multi-pass render graph**
+   - A frame is a sequence of render passes
+   - Each pass either renders entities or applies a fullscreen shader effect
+   - Output of one pass can be input to the next (texture chaining)
 
 ---
 
 ## Data Flow
 
-### Init
+### Preview (single frame, real-time)
 
 ```
-Core/CLI:
-  renderer = Renderer::new(1920, 1080);
-  renderer.register_pipeline("composite", COMPOSITE_WGSL, config);
-  renderer.register_effect("blur", BLUR_WGSL, params, 2);
-  renderer.load_texture("bg", "assets/bg.png");
+User drags entity in editor
+  → Frontend ECS updates position
+  → Frontend resolves: hierarchy, camera, animation, visibility
+  → Frontend builds FrameData (entities in pixels)
+  → Core.render_frame(frame_data) 
+  → Core: sort → pixel→clip → pack uniforms → DrawCommands
+  → Render: GPU execute → RGBA pixels
+  → Display in viewport
+  
+  Total: < 16ms (60fps target)
 ```
 
-### Per-Frame (preview)
+### Export (all frames, sequential)
 
 ```
-Core: ECS systems run → DrawCommand[] → renderer.render_frame() → pixels → display
-```
-
-### Export (video)
-
-```
-Core: for frame in 0..N → ECS systems → DrawCommand[] → render_frame() → ffmpeg
+User clicks "Export"
+  → Frontend bakes ALL frames: for each frame time, resolve → FrameData
+  → Core.export_video(frame_iterator, config)
+  → Core: for each FrameData:
+       process textures → sort → pack → render → pipe to FFmpeg
+  → FFmpeg encodes → output.mp4
 ```
 
 ---
 
-## Cache Architecture (render nội bộ)
+## FrameData Specification
 
-| Cache | Ai tạo | Ai xóa | Nằm đâu |
-|-------|--------|--------|---------|
-| Texture | Bên ngoài gọi `load_texture()` | Bên ngoài gọi `evict_texture()` | GPU VRAM |
-| Pipeline | Render tự tạo khi `register_pipeline()` | Persistent | GPU |
-| Layer cache (tương lai) | Render tự tạo | Render tự quản lý LRU | GPU VRAM |
+`FrameData` is the **API contract** between Frontend and Core.
+Frontend builds it, Core consumes it. Core never modifies it.
+
+### Structure
+
+```
+FrameData
+├── passes: Vec<RenderPass>        // ordered render passes
+└── texture_updates: Vec<TextureUpdate>  // textures to load/update this frame
+```
+
+### RenderPass
+
+Each pass produces a texture that can be used by later passes.
+
+```
+RenderPass
+├── output: String                 // output texture key (e.g. "layer_0", "final")
+└── pass_type: PassType
+    ├── Entities                   // render a list of entities
+    │   ├── entities: Vec<FlatEntity>
+    │   └── clear_color: [f32; 4]  // background of this pass
+    ├── Effect                     // apply shader on existing texture(s)
+    │   ├── shader: String         // registered shader name
+    │   ├── inputs: Vec<String>    // input texture keys
+    │   └── params: Vec<f32>       // shader uniforms
+    └── Output                     // mark which texture is the final output
+        └── input: String          // texture key to read back as pixels
+```
+
+### FlatEntity
+
+A single drawable element. All values are **final** — no further computation needed.
+
+```
+FlatEntity
+├── id: u64                // unique ID for dirty tracking / caching
+├── x: f32                 // top-left X in pixels
+├── y: f32                 // top-left Y in pixels
+├── width: f32             // rendered width in pixels
+├── height: f32            // rendered height in pixels
+├── rotation: f32          // radians (around entity center)
+├── opacity: f32           // 0.0 (transparent) to 1.0 (opaque)
+├── blend_mode: u32        // 0=Normal 1=Multiply 2=Screen 3=Overlay ...
+├── color: [f32; 4]        // RGBA tint (default: [1,1,1,1] = no tint)
+├── shader: String         // pipeline name (e.g. "composite")
+├── textures: Vec<String>  // texture cache keys
+├── params: Vec<f32>       // additional shader uniforms
+├── layer: i32             // sorting priority 1 (ascending)
+└── z_index: f32           // sorting priority 2 within same layer (ascending)
+```
+
+### TextureUpdate
+
+Instructions for Core to load/update textures before rendering.
+
+```
+TextureUpdate
+├── LoadImage   { key, path }                          // from file (cached)
+├── UploadRgba  { key, data: Vec<u8>, width, height }  // raw pixels (video frame)
+├── RasterizeText { key, content, font_size, color }    // Core handles ab_glyph
+└── Evict       { key }                                // remove from cache
+```
+
+### Sorting Rules
+
+```
+Primary:   layer (i32, ascending)     — layer 0 draws first (behind)
+Secondary: z_index (f32, ascending)   — within same layer, lower z draws first
+```
 
 ---
 
-## Build Output
+## Core Engine
+
+### Responsibilities
+
+| Responsibility | Details |
+|---------------|---------|
+| **Shader registry** | Register WGSL shaders (built-in + custom). Compile once, cache |
+| **Texture cache** | Load images, upload RGBA data, rasterize text. LRU eviction |
+| **Render pass orchestration** | Execute passes in order, manage intermediate textures |
+| **Pixel→clip conversion** | Convert pixel coordinates to GPU clip space (-1..1) |
+| **Uniform packing** | Pack entity fields into shader-specific uniform buffers |
+| **Dirty tracking** | Cache DrawCommands by entity ID. Reuse if unchanged |
+| **Video export** | FFmpeg pipe: iterate frames → render → encode |
+| **Text rasterization** | ab_glyph: string → RGBA texture (CPU side) |
+
+### NOT Core's Responsibility
+
+| Not Core | Who owns it |
+|----------|-------------|
+| Timeline / visibility | Frontend |
+| Animation / keyframes | Frontend |
+| Camera transform | Frontend |
+| Entity hierarchy | Frontend |
+| Bone / skeleton | Frontend |
+| Particle systems | Frontend |
+| Undo / redo | Frontend |
+| Scene serialization | Frontend |
+| UI / editor | Frontend |
+
+### Built-in Shaders
+
+Core ships with these shaders pre-registered:
+
+| Shader | Type | Purpose |
+|--------|------|---------|
+| `composite` | Per-entity | Texture/color rendering with blend modes, UV crop |
+| `shapes` | Per-entity | SDF shapes (circle, rectangle, rounded rect) |
+| `gradient` | Per-entity | Linear/radial/conic gradient fill |
+| `mask` | Per-entity | Alpha masking / clipping |
+| `blur` | Effect | Gaussian blur (horizontal + vertical, 2 passes) |
+| `color_grade` | Effect | Brightness, contrast, saturation |
+| `vignette` | Effect | Edge darkening |
+| `chromatic_aberration` | Effect | RGB channel offset |
+
+### Pixel→Clip Conversion
+
+Core converts pixel positions to GPU clip space:
 
 ```
-cargo build
-├── render (lib)   ← compile thành thư viện (pure executor)
-├── core (lib)     ← compile + link render (owns shaders + logic)
-├── cli (bin)      ← 1 file exe (core + render + CLI)
-└── studio (bin)   ← 1 file exe (core + render + GUI)
+Given: entity at (x=100, y=50, w=200, h=150) in a 1920×1080 output
+
+Step 1: Normalize to 0..1
+  nx = x / 1920 = 0.052
+  ny = y / 1080 = 0.046
+
+Step 2: Convert to clip space (-1..1)
+  clip_x = nx * 2 - 1 = -0.896
+  clip_y = 1 - ny * 2 = 0.907    (Y flipped for GPU)
+
+Step 3: Scale quad to entity size
+  scale_x = w / 1920 = 0.104
+  scale_y = h / 1080 = 0.139
+
+Step 4: Build transform matrix with rotation
+  → 4×4 matrix sent as uniform to shader
+```
+
+---
+
+## Render Tool
+
+The lowest layer. A pure GPU executor.
+
+### What it does
+- Compile WGSL → GPU pipeline
+- Upload vertex/index/uniform data
+- Execute draw calls
+- Read back pixels from GPU → CPU
+
+### What it does NOT do
+- No scene logic
+- No coordinate systems
+- No caching decisions (Core decides)
+
+### Key optimizations
+- **Uniform ring buffer**: 2MB pre-allocated, zero-alloc per draw
+- **Dynamic bind group offsets**: 1 bind group per pipeline, offset per draw
+- **Pipeline switch tracking**: Only `set_pipeline()` when shader changes
+- **Single command encoder**: All draws in 1 `queue.submit()`
+- **Texture LRU**: Automatic eviction when VRAM budget exceeded
+- **Ping-pong textures**: Reuse 2 textures for multi-pass effects
+
+---
+
+## Multi-Pass Rendering
+
+### Simple case (no effects)
+
+```
+passes: [
+  { Entities: [...all entities...], output: "main" },
+  { Output: { input: "main" }, output: "screen" }
+]
+```
+
+### Entity + Post-effects
+
+```
+passes: [
+  { Entities: [...], output: "main" },
+  { Effect: { shader: "bloom", inputs: ["main"], params: [...] }, output: "bloomed" },
+  { Effect: { shader: "color_grade", inputs: ["bloomed"], params: [...] }, output: "graded" },
+  { Output: { input: "graded" }, output: "screen" }
+]
+```
+
+### Multi-layer with per-layer effects
+
+```
+passes: [
+  // Layer 0: background with blur
+  { Entities: [bg entities], output: "layer_0" },
+  { Effect: { shader: "blur", inputs: ["layer_0"], params: [4.0] }, output: "layer_0_blur" },
+
+  // Layer 1: foreground
+  { Entities: [fg entities], output: "layer_1" },
+
+  // Composite layers
+  { Effect: { shader: "composite", inputs: ["layer_0_blur", "layer_1"] }, output: "scene" },
+
+  // Frame-level post-processing
+  { Effect: { shader: "vignette", inputs: ["scene"], params: [0.5] }, output: "final" },
+  { Output: { input: "final" }, output: "screen" }
+]
+```
+
+### Scope mapping
+
+| Scope | How frontend builds passes |
+|-------|---------------------------|
+| **Per-entity** | entity.shader = custom shader within Entities pass |
+| **Per-layer** | Separate Entities pass + Effect pass for that layer |
+| **Per-scene** | Effect pass that composites all layer outputs |
+| **Per-frame** | Effect pass on final composited scene |
+
+---
+
+## Performance Architecture
+
+### Dirty Tracking
+
+```
+Frame N-1: entities [A, B, C, D, E]
+Frame N  : entities [A, B*, C, D, F]   (* = changed, F = new)
+
+Core detects:
+  A → cache hit (reuse DrawCommand)
+  B → changed (rebuild DrawCommand)
+  C → cache hit
+  D → cache hit
+  E → removed (evict from cache)
+  F → new (build DrawCommand)
+
+Result: 3 cache hits, 1 rebuild, 1 new = 80% reuse
+```
+
+### Texture Management
+
+```
+Textures loaded once, reused across frames:
+  LoadImage("bg", "photo.png")     → cached until Evict
+  UploadRgba("vid_0", data, w, h)  → replaced each frame (video)
+  RasterizeText("txt_0", ...)      → cached until text changes
+
+LRU eviction when VRAM exceeds budget:
+  Least recently used textures evicted first
+  Active textures (used this frame) never evicted
+```
+
+### Export Optimization
+
+```
+Sequential frame rendering:
+  Frame 0: process textures + render (cold start)
+  Frame 1: only changed textures + render (warm)
+  Frame 2: only video frame update + render (minimal CPU)
+  ...
+  
+  Static textures loaded once, video frames streamed per-frame
+```
+
+---
+
+## Extending the System
+
+### Add a new shader (no Core change)
+
+```
+1. Frontend: write custom.wgsl
+2. Frontend: core.register_shader("my_effect", wgsl_code, config)
+3. Frontend: entity.shader = "my_effect", entity.params = [...]
+4. Core renders it — zero code changes
+```
+
+### Add a new system (e.g. bone/skeleton)
+
+```
+1. Frontend: implement bone solver
+2. Frontend: resolve bone transforms → flat positions
+3. Frontend: emit FlatEntities with resolved positions
+4. Core renders them — zero code changes
+```
+
+### Add a new render pass type (Core change)
+
+```
+1. Add new PassType variant in frame.rs
+2. Add handler in engine.rs
+3. Frontend sends new pass type in FrameData
+4. Backward compatible — old FrameData still works
 ```
