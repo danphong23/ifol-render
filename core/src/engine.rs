@@ -245,18 +245,8 @@ impl CoreEngine {
                         self.settings.height,
                     );
 
-                    // Render to pixels
-                    let pixels = self.renderer.render_frame(&commands);
-
-                    // Store as intermediate texture for later passes
-                    self.renderer.load_rgba(
-                        &pass.output,
-                        &pixels,
-                        self.settings.width,
-                        self.settings.height,
-                    );
-
-                    last_pixels = pixels;
+                    // ZERO-COPY: Render directly to intermediate target in VRAM
+                    let _ = self.renderer.render_frame_to(&commands, Some(&pass.output));
                 }
 
                 PassType::Effect {
@@ -271,26 +261,20 @@ impl CoreEngine {
                         textures: inputs.clone(),
                     }];
 
-                    let pixels = self.renderer.render_frame(&commands);
-
-                    self.renderer.load_rgba(
-                        &pass.output,
-                        &pixels,
-                        self.settings.width,
-                        self.settings.height,
-                    );
-
-                    last_pixels = pixels;
+                    // ZERO-COPY: Render directly to intermediate target in VRAM
+                    let _ = self.renderer.render_frame_to(&commands, Some(&pass.output));
                 }
 
                 PassType::Output { input } => {
-                    // If the input texture is the last rendered, use those pixels.
-                    // Otherwise, we'd need to read from texture cache.
-                    // For now, the last rendered pass's pixels are the output.
-                    if !last_pixels.is_empty() {
-                        // last_pixels is from the previous pass
-                    }
-                    let _ = input; // Future: explicitly read from named texture
+                    // Output pass: Draws VRAM `input` texture back into the CPU mapped Buffer!
+                    let commands = vec![DrawCommand {
+                        pipeline: "copy".to_string(),
+                        uniforms: vec![0.0], // Padding to fulfill minimal binding size
+                        textures: vec![input.clone()],
+                    }];
+                    
+                    // Sending None performs the CPU synchronization and mapped Download
+                    last_pixels = self.renderer.render_frame_to(&commands, None);
                 }
             }
         }
@@ -342,11 +326,37 @@ impl CoreEngine {
 
         let mut encoder = self.backend.start_export(width, height, fps, &temp_config, &sys_info)?;
 
+        // GPU-CPU pipeline: buffer up to 3 frames.
+        // GPU renders -> pushes to this channel.
+        // Background thread -> pops from channel -> encodes via FFmpeg.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(3);
+
+        let encode_thread = std::thread::spawn(move || {
+            let mut result = Ok(());
+            for pixels in rx {
+                if let Err(e) = encoder.write_rgba_frame(&pixels) {
+                    result = Err(e);
+                    break;
+                }
+            }
+            if result.is_ok() {
+                if let Err(e) = encoder.close() {
+                    result = Err(e);
+                }
+            }
+            result
+        });
+
         let start = std::time::Instant::now();
 
         for (i, frame) in frames.into_iter().enumerate() {
             let pixels = self.render_frame(&frame);
-            encoder.write_rgba_frame(&pixels)?;
+            
+            // Push pixels to encode thread. Blocks if queue is full.
+            // If encode thread hit an error, the queue is closed and `send` fails.
+            if tx.send(pixels).is_err() {
+                break;
+            }
 
             let elapsed = start.elapsed().as_secs_f64();
             let export_fps = if elapsed > 0.0 {
@@ -372,7 +382,11 @@ impl CoreEngine {
             }
         }
 
-        encoder.close()?;
+        // Close the channel, signalling the encoder thread to finish remaining frames.
+        drop(tx);
+
+        // Propagate any FFmpeg IO errors that occurred in the encode thread.
+        encode_thread.join().map_err(|_| "Encode thread panicked".to_string())??;
 
         if !audio_clips.is_empty() {
             log::info!("Mixing audio for export...");

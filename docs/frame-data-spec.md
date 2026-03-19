@@ -10,13 +10,28 @@
   "passes": [
     {
       "output": "string — texture key for this pass output",
-      "pass_type": "Entities | Effect | Output (see below)"
+      "pass_type": {
+          "Entities": { ... }
+      }
+    },
+    {
+      "output": "string — texture key for this pass output",
+      "pass_type": {
+          "Effect": { ... }
+      }
+    },
+    {
+      "output": "string — MUST map back to CPU",
+      "pass_type": {
+          "Output": { "input": "previous_output_key" }
+      }
     }
   ],
   "texture_updates": [
     { "LoadImage": { "key": "string", "path": "string" } },
     { "UploadRgba": { "key": "string", "data": [0,0,0,255,...], "width": 100, "height": 100 } },
     { "RasterizeText": { "key": "string", "content": "string", "font_size": 48.0, "color": [1,1,1,1] } },
+    { "DecodeVideoFrame": { "key": "string", "path": "string", "timestamp_secs": 1.5 } },
     { "Evict": { "key": "string" } }
   ]
 }
@@ -131,15 +146,9 @@
       }
     },
     {
-      "output": "scene",
-      "pass_type": {
-        "Effect": {
-          "shader": "composite",
-          "inputs": ["layer_bg_blur", "layer_fg"],
-          "params": []
-        }
-      }
-    },
+      "output": "screen",
+      "pass_type": { "Output": { "input": "scene" } }
+    }
     {
       "output": "final",
       "pass_type": {

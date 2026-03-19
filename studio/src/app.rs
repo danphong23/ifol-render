@@ -381,6 +381,16 @@ pub struct StudioApp {
     audio_player: Option<AudioPlayer>,
     /// Audio clips from scene (stored separately for reload).
     audio_clips: Vec<AudioClip>,
+    /// Async channel for receiving a parsed scene from background thread.
+    loading_scene_rx: Option<std::sync::mpsc::Receiver<Result<ParsedScene, String>>>,
+}
+
+/// Structure returned by background thread parsing the JSON scene.
+struct ParsedScene {
+    settings: RenderSettings,
+    frames: Vec<Frame>,
+    audio_clips: Vec<AudioClip>,
+    path: PathBuf,
 }
 
 impl StudioApp {
@@ -414,6 +424,7 @@ impl StudioApp {
             export_state: None,
             audio_player,
             audio_clips: Vec::new(),
+            loading_scene_rx: None,
         };
 
         if let Some(path) = scene_path {
@@ -423,87 +434,55 @@ impl StudioApp {
     }
 
     fn load_scene(&mut self, path: &PathBuf) {
-        let json = match std::fs::read_to_string(path) {
-            Ok(s) => s,
-            Err(e) => {
-                self.status = format!("❌ Read error: {}", e);
-                return;
-            }
-        };
-        let doc: serde_json::Value = match serde_json::from_str(&json) {
-            Ok(v) => v,
-            Err(e) => {
-                self.status = format!("❌ JSON error: {}", e);
-                return;
-            }
-        };
-
-        let settings: RenderSettings = doc
-            .get("settings")
-            .and_then(|s| serde_json::from_value(s.clone()).ok())
-            .unwrap_or_default();
-
-        let frames: Vec<Frame> = if let Some(arr) = doc.get("frames") {
-            serde_json::from_value(arr.clone()).unwrap_or_default()
-        } else if let Some(f) = doc.get("frame") {
-            serde_json::from_value(f.clone())
-                .map(|v| vec![v])
-                .unwrap_or_default()
-        } else {
-            self.status = "❌ Missing 'frames' key".into();
-            return;
-        };
-
-        // Parse audio clips from scene JSON
-        let audio_clips: Vec<AudioClip> = doc
-            .get("audio_clips")
-            .and_then(|a| serde_json::from_value(a.clone()).ok())
-            .unwrap_or_default();
-
-        let total = frames.len();
-        let mut engine = CoreEngine::new(settings.clone());
-        engine.setup_builtins();
-        // Set FFmpeg path from export settings
-        let fpath = self.export_settings.ffmpeg_path.trim();
-        if !fpath.is_empty() {
-            engine.set_ffmpeg_path(fpath);
-        }
-
-        let duration = total as f64 / settings.fps;
-
-        self.scene = Some(SceneData { settings, frames });
-        self.engine = Some(engine);
-        self.current_frame = 0;
-        self.playing = false;
-        self.dirty = true;
-        self.scene_path = Some(path.clone());
-
-        // Load audio if clips are present
-        let audio_count = audio_clips.len();
-        if !audio_clips.is_empty() {
-            let ffmpeg_bin = if fpath.is_empty() {
-                None
-            } else {
-                Some(fpath)
+        let p = path.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.loading_scene_rx = Some(rx);
+        self.status = "Loading and parsing Scene JSON...".into();
+        
+        std::thread::spawn(move || {
+            let json = match std::fs::read_to_string(&p) {
+                Ok(s) => s,
+                Err(e) => {
+                    let _ = tx.send(Err(format!("Read error: {}", e)));
+                    return;
+                }
             };
-            if let Some(player) = &mut self.audio_player {
-                player.load_clips(&audio_clips, duration, ffmpeg_bin);
-            }
-        }
-        self.audio_clips = audio_clips;
+            let doc: serde_json::Value = match serde_json::from_str(&json) {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = tx.send(Err(format!("JSON error: {}", e)));
+                    return;
+                }
+            };
 
-        let audio_status = if audio_count > 0 {
-            format!(" | 🔊 {} audio clip(s)", audio_count)
-        } else {
-            String::new()
-        };
-        self.status = format!(
-            "✅ {} frames, {:.1}s @ {:.0}fps{}",
-            total,
-            duration,
-            self.fps(),
-            audio_status
-        );
+            let settings: RenderSettings = doc
+                .get("settings")
+                .and_then(|s| serde_json::from_value(s.clone()).ok())
+                .unwrap_or_default();
+
+            let frames: Vec<Frame> = if let Some(arr) = doc.get("frames") {
+                serde_json::from_value(arr.clone()).unwrap_or_default()
+            } else if let Some(f) = doc.get("frame") {
+                serde_json::from_value(f.clone())
+                    .map(|v| vec![v])
+                    .unwrap_or_default()
+            } else {
+                let _ = tx.send(Err("Missing 'frames' key".into()));
+                return;
+            };
+
+            let audio_clips: Vec<AudioClip> = doc
+                .get("audio_clips")
+                .and_then(|a| serde_json::from_value(a.clone()).ok())
+                .unwrap_or_default();
+
+            let _ = tx.send(Ok(ParsedScene {
+                settings,
+                frames,
+                audio_clips,
+                path: p,
+            }));
+        });
     }
 
     /// Compute preview render dimensions based on scale mode.
@@ -741,6 +720,76 @@ impl StudioApp {
 
 impl eframe::App for StudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // ── Handle Async JSON Scene Loading ──
+        if let Some(rx) = &self.loading_scene_rx {
+            match rx.try_recv() {
+                Ok(res) => {
+                    self.loading_scene_rx = None;
+                    match res {
+                        Ok(parsed) => {
+                            let total = parsed.frames.len();
+                            let mut engine = CoreEngine::new(parsed.settings.clone());
+                            engine.setup_builtins();
+                            
+                            let fpath = self.export_settings.ffmpeg_path.trim();
+                            if !fpath.is_empty() {
+                                engine.set_ffmpeg_path(fpath);
+                            }
+
+                            let duration = total as f64 / parsed.settings.fps;
+
+                            self.scene = Some(SceneData { settings: parsed.settings, frames: parsed.frames });
+                            self.engine = Some(engine);
+                            self.current_frame = 0;
+                            self.playing = false;
+                            self.dirty = true;
+                            self.scene_path = Some(parsed.path);
+
+                            let audio_count = parsed.audio_clips.len();
+                            if !parsed.audio_clips.is_empty() {
+                                let ffmpeg_bin = if fpath.is_empty() { None } else { Some(fpath) };
+                                if let Some(player) = &mut self.audio_player {
+                                    player.load_clips(&parsed.audio_clips, duration, ffmpeg_bin);
+                                }
+                            }
+                            self.audio_clips = parsed.audio_clips;
+
+                            let audio_status = if audio_count > 0 {
+                                format!(" | 🔊 {} audio clip(s)", audio_count)
+                            } else {
+                                String::new()
+                            };
+                            self.status = format!(
+                                "✅ {} frames, {:.1}s @ {:.0}fps{}",
+                                total,
+                                duration,
+                                self.fps(),
+                                audio_status
+                            );
+                        }
+                        Err(e) => {
+                            self.status = format!("❌ {}", e);
+                        }
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // Still loading... show spinner overlaid
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.centered_and_justified(|ui| {
+                            ui.spinner();
+                            ui.heading("Loading and Parsing Scene JSON...");
+                        });
+                    });
+                    ctx.request_repaint(); // keep animating spinner
+                    return; // halt drawing the normal UI while loading!
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.loading_scene_rx = None;
+                    self.status = "❌ Load thread panicked".into();
+                }
+            }
+        }
+
         // ── Export progress polling (background thread does GPU work) ──
         if let Some(state) = &self.export_state {
             let current = state.progress.load(Ordering::Relaxed);

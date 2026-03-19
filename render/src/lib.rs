@@ -353,7 +353,7 @@ impl Renderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
         self.engine.queue.write_texture(
@@ -667,19 +667,34 @@ impl Renderer {
 
     // ── Draw (Optimized) ─────────────────
 
-    /// Render a single frame from draw commands. Returns RGBA pixel data.
-    ///
-    /// **Optimizations applied:**
-    /// - Uniform ring buffer: zero per-draw allocations
-    /// - Bind group per unique texture: shared across same-texture draws
-    /// - Pipeline switch minimization: tracks current pipeline
-    /// - Single command encoder + single queue.submit()
     pub fn render_frame(&mut self, commands: &[DrawCommand]) -> Vec<u8> {
+        self.render_frame_to(commands, None)
+    }
+
+    /// Render draw commands directly to an offscreen GPU texture, or to the screen (None).
+    /// If `target_key` is specified, it skips the costly CPU readback entirely!
+    pub fn render_frame_to(&mut self, commands: &[DrawCommand], target_key: Option<&str>) -> Vec<u8> {
         self.frame_number += 1;
         self.uniform_ring.reset();
 
-        let output_texture = self.engine.output_texture.as_ref().unwrap();
-        let output_view = output_texture.create_view(&Default::default());
+        // Target either a persistent Texture cache entry (Zero-Copy) or the swapchain output
+        let output_view = if let Some(key) = target_key {
+            let expected_size = (self.width as u64) * (self.height as u64) * 4;
+            let needs_create = match self.texture_cache.get(key) {
+                Some(entry) => entry.size_bytes != expected_size,
+                None => true,
+            };
+            if needs_create {
+                // Initialize an empty Rgba8Unorm buffer on GPU
+                self.load_rgba(key, &vec![0; expected_size as usize], self.width, self.height);
+            }
+            // Create fresh owned view to bypass borrow checker constraints later
+            let view = self.texture_cache.get(key).unwrap().texture.create_view(&Default::default());
+            self.texture_cache.get_mut(key).unwrap().last_used_frame = self.frame_number;
+            view
+        } else {
+            self.engine.output_texture.as_ref().unwrap().create_view(&Default::default())
+        };
 
         // Phase 1: Write all uniforms to ring buffer, build draw list
         struct PreparedDraw {
@@ -845,7 +860,14 @@ impl Renderer {
 
         // Single submission for the entire frame
         self.engine.queue.submit(std::iter::once(encoder.finish()));
-        self.engine.readback_output()
+        
+        if target_key.is_some() {
+            // ZERO-COPY OVERRIDES: The texture resides natively in Video RAM!
+            Vec::new()
+        } else {
+            // Perform synchronous VRAM -> System RAM PCIe stall (Heavy)
+            self.engine.readback_output()
+        }
     }
 
     /// Render a frame with post-processing effects applied.

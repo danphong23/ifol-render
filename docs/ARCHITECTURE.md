@@ -261,21 +261,21 @@ The lowest layer. A pure GPU executor.
 
 ### Simple case (no effects)
 
-```
-passes: [
-  { Entities: [...all entities...], output: "main" },
-  { Output: { input: "main" }, output: "screen" }
+```json
+"passes": [
+  { "output": "main", "pass_type": { "Entities": { "entities": [...], "clear_color": [0,0,0,1] } } },
+  { "output": "screen", "pass_type": { "Output": { "input": "main" } } }
 ]
 ```
 
 ### Entity + Post-effects
 
-```
-passes: [
-  { Entities: [...], output: "main" },
-  { Effect: { shader: "bloom", inputs: ["main"], params: [...] }, output: "bloomed" },
-  { Effect: { shader: "color_grade", inputs: ["bloomed"], params: [...] }, output: "graded" },
-  { Output: { input: "graded" }, output: "screen" }
+```json
+"passes": [
+  { "output": "main", "pass_type": { "Entities": { "entities": [...] } } },
+  { "output": "bloomed", "pass_type": { "Effect": { "shader": "bloom", "inputs": ["main"], "params": [...] } } },
+  { "output": "graded", "pass_type": { "Effect": { "shader": "color_grade", "inputs": ["bloomed"], "params": [...] } } },
+  { "output": "screen", "pass_type": { "Output": { "input": "graded" } } }
 ]
 ```
 
@@ -353,6 +353,19 @@ Sequential frame rendering:
   
   Static textures loaded once, video frames streamed per-frame
 ```
+
+### CPU-GPU Zero-Copy Pass Strategy
+
+To avoid suffocating the PCIe lanes (sending 8MB images back and forth between RAM and VRAM for every layer), intermediate passes (`PassType::Entities` and `PassType::Effect`) write directly to **offscreen GPU Texture Attachments** mapping to `wgpu::TextureUsages::RENDER_ATTACHMENT`. 
+These intermediate render streams never touch the CPU.
+
+Only upon encountering a `PassType::Output` node does the engine bind the synchronous `readback_output` wgpu staging buffer command to map the **final** frame array directly to `Vec<u8>`.
+
+### Multi-threaded `mpsc::sync_channel` Async Exporter
+
+Video encoding (`libx264` / `h264_qsv`) requires heavy, sustained CPU effort. Waiting for FFmpeg to finish encoding Frame `N` before letting the GPU render Frame `N+1` starves the GPU.
+
+Instead, the export pipeline initializes an `FfmpegMediaBackend` that acts on a dedicated thread. Completed `Vec<u8>` payloads are sent from the `CoreEngine` loop via a bounded `mpsc::sync_channel(3)`. This concurrency effectively hides FFmpeg's heavy write-stalls, ensuring the GPU is fed new draw commands constantly and doubling export throughput.
 
 ---
 

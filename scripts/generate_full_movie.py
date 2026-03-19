@@ -84,6 +84,26 @@ def build_frame(frame_idx):
         "z_index": 0.0,
     })
 
+    # ── 1.5 Dynamic Gradient Background (Time-based shader on entity) ──
+    # Shifts colors based on global time
+    hue_shift = (math.sin(t_global * 0.5) + 1.0) * 0.5
+    entities.insert(1, {
+        "id": 2,
+        "shader": "gradient",
+        "textures": [],
+        "x": 0.0, "y": 0.0,
+        "width": float(WIDTH), "height": float(HEIGHT),
+        "opacity": 0.15, # subtle overlay
+        "color": [1.0, 1.0, 1.0, 1.0],
+        # gradient params: color1(RGB), pad, color2(RGB), pad
+        "params": [
+            0.1 * hue_shift, 0.3 * (1.0-hue_shift), 0.8, 0.0,
+            0.8, 0.2 * hue_shift, 0.4 * (1.0-hue_shift), 0.0
+        ],
+        "layer": 1,
+        "z_index": 0.0,
+    })
+
     # ── 2. Moving circle ──
     circle_x = lerp(100, WIDTH - 200, ease_in_out((math.sin(t * 0.8) + 1) / 2))
     circle_y = lerp(200, HEIGHT - 300, ease_in_out((math.cos(t * 0.6) + 1) / 2))
@@ -231,17 +251,57 @@ def build_frame(frame_idx):
         "z_index": 0.0,
     })
 
+    # ── Full frame POST-PROCESSING Shaders ──
+
+    # 1. Color Grade (Pulsing Saturation based on time)
+    saturation = 1.0 + math.sin(t_global * 3.0) * 0.5 # Pulses between 0.5 and 1.5
+
+    # 2. Chromatic Aberration (Intense during screen shakes)
+    aberration = 0.0
+    if t < 2.0: aberration = lerp(0.015, 0.0, t / 2.0)
+    elif t > 8.0: aberration = lerp(0.0, 0.02, (t - 8.0) / 2.0)
+
     return {
         "texture_updates": texture_updates,
-        "passes": [{
-            "output": "main",
-            "pass_type": {
-                "Entities": {
-                    "entities": entities,
-                    "clear_color": [0.0, 0.0, 0.0, 1.0],
+        "passes": [
+            {
+                "output": "scene_raw",
+                "pass_type": {
+                    "Entities": {
+                        "entities": entities,
+                        "clear_color": [0.0, 0.0, 0.0, 1.0],
+                    }
+                }
+            },
+            {
+                "output": "scene_graded",
+                "pass_type": {
+                    "Effect": {
+                        "shader": "color_grade",
+                        "inputs": ["scene_raw"],
+                        "params": [0.0, 1.0, saturation, 0.0] # brightness, contrast, saturation, pad
+                    }
+                }
+            },
+            {
+                "output": "main",
+                "pass_type": {
+                    "Effect": {
+                        "shader": "chromatic_aberration",
+                        "inputs": ["scene_graded"],
+                        "params": [aberration, 0.0, 0.0, 0.0]
+                    }
+                }
+            },
+            {
+                "output": "final",
+                "pass_type": {
+                    "Output": {
+                        "input": "main"
+                    }
                 }
             }
-        }]
+        ]
     }
 
 

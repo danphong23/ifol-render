@@ -43,6 +43,46 @@ pub fn setup_builtins(renderer: &mut Renderer) {
         );
     }
 
+    if !renderer.has_pipeline("mask") {
+        renderer.register_pipeline(
+            "mask",
+            include_str!("../../shaders/mask.wgsl"),
+            PipelineConfig::quad(),
+        );
+    }
+
+    if !renderer.has_pipeline("copy") {
+        renderer.register_effect(
+            "copy",
+            "
+            struct VertexOutput {
+                @builtin(position) clip_position: vec4f,
+                @location(0) uv: vec2f,
+            }
+
+            @vertex
+            fn vs_fullscreen(@builtin(vertex_index) vi: u32) -> VertexOutput {
+                var out: VertexOutput;
+                let x = f32(i32(vi) / 2) * 4.0 - 1.0;
+                let y = f32(i32(vi) % 2) * 4.0 - 1.0;
+                out.clip_position = vec4f(x, y, 0.0, 1.0);
+                out.uv = vec2f((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+                return out;
+            }
+
+            @group(0) @binding(1) var t_color: texture_2d<f32>;
+            @group(0) @binding(2) var s_color: sampler;
+
+            @fragment
+            fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+                return textureSample(t_color, s_color, in.uv);
+            }
+            ",
+            vec![("_pad".into(), 0.0)],
+            1,
+        );
+    }
+
     // ── Fullscreen effects ──
 
     if !renderer.has_pipeline("blur") {

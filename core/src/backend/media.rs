@@ -12,7 +12,7 @@ pub trait MediaDecoder {
 }
 
 /// Represents an active video encoding stream (muxes and compresses frames).
-pub trait MediaEncoder {
+pub trait MediaEncoder: Send {
     /// Write a raw RGBA frame to the encoder.
     fn write_rgba_frame(&mut self, buffer: &[u8]) -> Result<(), String>;
     /// Finalize and close the encoder (blocking wait).
