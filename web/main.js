@@ -160,8 +160,13 @@ async function renderCurrentFrame() {
     // Only video frames need per-frame pre-load (images/fonts already cached at scene load)
     await preloadFrameVideoFrames(frameData);
     
+    // Scene export resolution (pixel coords are authored at this size)
+    const sceneW = sceneJson.settings?.width || 1920;
+    const sceneH = sceneJson.settings?.height || 1080;
+    
     try {
-        renderer.render_frame(JSON.stringify(frameData));
+        // render_frame_scaled auto-scales coords from export res → current engine res
+        renderer.render_frame_scaled(JSON.stringify(frameData), sceneW, sceneH);
         statusTxt.innerText = `Frame ${currentFrame} / ${totalFrames - 1}`;
         frameCounter.innerText = `${currentFrame} / ${totalFrames - 1}`;
         timeline.value = currentFrame;

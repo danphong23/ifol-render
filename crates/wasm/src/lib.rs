@@ -75,6 +75,33 @@ impl IfolRenderWeb {
         Ok(())
     }
 
+    /// Render a frame with automatic coordinate scaling.
+    ///
+    /// JSON pixel coords are authored at `scene_width × scene_height` (export resolution).
+    /// If the engine's current render size differs (e.g. preview at 1280×720),
+    /// this method scales all entity coordinates proportionally before rendering.
+    pub fn render_frame_scaled(
+        &mut self,
+        frame_json: &str,
+        scene_width: u32,
+        scene_height: u32,
+    ) -> Result<(), JsValue> {
+        let frame: Frame = serde_json::from_str(frame_json)
+            .map_err(|e| JsValue::from_str(&format!("Invalid Frame JSON: {}", e)))?;
+
+        let rw = self.engine.settings().width;
+        let rh = self.engine.settings().height;
+
+        let rendered = if rw != scene_width || rh != scene_height {
+            frame.scaled(rw as f64 / scene_width as f64, rh as f64 / scene_height as f64)
+        } else {
+            frame
+        };
+
+        self.engine.render_frame(&rendered);
+        Ok(())
+    }
+
     /// Update the resolution dynamically
     pub fn resize(&mut self, width: u32, height: u32) {
         self.engine.resize(width, height);
