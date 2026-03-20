@@ -30,3 +30,7 @@ export { AssetManager } from './assets.js';
 
 // Timeline — playback state
 export { Timeline } from './timeline.js';
+
+// Animation — keyframe tracks (optional)
+export { KeyframeTrack, AnimationManager, Easing } from './animation.js';
+export type { EasingFn, Keyframe } from './animation.js';
