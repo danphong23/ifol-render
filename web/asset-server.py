@@ -23,7 +23,11 @@ class AssetHandler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         
         if parsed.path == '/health':
-            self._json_response(200, {"status": "ok"})
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "ok"}).encode())
             return
 
         if parsed.path == '/asset':
@@ -31,9 +35,13 @@ class AssetHandler(http.server.BaseHTTPRequestHandler):
             file_path = params.get('path', [None])[0]
             
             if not file_path or not os.path.isfile(file_path):
-                self._cors_error(404, f'File not found: {file_path}')
+                self.send_response(404)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(b'File not found')
                 return
             
+            # Guess MIME type
             ext = os.path.splitext(file_path)[1].lower()
             mime_map = {
                 '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
@@ -46,27 +54,24 @@ class AssetHandler(http.server.BaseHTTPRequestHandler):
             content_type = mime_map.get(ext, 'application/octet-stream')
             
             try:
-                file_size = os.path.getsize(file_path)
+                with open(file_path, 'rb') as f:
+                    data = f.read()
                 self.send_response(200)
                 self.send_header('Content-Type', content_type)
-                self.send_header('Content-Length', str(file_size))
+                self.send_header('Content-Length', str(len(data)))
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.send_header('Cache-Control', 'public, max-age=3600')
-                # Range support for video seeking
-                self.send_header('Accept-Ranges', 'bytes')
                 self.end_headers()
-                with open(file_path, 'rb') as f:
-                    # Stream in 64KB chunks for large files
-                    while True:
-                        chunk = f.read(65536)
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
+                self.wfile.write(data)
             except Exception as e:
-                self._cors_error(500, str(e))
+                self.send_response(500)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(str(e).encode())
             return
         
-        self._cors_error(404, 'Not found')
+        self.send_response(404)
+        self.end_headers()
     
     def do_OPTIONS(self):
         self.send_response(200)
@@ -75,29 +80,11 @@ class AssetHandler(http.server.BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers', '*')
         self.end_headers()
     
-    def _json_response(self, code, data):
-        body = json.dumps(data).encode()
-        self.send_response(code)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Content-Length', str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def _cors_error(self, code, msg):
-        body = msg.encode()
-        self.send_response(code)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Content-Length', str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
     def log_message(self, format, *args):
-        # Safe logging — avoid crash when args contain non-string types
         try:
-            msg = format % args
-            if '/health' not in msg:
-                sys.stderr.write(f"{self.address_string()} - [{self.log_date_time_string()}] {msg}\n")
+            first = str(args[0]) if args else ''
+            if '/health' not in first:
+                super().log_message(format, *args)
         except Exception:
             pass
 

@@ -1,255 +1,403 @@
-// ══════════════════════════════════════
+// ══════════════════════════════════════════════════════
 // ifol-render-sdk — Public API
-// ══════════════════════════════════════
+//
+// IfolRenderer is the single entry-point for developers.
+// It orchestrates Scene (units), AssetManager (media),
+// and Core WASM (GPU). Developers never touch WASM directly.
+//
+// See docs/UNIT_SYSTEM.md for coordinate system spec.
+// ══════════════════════════════════════════════════════
 
-export type { Entity, Transform, Timeline, EntityStyle, BlendMode } from './types.js';
-export type { Viewport, RenderSettings, SDKConfig } from './types.js';
-export type { Frame, FlatEntity, RenderPass, TextureUpdate, PassType } from './types.js';
-export { Scene } from './scene.js';
-export { Flattener } from './flattener.js';
-export { RingBuffer } from './ring-buffer.js';
-export type { WasmBatchRenderer } from './ring-buffer.js';
-export { AssetManager } from './assets.js';
-export type { WasmAssetRenderer } from './assets.js';
-
-import type { Entity, Viewport, SDKConfig } from './types.js';
-import { Scene } from './scene.js';
-import { Flattener } from './flattener.js';
-import { RingBuffer } from './ring-buffer.js';
+import type {
+  Entity, EntityType, SceneSettings, Viewport, Camera,
+  ExportSettings, ImageAsset, VideoAsset, BlendMode,
+} from './types.js';
+import { Scene, viewportRegion } from './scene.js';
 import { AssetManager } from './assets.js';
 
+export type { Entity, EntityType, SceneSettings, Viewport, Camera, ExportSettings, ImageAsset, VideoAsset, BlendMode };
+export { Scene, viewportRegion, AssetManager };
+
+/** Options for creating an IfolRenderer instance. */
+export interface RendererOptions {
+  /** Canvas element to render to. */
+  canvas: HTMLCanvasElement;
+  /** Scene settings. */
+  scene?: Partial<SceneSettings>;
+  /**
+   * URL resolver for asset loading.
+   * Default: identity (pass path as-is to fetch).
+   * Example for asset server: (p) => `http://localhost:8000/asset?path=${encodeURIComponent(p)}`
+   */
+  urlResolver?: (path: string) => string;
+}
+
 /**
- * IfolRenderer — high-level SDK for ifol-render.
- *
- * Wraps the WASM Core engine with a scene model, batch streaming,
- * viewport management, and asset caching.
- *
- * ## Lifecycle
- *
- * 1 IfolRenderer = 1 WASM CoreEngine = 1 Canvas = 1 WebGPU device.
- *
- * For multiple viewports (e.g. main preview + thumbnail), create
- * multiple IfolRenderer instances, each bound to its own canvas.
- * They share the same GPU adapter but have independent state.
- *
- * ## Usage
+ * IfolRenderer — the main SDK class.
  *
  * ```ts
- * const renderer = await IfolRenderer.create({
- *   canvas: document.getElementById('viewport'),
- *   settings: { width: 1280, height: 720, fps: 30 },
- * });
- *
- * renderer.addEntity({
- *   id: 'bg', type: 'video',
- *   source: 'background.mp4',
- *   transform: { x: 0, y: 0, width: 1920, height: 1080 },
- *   timeline: { start: 0, duration: 30 },
- * });
- *
- * renderer.play();
+ * const r = await IfolRenderer.create({ canvas: myCanvas });
+ * await r.addImage('bg', '/photo.jpg');
+ * r.addEntity({ id: 'bg', type: 'image', source: 'bg', x: 0, y: 0, width: 100, height: 75, ... });
+ * r.play();
  * ```
+ *
+ * One IfolRenderer = one canvas = one Core instance = one GPU device.
+ * For multiple viewports, create multiple IfolRenderer instances.
  */
 export class IfolRenderer {
-  /** WASM renderer instance */
-  private wasm: any; // IfolRenderWeb from wasm-bindgen
   readonly scene: Scene;
-  readonly flattener: Flattener;
-  readonly ringBuffer: RingBuffer;
   readonly assets: AssetManager;
+  private core: any; // IfolRenderWeb from WASM
+  private canvas: HTMLCanvasElement;
 
-  private viewport: Viewport = { zoom: 1, panX: 0, panY: 0 };
+  // Viewport state
+  private viewport: Viewport;
+  private _camera: Camera = { x: 0, y: 0, width: 1920, height: 1080 };
+
+  // Playback
   private playing = false;
-  private currentFrame = 0;
-  private playbackStartTime = 0;
-  private playbackStartFrame = 0;
+  private currentTime = 0;
+  private playStartWall = 0;
+  private playStartTime = 0;
   private animFrameId: number | null = null;
-  private renderWidth: number;
-  private renderHeight: number;
+
+  // Callbacks
+  private onFrame?: (time: number) => void;
+  private onReady?: () => void;
 
   private constructor(
-    wasm: any,
+    canvas: HTMLCanvasElement,
+    core: any,
     scene: Scene,
-    width: number,
-    height: number,
-    assetBaseUrl: string,
+    assets: AssetManager,
   ) {
-    this.wasm = wasm;
+    this.canvas = canvas;
+    this.core = core;
     this.scene = scene;
-    this.flattener = new Flattener(scene);
-    this.ringBuffer = new RingBuffer(wasm);
-    this.assets = new AssetManager(wasm, assetBaseUrl);
-    this.renderWidth = width;
-    this.renderHeight = height;
+    this.assets = assets;
+    this.viewport = {
+      screenWidth: canvas.clientWidth || canvas.width,
+      screenHeight: canvas.clientHeight || canvas.height,
+      centerX: 960,
+      centerY: 540,
+      zoom: 1,
+      renderScale: 1,
+    };
   }
 
   /**
-   * Create a new IfolRenderer bound to a canvas.
-   *
-   * This initializes the WASM module, creates a WebGPU device,
-   * and sets up the rendering pipeline.
-   *
-   * @param config - Canvas, render settings, and optional asset URL
-   * @param wasmInit - WASM initialization function (from ifol-render-wasm package)
-   * @returns Promise<IfolRenderer>
+   * Create a new renderer.
+   * Initializes WASM Core, attaches to canvas, and sets up builtins.
    */
-  static async create(
-    config: SDKConfig,
-    wasmInit: () => Promise<any>,
-  ): Promise<IfolRenderer> {
-    // Initialize WASM module
-    const wasmModule = await wasmInit();
-    const { IfolRenderWeb } = wasmModule;
+  static async create(opts: RendererOptions): Promise<IfolRenderer> {
+    // Dynamic import of WASM — allows SDK to work without bundling WASM
+    const wasm = await import('../../crates/wasm/pkg/ifol_render_wasm.js');
+    await wasm.default();
 
-    const { width, height, fps } = config.settings;
-    const wasm = await new IfolRenderWeb(config.canvas, width, height, fps);
-    wasm.setup_builtins();
+    const canvas = opts.canvas;
+    const w = canvas.clientWidth || canvas.width || 800;
+    const h = canvas.clientHeight || canvas.height || 600;
+    canvas.width = w;
+    canvas.height = h;
 
-    const scene = new Scene({
-      width, height, fps,
-      duration: 0, // Will be set by user
+    const settings: SceneSettings = {
+      ppu: opts.scene?.ppu ?? 1,
+      fps: opts.scene?.fps ?? 30,
+      duration: opts.scene?.duration ?? 10,
+    };
+
+    const core = await new wasm.IfolRenderWeb(canvas, w, h, settings.fps);
+    core.setup_builtins();
+
+    const assets = new AssetManager({
+      ppu: settings.ppu,
+      urlResolver: opts.urlResolver,
+      coreCache: (key, data) => core.cache_image(key, data),
+      coreVideoCache: (key, t, data, w, h) => core.cache_video_frame(key, t, data, w, h),
+      coreClearVideo: () => core.clear_video_frames(),
     });
 
-    const baseUrl = config.assetBaseUrl ?? 'http://localhost:8000/asset?path=';
+    const scene = new Scene(settings);
 
-    return new IfolRenderer(wasm, scene, width, height, baseUrl);
+    return new IfolRenderer(canvas, core, scene, assets);
   }
 
-  // ── Entity Operations ──
+  // ── Entity API (convenience wrappers around scene) ──
 
-  addEntity(entity: Entity): void {
-    this.scene.addEntity(entity);
-    this.invalidateBuffer();
+  /**
+   * Add a shape entity (rect or circle).
+   * Position and size are in world units.
+   */
+  addShape(id: string, type: 'rect' | 'circle', opts: {
+    x: number; y: number; width: number; height: number;
+    color?: [number, number, number, number];
+    opacity?: number;
+    rotation?: number;
+    layer?: number;
+    startTime?: number;
+    duration?: number;
+  }): void {
+    this.scene.addEntity({
+      id, type,
+      x: opts.x, y: opts.y,
+      width: opts.width, height: opts.height,
+      color: opts.color ?? [1, 1, 1, 1],
+      opacity: opts.opacity ?? 1,
+      rotation: opts.rotation ?? 0,
+      blendMode: 'normal',
+      shader: 'shapes',
+      params: type === 'circle' ? [1.0] : [],
+      layer: opts.layer ?? this.scene.entityCount(),
+      startTime: opts.startTime ?? 0,
+      duration: opts.duration ?? this.scene.duration,
+      source: undefined,
+    });
   }
 
+  /**
+   * Add an image entity. Fetches and decodes the image, then creates entity
+   * with size computed from image pixel dimensions / PPU.
+   */
+  async addImage(id: string, urlOrPath: string, opts?: {
+    x?: number; y?: number;
+    width?: number; height?: number;
+    opacity?: number;
+    layer?: number;
+    startTime?: number;
+    duration?: number;
+  }): Promise<ImageAsset> {
+    const asset = await this.assets.loadImage(id, urlOrPath);
+    this.scene.addEntity({
+      id, type: 'image',
+      x: opts?.x ?? 0,
+      y: opts?.y ?? 0,
+      width: opts?.width ?? asset.unitWidth,
+      height: opts?.height ?? asset.unitHeight,
+      color: [1, 1, 1, 1],
+      opacity: opts?.opacity ?? 1,
+      rotation: 0,
+      blendMode: 'normal',
+      source: id, // asset key = entity id for simplicity
+      shader: 'composite',
+      params: [],
+      layer: opts?.layer ?? this.scene.entityCount(),
+      startTime: opts?.startTime ?? 0,
+      duration: opts?.duration ?? this.scene.duration,
+    });
+    return asset;
+  }
+
+  /**
+   * Add a video entity. Loads video metadata, creates entity with
+   * size computed from video dimensions / PPU.
+   */
+  async addVideo(id: string, urlOrPath: string, opts?: {
+    x?: number; y?: number;
+    width?: number; height?: number;
+    opacity?: number;
+    layer?: number;
+    startTime?: number;
+    duration?: number;
+  }): Promise<VideoAsset> {
+    const asset = await this.assets.loadVideo(id, urlOrPath);
+    this.scene.addEntity({
+      id, type: 'video',
+      x: opts?.x ?? 0,
+      y: opts?.y ?? 0,
+      width: opts?.width ?? asset.unitWidth,
+      height: opts?.height ?? asset.unitHeight,
+      color: [1, 1, 1, 1],
+      opacity: opts?.opacity ?? 1,
+      rotation: 0,
+      blendMode: 'normal',
+      source: id,
+      shader: 'composite',
+      params: [],
+      layer: opts?.layer ?? this.scene.entityCount(),
+      startTime: opts?.startTime ?? 0,
+      duration: opts?.duration ?? asset.duration,
+    });
+    return asset;
+  }
+
+  /** Remove an entity and clean up its assets if no other entity uses them. */
+  removeEntity(id: string): void {
+    const entity = this.scene.removeEntity(id);
+    if (!entity) return;
+
+    // Check if any remaining entity uses the same source
+    if (entity.source) {
+      const stillUsed = this.scene.allEntities().some(e => e.source === entity.source);
+      if (!stillUsed) {
+        this.assets.removeImage(entity.source);
+        this.assets.removeVideo(entity.source);
+        // Evict Core texture
+        this.renderFrame({ passes: [], texture_updates: [{ Evict: { key: entity.source } }] });
+      }
+    }
+  }
+
+  /** Update entity properties. */
   updateEntity(id: string, patch: Partial<Entity>): void {
     this.scene.updateEntity(id, patch);
-    this.invalidateBuffer();
-  }
-
-  removeEntity(id: string): void {
-    this.scene.removeEntity(id);
-    this.invalidateBuffer();
   }
 
   // ── Viewport ──
 
-  setViewport(viewport: Partial<Viewport>): void {
-    this.viewport = { ...this.viewport, ...viewport };
-    this.invalidateBuffer();
+  /** Update viewport settings. */
+  setViewport(patch: Partial<Viewport>): void {
+    Object.assign(this.viewport, patch);
+    this.syncCanvasSize();
   }
 
-  getViewport(): Viewport {
+  getViewport(): Readonly<Viewport> {
     return { ...this.viewport };
   }
 
-  // ── Resize ──
+  /** Resize viewport to match current canvas container size. */
+  syncCanvasSize(): void {
+    const w = this.canvas.clientWidth || this.canvas.width;
+    const h = this.canvas.clientHeight || this.canvas.height;
+    this.viewport.screenWidth = w;
+    this.viewport.screenHeight = h;
 
-  resize(width: number, height: number): void {
-    this.renderWidth = width;
-    this.renderHeight = height;
-    this.wasm.resize(width, height); // auto-clears WASM buffer
-    this.invalidateBuffer();
+    const renderW = Math.round(w * this.viewport.renderScale);
+    const renderH = Math.round(h * this.viewport.renderScale);
+
+    if (this.canvas.width !== renderW || this.canvas.height !== renderH) {
+      this.canvas.width = renderW;
+      this.canvas.height = renderH;
+      this.core.resize(renderW, renderH);
+    }
+  }
+
+  // ── Camera ──
+
+  setCamera(cam: Partial<Camera>): void {
+    Object.assign(this._camera, cam);
+  }
+
+  getCamera(): Readonly<Camera> {
+    return { ...this._camera };
   }
 
   // ── Playback ──
 
-  /** Seek to a specific time and render that frame */
-  async seekTo(time: number): Promise<void> {
-    const fps = this.scene.fps;
-    this.currentFrame = Math.floor(time * fps);
+  get isPlaying(): boolean { return this.playing; }
+  get time(): number { return this.currentTime; }
 
-    // Flatten single frame
-    const frame = this.flattener.flattenSingle(
-      time, this.renderWidth, this.renderHeight, this.viewport,
-    );
-
-    // TODO: preload assets for this frame
-    const json = JSON.stringify(frame);
-    this.wasm.render_frame(json);
-  }
-
-  /** Start continuous playback from current position */
   play(): void {
     if (this.playing) return;
     this.playing = true;
-    this.playbackStartTime = performance.now();
-    this.playbackStartFrame = this.currentFrame;
-
-    // Pre-fill buffer
-    this.fillBuffer();
-
-    // Start render loop
-    this.animFrameId = requestAnimationFrame((ts) => this.playLoop(ts));
+    this.playStartWall = performance.now();
+    this.playStartTime = this.currentTime;
   }
 
-  /** Pause playback */
   pause(): void {
     this.playing = false;
+  }
+
+  stop(): void {
+    this.playing = false;
+    this.currentTime = 0;
+  }
+
+  seekTo(time: number): void {
+    this.currentTime = Math.max(0, Math.min(time, this.scene.duration));
+    if (this.playing) {
+      this.playStartWall = performance.now();
+      this.playStartTime = this.currentTime;
+    }
+    this.assets.clearVideoFrames();
+  }
+
+  /** Set callback invoked each animation frame with current time. */
+  onFrameCallback(cb: (time: number) => void): void {
+    this.onFrame = cb;
+  }
+
+  // ── Render Loop ──
+
+  /** Start the animation frame loop. Call once after setup. */
+  startLoop(): void {
+    if (this.animFrameId !== null) return;
+    const tick = () => {
+      this.animFrameId = requestAnimationFrame(tick);
+      this.tick();
+    };
+    tick();
+  }
+
+  /** Stop the animation frame loop. */
+  stopLoop(): void {
     if (this.animFrameId !== null) {
       cancelAnimationFrame(this.animFrameId);
       this.animFrameId = null;
     }
   }
 
-  get isPlaying(): boolean { return this.playing; }
-  get currentTime(): number { return this.currentFrame / this.scene.fps; }
-
-  // ── Internal ──
-
-  private playLoop(timestamp: number): void {
-    if (!this.playing) return;
-
-    const fps = this.scene.fps;
-    const elapsed = (timestamp - this.playbackStartTime) / 1000.0;
-    const targetFrame = this.playbackStartFrame + Math.floor(elapsed * fps);
-
-    // Render from buffer
-    if (targetFrame !== this.currentFrame) {
-      this.currentFrame = targetFrame;
-      if (!this.ringBuffer.render(this.currentFrame)) {
-        // Frame not in buffer — flatten single frame fallback
-        const time = this.currentFrame / fps;
-        const frame = this.flattener.flattenSingle(
-          time, this.renderWidth, this.renderHeight, this.viewport,
-        );
-        this.wasm.render_frame(JSON.stringify(frame));
+  /** Single tick: update time, extract video frames, flatten, render. */
+  async tick(): Promise<void> {
+    // Update time
+    if (this.playing) {
+      this.currentTime = this.playStartTime +
+        (performance.now() - this.playStartWall) / 1000;
+      if (this.currentTime >= this.scene.duration) {
+        this.currentTime = 0;
+        this.playStartTime = 0;
+        this.playStartWall = performance.now();
       }
     }
 
-    // Prefetch if buffer running low
-    if (this.ringBuffer.needsPrefetch(this.currentFrame)) {
-      this.fillBuffer();
-    }
+    // Extract video frames for current time
+    await this.extractVideoFrames(this.currentTime);
 
-    this.animFrameId = requestAnimationFrame((ts) => this.playLoop(ts));
+    // Flatten + render
+    const frame = this.scene.flattenForViewport(this.currentTime, this.viewport);
+    this.renderFrame(frame);
+
+    this.onFrame?.(this.currentTime);
   }
 
-  private fillBuffer(): void {
-    const fps = this.scene.fps;
-    const startFrame = this.ringBuffer.endFrame || this.currentFrame;
-    const startTime = startFrame / fps;
-
-    // Flatten batch (time-budgeted: 16ms)
-    const batch = this.flattener.flattenBatch(
-      startTime, 90, // up to 3 seconds
-      this.renderWidth, this.renderHeight,
-      this.viewport,
-      16, // budget: 16ms
-    );
-
-    if (batch.length > 0) {
-      this.ringBuffer.push(batch, startFrame);
+  /** Render a single frame to the canvas. */
+  renderFrame(frame: { passes: any[]; texture_updates: any[] }): void {
+    try {
+      this.core.render_frame(JSON.stringify(frame));
+    } catch (e) {
+      console.warn('[IfolRenderer] render error:', e);
     }
   }
 
-  private invalidateBuffer(): void {
-    this.ringBuffer.clear();
-    this.scene.markClean();
+  /** Extract video frames needed for the given time. */
+  private async extractVideoFrames(time: number): Promise<void> {
+    const entities = this.scene.visibleAt(time);
+    for (const e of entities) {
+      if (e.type === 'video' && e.source) {
+        const localTime = time - e.startTime;
+        try {
+          await this.assets.extractVideoFrame(e.source, localTime);
+        } catch {
+          // Video not yet loaded or seek failed — skip this frame
+        }
+      }
+    }
   }
 
-  /** Direct access to WASM renderer (escape hatch) */
-  get wasmRenderer(): any {
-    return this.wasm;
+  // ── Coordinate conversion (delegated to scene) ──
+
+  canvasToWorld(canvasX: number, canvasY: number): { x: number; y: number } {
+    return this.scene.canvasToWorld(canvasX, canvasY, this.viewport);
+  }
+
+  worldToCanvas(worldX: number, worldY: number): { x: number; y: number } {
+    return this.scene.worldToCanvas(worldX, worldY, this.viewport);
+  }
+
+  // ── Cleanup ──
+
+  destroy(): void {
+    this.stopLoop();
+    this.assets.destroy();
   }
 }

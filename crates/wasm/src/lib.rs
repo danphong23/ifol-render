@@ -72,12 +72,6 @@ impl IfolRenderWeb {
         self.backend.video_frames.write().unwrap().clear();
     }
 
-    /// Upload raw RGBA pixels as a GPU texture.
-    /// Used for JS-side decoded video frames (via Canvas 2D getImageData).
-    pub fn load_rgba(&mut self, key: &str, data: &[u8], width: u32, height: u32) {
-        self.engine.load_rgba(key, data, width, height);
-    }
-
     // ── Setup ────────────────────────────────
 
     /// Setup the pipeline standard builtins (Call this AFTER caching the fonts!)

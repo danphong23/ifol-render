@@ -1,96 +1,118 @@
-// ══════════════════════════════════════
+// ══════════════════════════════════════════════════
 // ifol-render-sdk — Type Definitions
-// ══════════════════════════════════════
+// All spatial values are in WORLD UNITS unless noted.
+// See docs/UNIT_SYSTEM.md for full specification.
+// ══════════════════════════════════════════════════
 
-// ── Render Settings ──
+// ── Scene ──
 
-export interface RenderSettings {
-  width: number;
-  height: number;
+/** Scene-level settings. */
+export interface SceneSettings {
+  /** Pixels-per-unit. Media pixel dimensions / PPU = unit size. Default: 1 */
+  ppu: number;
+  /** Frames per second for playback and export. */
   fps: number;
-  background?: [number, number, number, number];
+  /** Total duration in seconds. */
+  duration: number;
 }
 
-// ── Entity (rich, frontend-owned) ──
+// ── Entity ──
 
+export type EntityType = 'rect' | 'circle' | 'image' | 'video' | 'text';
+export type BlendMode = 'normal' | 'multiply' | 'screen' | 'overlay';
+
+/** An entity in world-unit space. */
 export interface Entity {
   id: string;
-  type: 'rect' | 'image' | 'video' | 'text' | 'shape' | 'custom';
-  transform: Transform;
-  timeline: Timeline;
-  style?: EntityStyle;
-  /** Text content (for type: 'text') */
-  content?: string;
-  /** Asset source path (for type: 'image' | 'video') */
-  source?: string;
-  /** Custom shader name (for type: 'custom') */
-  shader?: string;
-  /** Extra shader params */
-  params?: number[];
-  /** Child entity IDs (hierarchy) */
-  children?: string[];
-}
+  type: EntityType;
+  /** Human-readable label. */
+  label?: string;
 
-export interface Transform {
-  /** Position in scene units (origin: top-left of scene) */
+  // ── Transform (units) ──
   x: number;
   y: number;
-  /** Size in scene units */
   width: number;
   height: number;
-  /** Rotation in radians */
-  rotation?: number;
-  /** Anchor point 0-1 (default: 0.5, 0.5 = center) */
-  anchorX?: number;
-  anchorY?: number;
-}
+  rotation: number;
 
-export interface Timeline {
-  /** Start time in seconds */
-  start: number;
-  /** Duration in seconds */
+  // ── Style ──
+  color: [number, number, number, number];
+  opacity: number;
+  blendMode: BlendMode;
+
+  // ── Media ──
+  /** Asset key (from addImage/addVideo). */
+  source?: string;
+
+  // ── Timeline ──
+  startTime: number;
   duration: number;
-  /** Layer index (0 = bottom) */
-  layer?: number;
-  /** Z-index within layer */
-  zIndex?: number;
-}
 
-export interface EntityStyle {
-  opacity?: number;
-  blendMode?: BlendMode;
-  color?: [number, number, number, number];
-  fontSize?: number;
-  fontKey?: string;
-  maxWidth?: number;
-  lineHeight?: number;
-  textAlign?: 'left' | 'center' | 'right';
-  /** Border radius for shapes */
-  borderRadius?: number;
+  // ── Render ──
+  /** Shader pipeline name. Auto-set by SDK based on type. */
+  shader: string;
+  /** Extra shader params (e.g. corner radius). */
+  params: number[];
+  /** Layer order (higher = drawn later = on top). */
+  layer: number;
 }
-
-export type BlendMode =
-  | 'normal'
-  | 'multiply'
-  | 'screen'
-  | 'overlay'
-  | 'softLight'
-  | 'add'
-  | 'difference';
 
 // ── Viewport ──
 
+/** A view into the world. See docs/UNIT_SYSTEM.md §2. */
 export interface Viewport {
-  /** Zoom level: 1.0 = 100% (fit scene to viewport) */
+  /** Display width in CSS pixels. */
+  screenWidth: number;
+  /** Display height in CSS pixels. */
+  screenHeight: number;
+
+  /** World X of viewport center (units). */
+  centerX: number;
+  /** World Y of viewport center (units). */
+  centerY: number;
+  /** Zoom factor. 1.0 = default, 2.0 = zoomed in 2×. */
   zoom: number;
-  /** Pan offset X in scene units */
-  panX: number;
-  /** Pan offset Y in scene units */
-  panY: number;
+
+  /**
+   * Render resolution as fraction of screen size.
+   * 1.0 = full quality, 0.5 = half (25% GPU work).
+   */
+  renderScale: number;
 }
 
-// ── Flat Frame (Core input) ──
+// ── Camera ──
 
+/** Camera defines what the "output" shows. Position + size in units. */
+export interface Camera {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Export settings for rendering camera output to file. */
+export interface ExportSettings {
+  /** Output pixel width. */
+  width: number;
+  /** Output pixel height. */
+  height: number;
+  fps: number;
+  output: string;
+}
+
+// ── Visible Region ──
+
+/** Computed visible rectangle in world units. */
+export interface WorldRegion {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+// ── Core Frame Types (pixel-based, sent to WASM) ──
+
+/** Flat entity with pixel coordinates for Core rendering. */
 export interface FlatEntity {
   id: number;
   x: number;
@@ -108,52 +130,47 @@ export interface FlatEntity {
   z_index: number;
 }
 
-export interface TextureUpdate {
-  LoadImage?: { key: string; path: string };
-  UploadRgba?: { key: string; data: number[]; width: number; height: number };
-  LoadFont?: { key: string; path: string };
-  RasterizeText?: {
-    key: string;
-    content: string;
-    font_size: number;
-    color: [number, number, number, number];
-    font_key?: string;
-    max_width?: number;
-    line_height?: number;
-    alignment?: number;
-  };
-  DecodeVideoFrame?: {
-    key: string;
-    path: string;
-    timestamp_secs: number;
-    width?: number;
-    height?: number;
-  };
-  Evict?: { key: string };
-}
+export type PassType =
+  | { Entities: { entities: FlatEntity[]; clear_color: [number, number, number, number] } }
+  | { Output: { input: string } };
 
 export interface RenderPass {
   output: string;
   pass_type: PassType;
 }
 
-export type PassType =
-  | { Entities: { entities: FlatEntity[]; clear_color: [number, number, number, number] } }
-  | { Effect: { shader: string; inputs: string[]; params: number[] } }
-  | { Output: { input: string } };
+export interface TextureUpdate {
+  LoadImage?: { key: string; path: string };
+  UploadRgba?: { key: string; data: number[]; width: number; height: number };
+  Evict?: { key: string };
+}
 
+/** A single render frame — pixel coordinates, ready for Core WASM. */
 export interface Frame {
   passes: RenderPass[];
   texture_updates: TextureUpdate[];
 }
 
-// ── SDK Config ──
+// ── Asset Tracking ──
 
-export interface SDKConfig {
-  /** Canvas element to render to */
-  canvas: HTMLCanvasElement;
-  /** Render settings */
-  settings: RenderSettings;
-  /** Asset base URL (default: 'http://localhost:8000/asset?path=') */
-  assetBaseUrl?: string;
+export interface ImageAsset {
+  key: string;
+  url: string;
+  pixelWidth: number;
+  pixelHeight: number;
+  /** Size in world units (pixelW/PPU, pixelH/PPU). */
+  unitWidth: number;
+  unitHeight: number;
+  cached: boolean;
+}
+
+export interface VideoAsset {
+  key: string;
+  url: string;
+  pixelWidth: number;
+  pixelHeight: number;
+  unitWidth: number;
+  unitHeight: number;
+  duration: number;
+  element?: HTMLVideoElement;
 }
