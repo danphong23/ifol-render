@@ -184,21 +184,15 @@ async function preloadFrameVideoFrames(frameData) {
 }
 
 // ── Render the current frame ──
-// When blocking=true (scrubbing), waits for video frames.
-// When blocking=false (playback), renders immediately with whatever is cached.
-async function renderCurrentFrame(blocking = true) {
+// Always blocks on video frame decode for correct display.
+async function renderCurrentFrame() {
     if (!renderer || !sceneJson) return;
     
     const frameData = sceneJson.frames[currentFrame];
     if (!frameData) return;
 
-    if (blocking) {
-        // Scrubbing / single-frame: wait for video frames
-        await preloadFrameVideoFrames(frameData);
-    } else {
-        // Playback: fire-and-forget decode, render immediately
-        startVideoFrameDecode(frameData);
-    }
+    // Wait for video frames to be decoded and cached in WASM
+    await preloadFrameVideoFrames(frameData);
     
     // Scene export resolution (pixel coords are authored at this size)
     const sceneW = sceneJson.settings?.width || 1920;
@@ -214,36 +208,72 @@ async function renderCurrentFrame(blocking = true) {
     }
 }
 
+// ── Audio Sync ──
+// Finds the main video <video> element and plays its audio in sync
+let activeAudioVideo = null;
+
+function startAudioSync() {
+    // Find the video path used in the scene
+    if (!sceneJson) return;
+    const firstVideoUpdate = sceneJson.frames[0]?.texture_updates?.find(u => u.DecodeVideoFrame);
+    if (!firstVideoUpdate) return;
+    
+    const videoPath = firstVideoUpdate.DecodeVideoFrame.path;
+    const video = videoPool[videoPath];
+    if (!video) return;
+    
+    // Calculate current time from frame index
+    const fps = sceneJson.settings?.fps || 30;
+    const currentTimeSecs = currentFrame / fps;
+    
+    video.muted = false;
+    video.currentTime = currentTimeSecs;
+    video.play().catch(e => console.warn("Audio autoplay blocked:", e));
+    activeAudioVideo = video;
+}
+
+function stopAudioSync() {
+    if (activeAudioVideo) {
+        activeAudioVideo.pause();
+        activeAudioVideo.muted = true;
+        activeAudioVideo = null;
+    }
+    // Also mute all pooled videos
+    for (const v of Object.values(videoPool)) {
+        v.pause();
+        v.muted = true;
+    }
+}
+
 // ── Playback Controls ──
 function stopPlayback() {
     isPlaying = false;
     playBtn.innerText = "Play";
-    if (playLoopId) {
-        cancelAnimationFrame(playLoopId);
-        playLoopId = null;
-    }
+    stopAudioSync();
 }
 
-// rAF-based playback loop with proper FPS timing
-let lastFrameTime = 0;
-function playLoop(timestamp) {
-    if (!isPlaying) return;
-    
+// Simple async playback loop with proper timing
+async function playLoop() {
     const fps = sceneJson.settings?.fps || 30;
     const frameDuration = 1000.0 / fps;
     
-    if (timestamp - lastFrameTime >= frameDuration) {
-        if (currentFrame >= totalFrames - 1) {
-            stopPlayback();
-            return;
-        }
+    while (isPlaying && currentFrame < totalFrames - 1) {
+        const frameStart = performance.now();
+        
         currentFrame++;
-        renderCurrentFrame(false); // non-blocking for smooth playback
-        prebufferAhead(); // decode next frames in background
-        lastFrameTime = timestamp;
+        await renderCurrentFrame();
+        
+        // Wait remaining time to hit target FPS
+        const elapsed = performance.now() - frameStart;
+        const sleepMs = Math.max(0, frameDuration - elapsed);
+        if (sleepMs > 0) {
+            await new Promise(r => setTimeout(r, sleepMs));
+        }
     }
     
-    playLoopId = requestAnimationFrame(playLoop);
+    if (currentFrame >= totalFrames - 1) {
+        stopPlayback();
+    }
 }
 
 // ── Bootstrap ──
@@ -311,8 +341,8 @@ async function bootstrap() {
             if (currentFrame >= totalFrames - 1) currentFrame = 0;
             isPlaying = true;
             playBtn.innerText = "Pause";
-            lastFrameTime = performance.now();
-            playLoopId = requestAnimationFrame(playLoop);
+            startAudioSync();
+            playLoop(); // async, runs in background
         }
     });
 
