@@ -1,13 +1,14 @@
 """
-Lightweight asset server for ifol-render SDK test.
-Serves files from any local path via query parameter.
+Asset server for ifol-render SDK test.
+Serves local files via query param, handles export via CLI.
 
 Usage:
     python web/asset-server.py [port]
 
 Endpoints:
-    GET /asset?path=C:/path/to/file.png  → serves the file
-    GET /health                           → {"status":"ok"}
+    GET  /asset?path=C:/path/to/file  → serves the file (supports Range)
+    GET  /health                       → {"status":"ok"}
+    POST /export                       → runs ifol-render.exe export
 """
 
 import http.server
@@ -15,19 +16,21 @@ import urllib.parse
 import os
 import json
 import sys
+import subprocess
+import tempfile
+import time
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
+CLI_PATH = os.path.join(PROJECT_DIR, 'target', 'debug', 'ifol-render.exe')
 
 class AssetHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         
         if parsed.path == '/health':
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps({"status": "ok"}).encode())
+            self._json_response(200, {"status": "ok"})
             return
 
         if parsed.path == '/asset':
@@ -35,51 +38,168 @@ class AssetHandler(http.server.BaseHTTPRequestHandler):
             file_path = params.get('path', [None])[0]
             
             if not file_path or not os.path.isfile(file_path):
-                self.send_response(404)
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(b'File not found')
+                self._error(404, 'File not found')
                 return
             
-            # Guess MIME type
-            ext = os.path.splitext(file_path)[1].lower()
-            mime_map = {
-                '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-                '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
-                '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
-                '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
-                '.ttf': 'font/ttf', '.otf': 'font/otf', '.woff': 'font/woff',
-                '.woff2': 'font/woff2', '.json': 'application/json',
-            }
-            content_type = mime_map.get(ext, 'application/octet-stream')
+            file_size = os.path.getsize(file_path)
+            content_type = self._mime(file_path)
             
-            try:
-                with open(file_path, 'rb') as f:
-                    data = f.read()
-                self.send_response(200)
-                self.send_header('Content-Type', content_type)
-                self.send_header('Content-Length', str(len(data)))
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.send_header('Cache-Control', 'public, max-age=3600')
-                self.end_headers()
-                self.wfile.write(data)
-            except Exception as e:
-                self.send_response(500)
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(str(e).encode())
+            # Range request support (for video seeking)
+            range_header = self.headers.get('Range')
+            if range_header:
+                self._serve_range(file_path, file_size, content_type, range_header)
+            else:
+                self._serve_full(file_path, file_size, content_type)
             return
         
-        self.send_response(404)
-        self.end_headers()
-    
+        self._error(404, 'Not found')
+
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        
+        if parsed.path == '/export':
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length).decode()
+            
+            try:
+                data = json.loads(body) if body else {}
+                result = self._run_export(data)
+                self._json_response(200, result)
+            except Exception as e:
+                self._json_response(500, {"status": "error", "error": str(e)})
+            return
+        
+        self._error(404, 'Not found')
+
     def do_OPTIONS(self):
         self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        self._cors_headers()
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', '*')
         self.end_headers()
-    
+
+    # ── Export ──
+
+    def _run_export(self, data):
+        """Run ifol-render.exe export with scene JSON."""
+        if not os.path.isfile(CLI_PATH):
+            return {"status": "error", "error": f"CLI not found: {CLI_PATH}"}
+        
+        # Write scene JSON to temp file
+        frames = data.get('frames', [])
+        scene_path = data.get('scene_path')
+        output_path = data.get('output', os.path.join(tempfile.gettempdir(), f'ifol_export_{int(time.time())}.mp4'))
+        
+        if scene_path and os.path.isfile(scene_path):
+            # Use existing scene file
+            pass
+        elif frames:
+            # Write frames to temp JSON
+            scene_path = os.path.join(tempfile.gettempdir(), f'ifol_scene_{int(time.time())}.json')
+            with open(scene_path, 'w') as f:
+                json.dump(frames, f)
+        else:
+            return {"status": "error", "error": "No frames or scene_path provided"}
+        
+        # Run CLI
+        cmd = [CLI_PATH, 'export', '--scene', scene_path, '-o', output_path]
+        width = data.get('width', 1920)
+        height = data.get('height', 1080)
+        fps = data.get('fps', 30)
+        cmd.extend(['--width', str(width), '--height', str(height), '--fps', str(fps)])
+        
+        print(f'[export] Running: {" ".join(cmd)}')
+        
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if result.returncode == 0:
+                return {
+                    "status": "ok",
+                    "path": output_path,
+                    "url": f"/asset?path={urllib.parse.quote(output_path)}",
+                    "stdout": result.stdout[-500:] if result.stdout else "",
+                }
+            else:
+                return {
+                    "status": "error",
+                    "error": result.stderr[-500:] if result.stderr else f"Exit code {result.returncode}",
+                    "stdout": result.stdout[-500:] if result.stdout else "",
+                }
+        except subprocess.TimeoutExpired:
+            return {"status": "error", "error": "Export timed out (300s)"}
+
+    # ── File serving ──
+
+    def _serve_full(self, path, size, content_type):
+        try:
+            with open(path, 'rb') as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', str(size))
+            self.send_header('Accept-Ranges', 'bytes')
+            self._cors_headers()
+            self.send_header('Cache-Control', 'public, max-age=3600')
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception as e:
+            self._error(500, str(e))
+
+    def _serve_range(self, path, size, content_type, range_header):
+        """Handle HTTP Range requests (for video seeking)."""
+        try:
+            ranges = range_header.replace('bytes=', '').split('-')
+            start = int(ranges[0]) if ranges[0] else 0
+            end = int(ranges[1]) if ranges[1] else size - 1
+            end = min(end, size - 1)
+            length = end - start + 1
+
+            with open(path, 'rb') as f:
+                f.seek(start)
+                data = f.read(length)
+
+            self.send_response(206)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Range', f'bytes {start}-{end}/{size}')
+            self.send_header('Content-Length', str(length))
+            self.send_header('Accept-Ranges', 'bytes')
+            self._cors_headers()
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception as e:
+            self._error(500, str(e))
+
+    # ── Helpers ──
+
+    def _cors_headers(self):
+        self.send_header('Access-Control-Allow-Origin', '*')
+
+    def _json_response(self, code, data):
+        body = json.dumps(data).encode()
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self._cors_headers()
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _error(self, code, msg):
+        self.send_response(code)
+        self._cors_headers()
+        self.end_headers()
+        self.wfile.write(msg.encode())
+
+    def _mime(self, path):
+        ext = os.path.splitext(path)[1].lower()
+        return {
+            '.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg',
+            '.gif':'image/gif','.webp':'image/webp','.svg':'image/svg+xml',
+            '.mp4':'video/mp4','.webm':'video/webm','.mov':'video/quicktime',
+            '.mp3':'audio/mpeg','.wav':'audio/wav','.ogg':'audio/ogg',
+            '.ttf':'font/ttf','.otf':'font/otf','.woff':'font/woff',
+            '.woff2':'font/woff2','.json':'application/json',
+        }.get(ext, 'application/octet-stream')
+
     def log_message(self, format, *args):
         try:
             first = str(args[0]) if args else ''
@@ -91,5 +211,8 @@ class AssetHandler(http.server.BaseHTTPRequestHandler):
 if __name__ == '__main__':
     server = http.server.HTTPServer(('', PORT), AssetHandler)
     print(f'Asset server on http://localhost:{PORT}')
-    print(f'Example: http://localhost:{PORT}/asset?path=C:/path/to/image.png')
+    print(f'  GET  /asset?path=C:/path/to/file')
+    print(f'  POST /export  {{frames: [...], output: "..."}}'  )
+    print(f'  CLI:  {CLI_PATH}')
+    print(f'  CLI exists: {os.path.isfile(CLI_PATH)}')
     server.serve_forever()

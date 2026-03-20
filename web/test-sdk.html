@@ -35,7 +35,7 @@
     .canvas-container{position:relative;width:100%;height:100%}
     #cameraViewportWrap .canvas-container{display:flex;align-items:center;justify-content:center;background:#050510}
     canvas{display:block}
-    #editCanvas{width:100%;height:100%}
+    #editCanvas{width:100%;height:100%;image-rendering:auto}
     #selectionOverlay{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:2}
 
     #splitter{width:5px;cursor:col-resize;background:#0f3460;flex-shrink:0;z-index:10;transition:background .15s}
@@ -117,6 +117,7 @@
     <div class="metric">Anims:<span class="v" id="mAnimated">0</span></div>
     <div class="metric">Zoom:<span class="v" id="mZoom">100%</span></div>
     <div class="metric">Pan:<span class="v" id="mPan">0,0</span></div>
+    <div class="metric" style="margin-left:auto">Quality:<input type="range" id="renderScaleSlider" min="25" max="100" value="100" style="width:60px;accent-color:#4ecca3;vertical-align:middle"><span class="v" id="mScale">100%</span></div>
     <div class="metric">Status:<span class="v" id="mStatus">Init</span></div>
   </div>
 
@@ -147,6 +148,7 @@
     // Viewport (unit-based: center + zoom)
     let vpCenterX = SCENE_W / 2, vpCenterY = SCENE_H / 2;
     let vpZoom = 1;
+    let renderScale = 1.0; // 0.25 – 1.0
 
     // Animation (deterministic — absolute time)
     const anims = new Map();
@@ -195,15 +197,24 @@
     }
 
     // ═══ Canvas sizing ═══
+    // Key: viewport resize changes visible area (more/less world), NOT zoom.
+    // renderScale changes GPU backing resolution (quality) independently.
     function syncEditSize() {
       const wrap = document.getElementById('editViewportWrap');
       const c = document.getElementById('editCanvas');
       const o = document.getElementById('selectionOverlay');
-      c.width = wrap.clientWidth;
-      c.height = wrap.clientHeight;
-      o.width = c.width; o.height = c.height;
-      if (editCore) editCore.resize(c.width, c.height);
-      document.getElementById('editLabel').textContent = `Edit Viewport (${c.width}×${c.height})`;
+      // CSS size = display size (determines how much world is visible)
+      const cssW = wrap.clientWidth, cssH = wrap.clientHeight;
+      c.style.width = cssW + 'px';
+      c.style.height = cssH + 'px';
+      // Backing size = GPU render target (renderScale controls quality)
+      const backW = Math.round(cssW * renderScale);
+      const backH = Math.round(cssH * renderScale);
+      c.width = backW; c.height = backH;
+      // Selection overlay always at full CSS resolution for crisp lines
+      o.width = cssW; o.height = cssH;
+      if (editCore) editCore.resize(backW, backH);
+      document.getElementById('editLabel').textContent = `Edit (${cssW}×${cssH} → ${backW}×${backH})`;
     }
     function syncCamSize() {
       const container = document.getElementById('cameraCanvasContainer');
@@ -213,10 +224,13 @@
       let w, h;
       if (cw / ch > aspect) { h = ch; w = Math.round(h * aspect); }
       else { w = cw; h = Math.round(w / aspect); }
-      c.width = w; c.height = h;
+      // Camera can also use renderScale
+      const backW = Math.round(w * renderScale);
+      const backH = Math.round(h * renderScale);
+      c.width = backW; c.height = backH;
       c.style.width = w + 'px'; c.style.height = h + 'px';
-      if (camCore) camCore.resize(w, h);
-      document.getElementById('cameraLabel').textContent = `Camera (${w}×${h})`;
+      if (camCore) camCore.resize(backW, backH);
+      document.getElementById('cameraLabel').textContent = `Camera (${w}×${h} → ${backW}×${backH})`;
     }
 
     // ═══ Camera entity ═══
@@ -319,15 +333,21 @@
     }
 
     // ═══ Viewport (unit-based) ═══
+    // screenWidth/Height = CSS size (determines visible world area)
+    // renderScale used for GPU backing only (flatten uses screenW/H)
     function getViewport() {
-      const c = document.getElementById('editCanvas');
+      const wrap = document.getElementById('editViewportWrap');
       return {
-        screenWidth: c.width, screenHeight: c.height,
+        // CSS size — changing this changes visible area (not zoom)
+        screenWidth: wrap.clientWidth,
+        screenHeight: wrap.clientHeight,
         centerX: vpCenterX, centerY: vpCenterY,
-        zoom: vpZoom, renderScale: 1,
+        zoom: vpZoom,
+        renderScale: renderScale,
       };
     }
     function canvasToWorld(cx, cy) {
+      // Mouse coords are in CSS pixels, so use CSS-sized viewport
       return scene.canvasToWorld(cx, cy, getViewport());
     }
 
@@ -493,23 +513,33 @@
       };
 
       document.getElementById('btnExport').onclick = async () => {
-        setStatus('Exporting...');
+        setStatus('Exporting... (generating frames)');
         try {
           const cam = getCam();
           const frameData = [];
-          for (let i = 0; i < DURATION * FPS; i++) {
+          const totalFrames = Math.round(DURATION * FPS);
+          for (let i = 0; i < totalFrames; i++) {
             const t = i / FPS;
             computeAnimations(t);
             frameData.push(scene.flattenForExport(t, cam, 1920, 1080));
+            if (i % 30 === 0) setStatus(`Exporting... frame ${i}/${totalFrames}`);
           }
+          setStatus(`Sending ${totalFrames} frames to server...`);
           const res = await fetch('http://localhost:8000/export', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ frames: frameData }),
+            body: JSON.stringify({ frames: frameData, width: 1920, height: 1080, fps: FPS }),
           });
           const d = await res.json();
-          setStatus(d.status === 'ok' ? `Export done! ${d.path}` : d.error);
+          setStatus(d.status === 'ok' ? `✅ Exported: ${d.path}` : `❌ ${d.error}`);
         } catch (e) { setStatus(`Export error: ${e.message}`); }
+      };
+
+      // renderScale slider
+      document.getElementById('renderScaleSlider').oninput = (ev) => {
+        renderScale = parseInt(ev.target.value) / 100;
+        document.getElementById('mScale').textContent = ev.target.value + '%';
+        syncEditSize(); syncCamSize();
       };
 
       // ── Canvas mouse ──
