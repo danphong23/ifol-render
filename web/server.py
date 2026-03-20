@@ -26,23 +26,41 @@ class FileAndMediaHandler(http.server.SimpleHTTPRequestHandler):
             temp_json = os.path.abspath(os.path.join(os.path.dirname(__file__), "temp_export.json"))
             with open(temp_json, "wb") as f:
                 f.write(body)
-                
+            
+            output_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "web_export.mp4"))
             exe_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "target", "debug", "ifol-render.exe"))
             root_cwd = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
             
             if not os.path.exists(exe_path):
-                cmd = ["cargo", "run", "--", "render", temp_json, "--output", "web_export.mp4"]
-            else:
-                cmd = [exe_path, "render", temp_json, "--output", "web_export.mp4"]
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f"CLI not found at {exe_path}. Run: cargo build -p ifol-render-cli".encode())
+                return
+            
+            cmd = [
+                exe_path, "export",
+                "--scene", temp_json,
+                "--output", output_path,
+                "--codec", "h264",
+                "--crf", "23",
+                "--preset", "fast",
+            ]
                 
-            print("Running export:", " ".join(cmd))
+            print(f"Running export: {' '.join(cmd)}")
             
-            # Start process natively (disown)
-            subprocess.Popen(cmd, cwd=root_cwd)
+            # Run synchronously and capture output
+            result = subprocess.run(cmd, cwd=root_cwd, capture_output=True, text=True)
             
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"Export job dispatched! Check backend terminal.")
+            if result.returncode == 0:
+                self.send_response(200)
+                self.end_headers()
+                msg = f"Export complete!\nOutput: {output_path}\n\n{result.stderr}"
+                self.wfile.write(msg.encode())
+            else:
+                self.send_response(500)
+                self.end_headers()
+                msg = f"Export failed (exit {result.returncode}):\n{result.stderr}"
+                self.wfile.write(msg.encode())
             return
 
     def do_GET(self):
