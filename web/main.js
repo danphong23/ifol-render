@@ -326,14 +326,26 @@ async function bootstrap() {
         stopPlayback();
         statusTxt.innerText = "Sending Export to Backend...";
         exportBtn.disabled = true;
+        
+        // Read export settings from UI
+        const exportDir = document.getElementById('export-dir').value.trim();
+        const exportFilename = document.getElementById('export-filename').value.trim() || 'output.mp4';
+        const exportFfmpeg = document.getElementById('export-ffmpeg').value.trim();
+        
+        // Build query params for server
+        const params = new URLSearchParams();
+        if (exportDir) params.set('dir', exportDir);
+        params.set('filename', exportFilename);
+        if (exportFfmpeg) params.set('ffmpeg', exportFfmpeg);
+        
         try {
-            const res = await fetch('http://localhost:8000/export', {
+            const res = await fetch(`http://localhost:8000/export?${params.toString()}`, {
                 method: 'POST',
                 body: JSON.stringify(sceneJson)
             });
             const text = await res.text();
-            alert("Export Triggered:\n" + text);
-            statusTxt.innerText = "Exporting in background...";
+            alert(text);
+            statusTxt.innerText = "Export dispatched. Check server terminal.";
         } catch (e) {
             console.error("Export failed", e);
             statusTxt.innerText = "Export failed. Check console.";

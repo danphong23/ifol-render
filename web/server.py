@@ -20,6 +20,7 @@ class FileAndMediaHandler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/export":
+            qs = urllib.parse.parse_qs(parsed.query)
             content_length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(content_length)
             
@@ -27,7 +28,18 @@ class FileAndMediaHandler(http.server.SimpleHTTPRequestHandler):
             with open(temp_json, "wb") as f:
                 f.write(body)
             
-            output_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "web_export.mp4"))
+            # Read export settings from query params
+            export_dir = qs.get("dir", [""])[0].strip()
+            export_filename = qs.get("filename", ["output.mp4"])[0].strip() or "output.mp4"
+            ffmpeg_path = qs.get("ffmpeg", [""])[0].strip()
+            
+            # Build output path
+            if export_dir:
+                os.makedirs(export_dir, exist_ok=True)
+                output_path = os.path.join(export_dir, export_filename)
+            else:
+                output_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", export_filename))
+            
             exe_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "target", "debug", "ifol-render.exe"))
             root_cwd = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
             
@@ -45,11 +57,16 @@ class FileAndMediaHandler(http.server.SimpleHTTPRequestHandler):
                 "--crf", "23",
                 "--preset", "fast",
             ]
+            
+            # Add ffmpeg path if provided
+            if ffmpeg_path:
+                cmd.extend(["--ffmpeg", ffmpeg_path])
                 
             print(f"\n{'='*60}")
             print(f"EXPORT STARTED")
-            print(f"Command: {' '.join(cmd)}")
             print(f"Output:  {output_path}")
+            if ffmpeg_path:
+                print(f"FFmpeg:  {ffmpeg_path}")
             print(f"{'='*60}")
             
             # Start process in background — stderr streams to this terminal
@@ -57,7 +74,7 @@ class FileAndMediaHandler(http.server.SimpleHTTPRequestHandler):
             
             self.send_response(200)
             self.end_headers()
-            msg = f"Export started! Watch server terminal for progress.\nOutput will be saved to: {output_path}"
+            msg = f"Export started! Watch server terminal for progress.\nOutput: {output_path}"
             self.wfile.write(msg.encode())
             return
 

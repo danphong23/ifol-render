@@ -67,6 +67,30 @@
         padding: 6px;
         font-size: 0.85em;
       }
+      .export-settings {
+        display: flex;
+        justify-content: center;
+        gap: 16px;
+        padding: 8px 16px;
+        background: #1a1a2e;
+        font-size: 0.8em;
+      }
+      .export-settings label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: #aaa;
+      }
+      .export-settings input[type="text"] {
+        background: #222;
+        color: #eee;
+        border: 1px solid #444;
+        border-radius: 3px;
+        padding: 4px 8px;
+        font-family: monospace;
+        font-size: 0.95em;
+        width: 200px;
+      }
     </style>
   </head>
   <body>
@@ -83,6 +107,12 @@
       <input type="range" id="timeline" min="0" max="0" value="0" disabled>
       <span id="frame-counter">0 / 0</span>
       <button id="export-btn" disabled>Export to Server</button>
+    </div>
+
+    <div class="export-settings" id="export-settings">
+      <label>Output Dir <input type="text" id="export-dir" placeholder="C:\output" value=""></label>
+      <label>Filename <input type="text" id="export-filename" placeholder="output.mp4" value="output.mp4"></label>
+      <label>FFmpeg <input type="text" id="export-ffmpeg" placeholder="(system PATH)" value=""></label>
     </div>
 
     <div id="status">Waiting for WASM engine...</div>
