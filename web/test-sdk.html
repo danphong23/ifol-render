@@ -116,43 +116,52 @@
     <div class="metric">Entities:<span class="v" id="mEntities">0</span></div>
     <div class="metric">Anims:<span class="v" id="mAnimated">0</span></div>
     <div class="metric">Zoom:<span class="v" id="mZoom">100%</span></div>
-    <div class="metric">Pan:<span class="v" id="mPan">0,0</span></div>
     <div class="metric" style="margin-left:auto">Quality:<input type="range" id="renderScaleSlider" min="25" max="100" value="100" style="width:60px;accent-color:#4ecca3;vertical-align:middle"><span class="v" id="mScale">100%</span></div>
     <div class="metric">Status:<span class="v" id="mStatus">Init</span></div>
   </div>
 
   <script type="module">
     // ═══════════════════════════════════════════════════════
-    // Test Page — uses SDK Scene + AssetManager + direct Core
-    // (IfolRenderer class is for clean apps, here we test internals)
+    // Test Page — App Layer
+    //
+    // Uses SDK modules (Scene, RenderView, FreeCamera, BoundCamera,
+    // AssetManager, Timeline). Pumps Frame JSON → Core WASM → GPU.
+    //
+    // SDK produces data. This page consumes it.
     // ═══════════════════════════════════════════════════════
 
     import init, { IfolRenderWeb } from '../crates/wasm/pkg/ifol_render_wasm.js';
-    import { Scene, viewportRegion } from '../sdk/src/scene.ts';
+    import { Scene } from '../sdk/src/scene.ts';
+    import { FreeCamera, BoundCamera } from '../sdk/src/camera.ts';
+    import { RenderView } from '../sdk/src/render-view.ts';
     import { AssetManager } from '../sdk/src/assets.ts';
+    import { Timeline } from '../sdk/src/timeline.ts';
 
     // ═══ Config ═══
     const SCENE_W = 1920, SCENE_H = 1080;
-    const PPU = 1, FPS = 30, DURATION = 10;
+    const PPU = 1, DURATION = 10;
     const ASSET_SERVER = 'http://localhost:8000/asset?path=';
+    const EXPORT_FPS = 30;
+
+    // ═══ SDK instances (shared) ═══
+    let scene = null;        // Scene — entity model
+    let editCamera = null;   // FreeCamera — edit viewport
+    let boundCamera = null;  // BoundCamera — camera preview
+    let editView = null;     // RenderView — edit viewport
+    let camView = null;      // RenderView — camera preview
+    let assets = null;       // AssetManager — shared cache
+    let timeline = null;     // Timeline — shared playback
+
+    // ═══ App Layer state ═══
+    let editCore = null, camCore = null; // Core WASM instances
+    let selectedId = null, nextId = 1;
+    let renderScale = 1.0;
+
+    // Camera entity (App displays camera region as visual overlay)
+    let cameraEntityId = null;
     const CAM_BORDER_UNITS = 20;
 
-    // ═══ State ═══
-    let editCore = null, camCore = null;
-    let scene = null, assets = null;
-    let selectedId = null, nextId = 1;
-    let playing = false, currentTime = 0;
-    let playStartWall = 0, playStartTime = 0;
-    let cameraEntityId = null;
-
-    // Viewport (unit-based: center + zoom)
-    let vpCenterX = SCENE_W / 2, vpCenterY = SCENE_H / 2;
-    let vpZoom = 1;
-    let renderScale = 1.0; // 0.25 – 1.0
-    // Track previous screen size for top-left-anchored resize
-    let prevScreenW = 0, prevScreenH = 0;
-
-    // Animation (deterministic — absolute time)
+    // Animation (App-specific, NOT in SDK)
     const anims = new Map();
 
     // Interaction
@@ -164,79 +173,77 @@
       setStatus('Loading WASM...');
       await init();
 
+      // SDK: create shared instances
+      scene = new Scene({ ppu: PPU, duration: DURATION });
+      timeline = new Timeline(DURATION);
+
+      // SDK: cameras
+      const editWrap = document.getElementById('editViewportWrap');
+      editCamera = new FreeCamera({
+        centerX: SCENE_W / 2, centerY: SCENE_H / 2, zoom: 1,
+        screenWidth: editWrap.clientWidth, screenHeight: editWrap.clientHeight,
+        ppu: PPU,
+      });
+      boundCamera = new BoundCamera(0, 0, SCENE_W, SCENE_H);
+
+      // Core WASM: 2 GPU instances (App Layer owns GPU)
       const editCanvas = document.getElementById('editCanvas');
       syncEditSize();
-      editCore = await new IfolRenderWeb(editCanvas, editCanvas.width, editCanvas.height, FPS);
+      editCore = await new IfolRenderWeb(editCanvas, editCanvas.width, editCanvas.height, EXPORT_FPS);
       editCore.setup_builtins();
 
       const camCanvas = document.getElementById('cameraCanvas');
       syncCamSize();
-      camCore = await new IfolRenderWeb(camCanvas, camCanvas.width, camCanvas.height, FPS);
+      camCore = await new IfolRenderWeb(camCanvas, camCanvas.width, camCanvas.height, EXPORT_FPS);
       camCore.setup_builtins();
 
-      scene = new Scene({ ppu: PPU, fps: FPS, duration: DURATION });
+      // SDK: asset manager (App injects cache→GPU bridge)
       assets = new AssetManager({
         ppu: PPU,
         urlResolver: (p) => `${ASSET_SERVER}${encodeURIComponent(p)}`,
-        coreCache: (key, data) => {
-          editCore.cache_image(key, data);
-          camCore.cache_image(key, data);
-        },
-        coreVideoCache: (key, t, data, w, h) => {
-          editCore.cache_video_frame(key, t, data, w, h);
-          camCore.cache_video_frame(key, t, data, w, h);
-        },
-        coreClearVideo: () => {
-          editCore.clear_video_frames();
-          camCore.clear_video_frames();
-        },
+        coreCache: (key, data) => { editCore.cache_image(key, data); camCore.cache_image(key, data); },
+        coreVideoCache: (key, t, data, w, h) => { editCore.cache_video_frame(key, t, data, w, h); camCore.cache_video_frame(key, t, data, w, h); },
+        coreClearVideo: () => { editCore.clear_video_frames(); camCore.clear_video_frames(); },
       });
 
+      // SDK: render views (Scene × Camera → Frame JSON)
+      editView = new RenderView(scene, editCamera, {
+        displayWidth: editCanvas.clientWidth || editCanvas.width,
+        displayHeight: editCanvas.clientHeight || editCanvas.height,
+        renderScale,
+      });
+      camView = new RenderView(scene, boundCamera, {
+        displayWidth: camCanvas.clientWidth || camCanvas.width,
+        displayHeight: camCanvas.clientHeight || camCanvas.height,
+        renderScale,
+      });
+
+      // App: camera entity (visual overlay — NOT SDK camera)
       createCameraEntity();
+      camView.excludeIds.add(cameraEntityId);
+
       setStatus('Ready — scroll=zoom, middle-click=pan');
       setupEvents();
       requestAnimationFrame(loop);
     }
 
-    // ═══ Canvas sizing ═══
-    // Key: viewport resize anchors the TOP-LEFT corner.
-    // Entities stay the same pixel size. Only the field of view
-    // extends/shrinks on the right and bottom edges.
+    // ═══ Canvas sizing (App Layer) ═══
     function syncEditSize() {
       const wrap = document.getElementById('editViewportWrap');
       const c = document.getElementById('editCanvas');
       const o = document.getElementById('selectionOverlay');
       const cssW = wrap.clientWidth, cssH = wrap.clientHeight;
 
-      // ── Anchor top-left: adjust center so left/top edge stays fixed ──
-      if (prevScreenW > 0 && prevScreenH > 0) {
-        // Current left/top edge in world units (what we want to preserve)
-        const oldVisW = prevScreenW / (PPU * vpZoom);
-        const oldVisH = prevScreenH / (PPU * vpZoom);
-        const leftEdge = vpCenterX - oldVisW / 2;
-        const topEdge  = vpCenterY - oldVisH / 2;
+      // Anchor top-left via FreeCamera
+      editCamera?.anchorTopLeft(cssW, cssH);
 
-        // New visible size at same zoom
-        const newVisW = cssW / (PPU * vpZoom);
-        const newVisH = cssH / (PPU * vpZoom);
-
-        // Recompute center so that left/top edge remains the same
-        vpCenterX = leftEdge + newVisW / 2;
-        vpCenterY = topEdge  + newVisH / 2;
-      }
-      prevScreenW = cssW;
-      prevScreenH = cssH;
-
-      // CSS size = display size
-      c.style.width = cssW + 'px';
-      c.style.height = cssH + 'px';
-      // Backing size = GPU render target (renderScale controls quality)
+      c.style.width = cssW + 'px'; c.style.height = cssH + 'px';
       const backW = Math.round(cssW * renderScale);
       const backH = Math.round(cssH * renderScale);
       c.width = backW; c.height = backH;
-      // Selection overlay at full CSS resolution for crisp lines
       o.width = cssW; o.height = cssH;
       if (editCore) editCore.resize(backW, backH);
+      if (editView) { editView.displayWidth = cssW; editView.displayHeight = cssH; editView.renderScale = renderScale; }
       document.getElementById('editLabel').textContent = `Edit (${cssW}×${cssH} → ${backW}×${backH})`;
     }
     function syncCamSize() {
@@ -247,29 +254,28 @@
       let w, h;
       if (cw / ch > aspect) { h = ch; w = Math.round(h * aspect); }
       else { w = cw; h = Math.round(w / aspect); }
-      // Camera can also use renderScale
       const backW = Math.round(w * renderScale);
       const backH = Math.round(h * renderScale);
       c.width = backW; c.height = backH;
       c.style.width = w + 'px'; c.style.height = h + 'px';
       if (camCore) camCore.resize(backW, backH);
+      if (camView) { camView.displayWidth = w; camView.displayHeight = h; camView.renderScale = renderScale; }
       document.getElementById('cameraLabel').textContent = `Camera (${w}×${h} → ${backW}×${backH})`;
     }
 
-    // ═══ Camera entity ═══
+    // ═══ Camera entity overlay (App owns this, NOT SDK) ═══
     function createCameraEntity() {
       cameraEntityId = addEntity('rect', {
         x: 0, y: 0, width: SCENE_W, height: SCENE_H,
         color: [1, 1, 1, 0.06], layer: 9999,
       }, '📷 camera');
     }
-    function getCam() {
-      const c = scene.getEntity(cameraEntityId);
-      return c ? { x: c.x, y: c.y, width: c.width, height: c.height }
-               : { x: 0, y: 0, width: SCENE_W, height: SCENE_H };
+    function syncCameraFromEntity() {
+      const e = scene.getEntity(cameraEntityId);
+      if (e) boundCamera.setFromEntity(e); // Sync SDK BoundCamera from entity
     }
 
-    // ═══ Entity CRUD (via Scene) ═══
+    // ═══ Entity CRUD (via SDK Scene) ═══
     function addEntity(type, p = {}, label = null) {
       const id = `e${nextId++}`;
       scene.addEntity({
@@ -293,167 +299,127 @@
     function removeEntity(id) {
       scene.removeEntity(id);
       anims.delete(id);
+      camView?.excludeIds.delete(id);
       if (selectedId === id) { selectedId = null; refreshProps(); }
       if (cameraEntityId === id) cameraEntityId = null;
       refreshList();
     }
 
-    // ═══ Deterministic Animation ═══
+    // ═══ App Animation (procedural — NOT SDK) ═══
     function bouncePos(start, v, t, min, max) {
       if (Math.abs(v) < 0.001) return Math.max(min, Math.min(start, max));
-      const range = max - min;
-      if (range <= 0) return min;
+      const range = max - min; if (range <= 0) return min;
       let p = start + v * t - min;
       const period = 2 * range;
       p = ((p % period) + period) % period;
       if (p > range) p = period - p;
       return p + min;
     }
-    function addOrbitAnim(id, radius = 150, speed = 1) {
-      const e = scene.getEntity(id); if (!e) return;
-      anims.set(id, { type: 'orbit', t0: currentTime, cx: e.x + e.width/2, cy: e.y + e.height/2, radius, speed });
-    }
     function addBounceAnim(id, vx = null, vy = null) {
       const e = scene.getEntity(id); if (!e) return;
-      anims.set(id, { type: 'bounce', t0: currentTime, x0: e.x, y0: e.y,
+      anims.set(id, { type: 'bounce', t0: timeline.currentTime, x0: e.x, y0: e.y,
         vx: vx ?? (100+Math.random()*300)*(Math.random()>.5?1:-1),
         vy: vy ?? (100+Math.random()*300)*(Math.random()>.5?1:-1),
         ew: e.width, eh: e.height });
     }
+    function addOrbitAnim(id, radius = 150, speed = 1) {
+      const e = scene.getEntity(id); if (!e) return;
+      anims.set(id, { type: 'orbit', t0: timeline.currentTime, cx: e.x+e.width/2, cy: e.y+e.height/2, radius, speed });
+    }
     function addPulseAnim(id, speed = 2) {
       const e = scene.getEntity(id); if (!e) return;
-      anims.set(id, { type: 'pulse', t0: currentTime, baseCx: e.x+e.width/2, baseCy: e.y+e.height/2, baseW: e.width, baseH: e.height, speed });
+      anims.set(id, { type: 'pulse', t0: timeline.currentTime, baseCx: e.x+e.width/2, baseCy: e.y+e.height/2, baseW: e.width, baseH: e.height, speed });
     }
     function computeAnimations(t) {
       for (const [id, a] of anims) {
-        const e = scene.getEntity(id);
-        if (!e) { anims.delete(id); continue; }
+        const e = scene.getEntity(id); if (!e) { anims.delete(id); continue; }
         const dt = t - a.t0;
         switch (a.type) {
           case 'orbit': {
             const angle = dt * a.speed * Math.PI * 2;
-            scene.updateEntity(id, {
-              x: a.cx + Math.cos(angle) * a.radius - e.width/2,
-              y: a.cy + Math.sin(angle) * a.radius - e.height/2,
-              rotation: angle,
-            });
+            scene.updateEntity(id, { x: a.cx+Math.cos(angle)*a.radius-e.width/2, y: a.cy+Math.sin(angle)*a.radius-e.height/2, rotation: angle });
             break;
           }
           case 'bounce':
-            scene.updateEntity(id, {
-              x: bouncePos(a.x0, a.vx, dt, 0, SCENE_W - a.ew),
-              y: bouncePos(a.y0, a.vy, dt, 0, SCENE_H - a.eh),
-            });
+            scene.updateEntity(id, { x: bouncePos(a.x0, a.vx, dt, 0, SCENE_W-a.ew), y: bouncePos(a.y0, a.vy, dt, 0, SCENE_H-a.eh) });
             break;
           case 'pulse': {
             const s = 0.7 + 0.6 * Math.sin(dt * a.speed * Math.PI * 2);
-            const nw = a.baseW * s, nh = a.baseH * s;
-            scene.updateEntity(id, { width: nw, height: nh, x: a.baseCx - nw/2, y: a.baseCy - nh/2 });
+            const nw = a.baseW*s, nh = a.baseH*s;
+            scene.updateEntity(id, { width: nw, height: nh, x: a.baseCx-nw/2, y: a.baseCy-nh/2 });
             break;
           }
         }
       }
     }
 
-    // ═══ Viewport (unit-based) ═══
-    // screenWidth/Height = CSS size (determines visible world area)
-    // renderScale used for GPU backing only (flatten uses screenW/H)
-    function getViewport() {
-      const wrap = document.getElementById('editViewportWrap');
-      return {
-        // CSS size — changing this changes visible area (not zoom)
-        screenWidth: wrap.clientWidth,
-        screenHeight: wrap.clientHeight,
-        centerX: vpCenterX, centerY: vpCenterY,
-        zoom: vpZoom,
-        renderScale: renderScale,
-      };
-    }
-    function canvasToWorld(cx, cy) {
-      // Mouse coords are in CSS pixels, so use CSS-sized viewport
-      return scene.canvasToWorld(cx, cy, getViewport());
-    }
-
-    // ═══ Render ═══
+    // ═══ Render (App pumps Frame JSON → Core) ═══
     function renderFrame() {
       const t0 = performance.now();
-      computeAnimations(currentTime);
+      const time = timeline.currentTime;
+      computeAnimations(time);
 
-      // Edit viewport
-      if (editCore) {
-        const f = scene.flattenForViewport(currentTime, getViewport());
-        editCore.render_frame(JSON.stringify(f));
-      }
-      // Camera viewport
-      if (camCore) {
-        const cam = getCam();
-        const cc = document.getElementById('cameraCanvas');
-        const f = scene.flattenForCamera(currentTime, cam, cc.width, cc.height, 1,
-          new Set([cameraEntityId]));
-        camCore.render_frame(JSON.stringify(f));
-      }
+      // Sync camera entity → SDK BoundCamera
+      syncCameraFromEntity();
+
+      // SDK: produce Frame JSON
+      if (editCore) editCore.render_frame(JSON.stringify(editView.flattenAt(time)));
+      if (camCore)  camCore.render_frame(JSON.stringify(camView.flattenAt(time)));
       drawOverlay();
       lastRenderMs = performance.now() - t0;
     }
 
-    // ═══ Selection Overlay ═══
+    // ═══ Selection Overlay (App UI) ═══
     function drawOverlay() {
       const c = document.getElementById('selectionOverlay');
       const ctx = c.getContext('2d');
       ctx.clearRect(0, 0, c.width, c.height);
       if (!selectedId) return;
-      const e = scene.getEntity(selectedId);
-      if (!e) return;
+      const e = scene.getEntity(selectedId); if (!e) return;
 
-      const vp = getViewport();
-      const tl = scene.worldToCanvas(e.x, e.y, vp);
-      const br = scene.worldToCanvas(e.x + e.width, e.y + e.height, vp);
+      const tl = editCamera.worldToCanvas(e.x, e.y);
+      const br = editCamera.worldToCanvas(e.x + e.width, e.y + e.height);
       const px = tl.x, py = tl.y, pw = br.x - tl.x, ph = br.y - tl.y;
 
       ctx.save();
       const isCam = selectedId === cameraEntityId;
       ctx.strokeStyle = isCam ? '#4ecca3' : '#e94560';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([6, 3]);
+      ctx.lineWidth = 2; ctx.setLineDash([6, 3]);
       ctx.strokeRect(px, py, pw, ph);
-
-      ctx.setLineDash([]);
-      ctx.fillStyle = ctx.strokeStyle;
+      ctx.setLineDash([]); ctx.fillStyle = ctx.strokeStyle;
       const hs = 6;
       for (const [hx, hy] of [[px,py],[px+pw,py],[px,py+ph],[px+pw,py+ph]])
-        ctx.fillRect(hx - hs/2, hy - hs/2, hs, hs);
+        ctx.fillRect(hx-hs/2, hy-hs/2, hs, hs);
 
-      const lbl = `${e.label || e.id}  (${Math.round(e.x)}, ${Math.round(e.y)})`;
+      const lbl = `${e.label||e.id}  (${Math.round(e.x)}, ${Math.round(e.y)})`;
       ctx.font = '10px Segoe UI, sans-serif';
       const tw = ctx.measureText(lbl).width;
       ctx.fillStyle = isCam ? 'rgba(78,204,163,.85)' : 'rgba(233,69,96,.85)';
-      ctx.fillRect(px, py - 15, tw + 8, 13);
-      ctx.fillStyle = '#fff';
-      ctx.fillText(lbl, px + 4, py - 4);
+      ctx.fillRect(px, py-15, tw+8, 13);
+      ctx.fillStyle = '#fff'; ctx.fillText(lbl, px+4, py-4);
 
       if (isCam) {
-        ctx.strokeStyle = 'rgba(78,204,163,.3)';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = 'rgba(78,204,163,.3)'; ctx.lineWidth = 1; ctx.setLineDash([3,3]);
         for (let i = 1; i < 3; i++) {
-          ctx.beginPath(); ctx.moveTo(px + pw*i/3, py); ctx.lineTo(px + pw*i/3, py+ph); ctx.stroke();
-          ctx.beginPath(); ctx.moveTo(px, py + ph*i/3); ctx.lineTo(px+pw, py+ph*i/3); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(px+pw*i/3,py); ctx.lineTo(px+pw*i/3,py+ph); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(px,py+ph*i/3); ctx.lineTo(px+pw,py+ph*i/3); ctx.stroke();
         }
       }
       ctx.restore();
     }
 
-    // ═══ Main Loop ═══
+    // ═══ Main Loop (App controls frame rate) ═══
     function loop(ts) {
       requestAnimationFrame(loop);
       fpsCount++;
       if (ts - lastFpsTick >= 1000) { document.getElementById('mFps').textContent = fpsCount; fpsCount = 0; lastFpsTick = ts; }
 
-      if (playing) {
-        currentTime = playStartTime + (ts - playStartWall) / 1000;
-        if (currentTime >= DURATION) { currentTime = 0; playStartTime = 0; playStartWall = ts; }
-        document.getElementById('scrubber').value = (currentTime / DURATION) * 1000;
-        document.getElementById('timeDisplay').textContent = `${currentTime.toFixed(2)} / ${DURATION.toFixed(2)}`;
+      // SDK: advance timeline
+      timeline.tick(ts);
+
+      if (timeline.playing) {
+        document.getElementById('scrubber').value = (timeline.currentTime / DURATION) * 1000;
+        document.getElementById('timeDisplay').textContent = `${timeline.currentTime.toFixed(2)} / ${DURATION.toFixed(2)}`;
       }
 
       renderFrame();
@@ -461,11 +427,10 @@
       document.getElementById('mRender').textContent = lastRenderMs.toFixed(1) + 'ms';
       document.getElementById('mEntities').textContent = scene.entityCount();
       document.getElementById('mAnimated').textContent = anims.size;
-      document.getElementById('mZoom').textContent = (vpZoom * 100).toFixed(0) + '%';
-      document.getElementById('mPan').textContent = `${vpCenterX.toFixed(0)},${vpCenterY.toFixed(0)}`;
+      document.getElementById('mZoom').textContent = (editCamera.zoom * 100).toFixed(0) + '%';
     }
 
-    // ═══ Events ═══
+    // ═══ Events (App UI) ═══
     function setupEvents() {
       document.getElementById('btnAddRect').onclick = () => addEntity('rect');
       document.getElementById('btnAddCircle').onclick = () => addEntity('circle');
@@ -477,12 +442,8 @@
           setStatus('Loading image...');
           const id = `img_${nextId}`;
           const asset = await assets.loadImage(id, p);
-          addEntity('image', {
-            source: id,
-            width: asset.unitWidth,
-            height: asset.unitHeight,
-          }, `🖼 ${p.split(/[\\/]/).pop()}`);
-          setStatus(`Loaded: ${asset.pixelWidth}×${asset.pixelHeight}px → ${asset.unitWidth}×${asset.unitHeight} units`);
+          addEntity('image', { source: id, width: asset.unitWidth, height: asset.unitHeight }, `🖼 ${p.split(/[\\/]/).pop()}`);
+          setStatus(`Loaded: ${asset.pixelWidth}×${asset.pixelHeight}px → ${asset.unitWidth.toFixed(0)}×${asset.unitHeight.toFixed(0)} units`);
         } catch (e) { setStatus(`Error: ${e.message}`); }
       };
 
@@ -493,11 +454,7 @@
           setStatus('Loading video...');
           const id = `vid_${nextId}`;
           const asset = await assets.loadVideo(id, p);
-          addEntity('video', {
-            source: id,
-            width: asset.unitWidth,
-            height: asset.unitHeight,
-          }, `🎬 ${p.split(/[\\/]/).pop()}`);
+          addEntity('video', { source: id, width: asset.unitWidth, height: asset.unitHeight }, `🎬 ${p.split(/[\\/]/).pop()}`);
           setStatus(`Video: ${asset.pixelWidth}×${asset.pixelHeight}px, ${asset.duration.toFixed(1)}s`);
         } catch (e) { setStatus(`Error: ${e.message}`); }
       };
@@ -506,79 +463,79 @@
       document.getElementById('btnAnimEntity').onclick = () => {
         const id = addEntity('rect', { x: SCENE_W/2-40, y: SCENE_H/2-40, width: 80, height: 80, color: [.2,.8,1,.9] }, '🔄 anim');
         const r = Math.random();
-        if (r<.33) addOrbitAnim(id,150+Math.random()*200,.5+Math.random());
+        if (r<.33) addOrbitAnim(id, 150+Math.random()*200, .5+Math.random());
         else if (r<.66) addBounceAnim(id);
         else addPulseAnim(id);
       };
       document.getElementById('btnClearAll').onclick = () => {
         for (const e of scene.allEntities()) removeEntity(e.id);
         anims.clear(); selectedId = null; nextId = 1;
-        vpZoom = 1; vpCenterX = SCENE_W/2; vpCenterY = SCENE_H/2;
+        editCamera.zoom = 1; editCamera.centerX = SCENE_W/2; editCamera.centerY = SCENE_H/2;
         refreshList(); refreshProps(); createCameraEntity();
+        camView.excludeIds.add(cameraEntityId);
       };
       document.getElementById('btnDelete').onclick = () => { if (selectedId) removeEntity(selectedId); };
 
-      // Playback
+      // Playback — SDK Timeline
       document.getElementById('btnPlay').onclick = () => {
-        if (playing) { playing = false; document.getElementById('btnPlay').textContent = '▶ Play'; }
-        else { playing = true; playStartWall = performance.now(); playStartTime = currentTime; document.getElementById('btnPlay').textContent = '⏸ Pause'; }
+        if (timeline.playing) { timeline.pause(); document.getElementById('btnPlay').textContent = '▶ Play'; }
+        else { timeline.play(); document.getElementById('btnPlay').textContent = '⏸ Pause'; }
       };
       document.getElementById('btnStop').onclick = () => {
-        playing = false; currentTime = 0;
+        timeline.stop();
         document.getElementById('btnPlay').textContent = '▶ Play';
         document.getElementById('scrubber').value = 0;
         document.getElementById('timeDisplay').textContent = `0.00 / ${DURATION.toFixed(2)}`;
       };
       document.getElementById('scrubber').oninput = (ev) => {
-        if (playing) { playing = false; document.getElementById('btnPlay').textContent = '▶ Play'; }
-        currentTime = (ev.target.value / 1000) * DURATION;
-        document.getElementById('timeDisplay').textContent = `${currentTime.toFixed(2)} / ${DURATION.toFixed(2)}`;
+        if (timeline.playing) { timeline.pause(); document.getElementById('btnPlay').textContent = '▶ Play'; }
+        timeline.seekTo((ev.target.value / 1000) * DURATION);
+        document.getElementById('timeDisplay').textContent = `${timeline.currentTime.toFixed(2)} / ${DURATION.toFixed(2)}`;
       };
 
+      // Export — App sends frames to backend
       document.getElementById('btnExport').onclick = async () => {
-        setStatus('Exporting... (generating frames)');
+        setStatus('Exporting...');
         try {
-          const cam = getCam();
-          const frameData = [];
-          const totalFrames = Math.round(DURATION * FPS);
-          for (let i = 0; i < totalFrames; i++) {
-            const t = i / FPS;
+          syncCameraFromEntity();
+          const frames = [];
+          const total = Math.round(DURATION * EXPORT_FPS);
+          for (let i = 0; i < total; i++) {
+            const t = i / EXPORT_FPS;
             computeAnimations(t);
-            frameData.push(scene.flattenForExport(t, cam, 1920, 1080));
-            if (i % 30 === 0) setStatus(`Exporting... frame ${i}/${totalFrames}`);
+            frames.push(camView.flattenForExport(t, 1920, 1080));
+            if (i % 30 === 0) setStatus(`Frame ${i}/${total}...`);
           }
-          setStatus(`Sending ${totalFrames} frames to server...`);
+          setStatus(`Sending ${total} frames...`);
           const res = await fetch('http://localhost:8000/export', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ frames: frameData, width: 1920, height: 1080, fps: FPS }),
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ frames, width: 1920, height: 1080, fps: EXPORT_FPS }),
           });
           const d = await res.json();
-          setStatus(d.status === 'ok' ? `✅ Exported: ${d.path}` : `❌ ${d.error}`);
+          setStatus(d.status === 'ok' ? `✅ ${d.path}` : `❌ ${d.error}`);
         } catch (e) { setStatus(`Export error: ${e.message}`); }
       };
 
-      // renderScale slider
+      // renderScale
       document.getElementById('renderScaleSlider').oninput = (ev) => {
         renderScale = parseInt(ev.target.value) / 100;
         document.getElementById('mScale').textContent = ev.target.value + '%';
         syncEditSize(); syncCamSize();
       };
 
-      // ── Canvas mouse ──
+      // ── Canvas mouse (App UI) ──
       const ec = document.getElementById('editCanvas');
 
       ec.addEventListener('mousedown', (ev) => {
         if (ev.button === 1) {
-          vpDrag = { sx: ev.clientX, sy: ev.clientY, cx0: vpCenterX, cy0: vpCenterY };
+          vpDrag = { sx: ev.clientX, sy: ev.clientY, cx0: editCamera.centerX, cy0: editCamera.centerY };
           ev.preventDefault(); return;
         }
         if (ev.button !== 0) return;
 
         const rect = ec.getBoundingClientRect();
-        const w = canvasToWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+        const w = editCamera.canvasToWorld(ev.clientX - rect.left, ev.clientY - rect.top);
 
-        // Camera border hit test first
         if (cameraEntityId) {
           const camE = scene.getEntity(cameraEntityId);
           if (camE && scene.hitTestBorder(w.x, w.y, camE, CAM_BORDER_UNITS)) {
@@ -588,7 +545,6 @@
           }
         }
 
-        // Normal entity hit test (skip camera)
         const hit = scene.hitTest(w.x, w.y, new Set([cameraEntityId]));
         if (hit) {
           selectedId = hit.id;
@@ -601,37 +557,30 @@
 
       ec.addEventListener('mousemove', (ev) => {
         if (vpDrag) {
-          const vp = getViewport();
-          const region = viewportRegion(vp, PPU);
-          const scaleX = vp.screenWidth / region.width;
-          const scaleY = vp.screenHeight / region.height;
-          const scale = Math.min(scaleX, scaleY);
-          vpCenterX = vpDrag.cx0 - (ev.clientX - vpDrag.sx) / scale;
-          vpCenterY = vpDrag.cy0 - (ev.clientY - vpDrag.sy) / scale;
+          const scale = PPU * editCamera.zoom;
+          editCamera.centerX = vpDrag.cx0 - (ev.clientX - vpDrag.sx) / scale;
+          editCamera.centerY = vpDrag.cy0 - (ev.clientY - vpDrag.sy) / scale;
           return;
         }
         if (!drag) return;
         const rect = ec.getBoundingClientRect();
-        const w = canvasToWorld(ev.clientX - rect.left, ev.clientY - rect.top);
-        scene.updateEntity(drag.id, {
-          x: drag.ex + (w.x - drag.sx),
-          y: drag.ey + (w.y - drag.sy),
-        });
+        const w = editCamera.canvasToWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+        scene.updateEntity(drag.id, { x: drag.ex + (w.x - drag.sx), y: drag.ey + (w.y - drag.sy) });
       });
 
       window.addEventListener('mouseup', () => { drag = null; vpDrag = null; splitterDrag = false; document.getElementById('splitter').classList.remove('active'); });
       ec.addEventListener('mouseleave', () => { drag = null; });
 
-      // Zoom
+      // Zoom (centered on cursor)
       ec.addEventListener('wheel', (ev) => {
         ev.preventDefault();
         const rect = ec.getBoundingClientRect();
-        const before = canvasToWorld(ev.clientX - rect.left, ev.clientY - rect.top);
-        vpZoom *= ev.deltaY < 0 ? 1.1 : 1/1.1;
-        vpZoom = Math.max(0.1, Math.min(20, vpZoom));
-        const after = canvasToWorld(ev.clientX - rect.left, ev.clientY - rect.top);
-        vpCenterX -= (after.x - before.x);
-        vpCenterY -= (after.y - before.y);
+        const before = editCamera.canvasToWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+        editCamera.zoom *= ev.deltaY < 0 ? 1.1 : 1/1.1;
+        editCamera.zoom = Math.max(0.1, Math.min(20, editCamera.zoom));
+        const after = editCamera.canvasToWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+        editCamera.centerX -= (after.x - before.x);
+        editCamera.centerY -= (after.y - before.y);
       }, { passive: false });
 
       // Splitter
@@ -645,13 +594,13 @@
         syncEditSize(); syncCamSize();
       });
 
-      // Resize
+      // Resize observer
       const ro = new ResizeObserver(() => { syncEditSize(); syncCamSize(); });
       ro.observe(document.getElementById('editViewportWrap'));
       ro.observe(document.getElementById('cameraCanvasContainer'));
     }
 
-    // ═══ Particles ═══
+    // ═══ Particles (App procedural animation) ═══
     function spawnParticles(n) {
       for (let i = 0; i < n; i++) {
         const t = i / n;
@@ -668,7 +617,7 @@
       setStatus(`Spawned ${n} particles (total: ${scene.entityCount()})`);
     }
 
-    // ═══ UI ═══
+    // ═══ UI helpers ═══
     function rand(a, b) { return a + Math.random() * (b - a); }
     function rndColor() { return [.2+Math.random()*.8,.2+Math.random()*.8,.2+Math.random()*.8,1]; }
     function setStatus(s) { document.getElementById('mStatus').textContent = s; }
