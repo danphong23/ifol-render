@@ -216,24 +216,30 @@ impl CoreEngine {
         #[allow(unused_variables)]
         let h = height.unwrap_or(self.settings.height);
 
-        // Always check Backend override first (every frame)
-        // Try raw RGBA path first (from HTML5 Canvas getImageData or similar)
-        if let Some((pixels, fw, fh)) = self.backend.get_video_frame_rgba(path, timestamp_secs) {
-            self.renderer.load_rgba(key, &pixels, fw, fh);
-            return Ok([fw, fh]);
-        }
-        // Try encoded image path (JPEG/PNG)
-        if let Some(pixels) = self.backend.get_video_frame(path, timestamp_secs) {
-            if let Ok(img) = image::load_from_memory(&pixels) {
-                let rgba = img.into_rgba8();
-                let actual_w = rgba.width();
-                let actual_h = rgba.height();
-                self.renderer.load_rgba(key, &rgba, actual_w, actual_h);
-                return Ok([actual_w, actual_h]);
+        // ── WASM path: delegate to MediaBackend (JS provides decoded frames) ──
+        // Only check backend overrides on WASM — on native these always return None
+        // but cost 2× Arc<RwLock> + HashMap lookup per frame for nothing.
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Try raw RGBA path first (from HTML5 Canvas getImageData or similar)
+            if let Some((pixels, fw, fh)) = self.backend.get_video_frame_rgba(path, timestamp_secs) {
+                self.renderer.update_rgba(key, &pixels, fw, fh);
+                return Ok([fw, fh]);
             }
+            // Try encoded image path (JPEG/PNG)
+            if let Some(pixels) = self.backend.get_video_frame(path, timestamp_secs) {
+                if let Ok(img) = image::load_from_memory(&pixels) {
+                    let rgba = img.into_rgba8();
+                    let actual_w = rgba.width();
+                    let actual_h = rgba.height();
+                    self.renderer.update_rgba(key, &rgba, actual_w, actual_h);
+                    return Ok([actual_w, actual_h]);
+                }
+            }
+            return Err(format!("No video frame available for '{}' at {:.2}s — backend did not provide frame data", path, timestamp_secs));
         }
 
-        // Native FFmpeg fallback — VideoStream for fast sequential decoding
+        // ── Native path: VideoStream for fast sequential FFmpeg pipe decoding ──
         #[cfg(not(target_arch = "wasm32"))]
         {
             let stream_key = format!("{}:{}x{}", path, w, h);
@@ -247,12 +253,10 @@ impl CoreEngine {
 
             let stream = self.video_streams.get_mut(&stream_key).unwrap();
             let pixels = stream.frame_at(timestamp_secs)?;
-            self.renderer.load_rgba(key, pixels, w, h);
+            // update_rgba: reuse existing GPU texture, avoid 8MB alloc/dealloc per frame
+            self.renderer.update_rgba(key, pixels, w, h);
             return Ok([w, h]);
         }
-
-        #[cfg(target_arch = "wasm32")]
-        Err(format!("No video frame available for '{}' at {:.2}s — backend did not provide frame data", path, timestamp_secs))
     }
 
     /// Get cached video info, probing if not yet cached. Native only.
@@ -563,7 +567,13 @@ impl CoreEngine {
                     if let Err(e) =
                         self.decode_video_frame(key, path, *timestamp_secs, *width, *height)
                     {
-                        log::warn!("Failed to decode video frame: {}", e);
+                        log::error!(
+                            "⚠ Video decode FAILED for key='{}' path='{}' t={:.2}s ({}×{}): {}",
+                            key, path, timestamp_secs,
+                            width.unwrap_or(self.settings.width),
+                            height.unwrap_or(self.settings.height),
+                            e
+                        );
                     }
                 }
                 TextureUpdate::Evict { key } => {

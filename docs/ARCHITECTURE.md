@@ -32,6 +32,35 @@ The system follows a **3-layer architecture** where each layer has a single resp
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+---
+
+## Technology Stack
+
+| Layer | Technology | Version |
+|-------|------------|---------|
+| Language | Rust | Edition 2024 (1.85+) |
+| GPU | wgpu | 24 (Vulkan / DX12 / Metal / WebGPU) |
+| Desktop GUI | egui + eframe | 0.31 |
+| Web Frontend | Vite + ES Modules | Vite 5 |
+| WASM Bridge | wasm-bindgen + wasm-pack | 0.2 |
+| Video I/O | FFmpeg (external binary) | 5+ |
+| Text Rendering | ab_glyph (CPU rasterization) | 0.2 |
+| Image Decoding | image crate | 0.25 |
+| Audio (Studio) | rodio | 0.19 |
+| CLI Parser | clap (derive) | 4 |
+| Serialization | serde + serde_json | 1 |
+
+### Workspace Crates
+
+| Crate | Type | Purpose |
+|-------|------|---------|
+| `ifol-render` | lib | GPU render tool — pure draw command executor |
+| `ifol-render-core` | lib | Core engine — textures, shaders, video decode, export |
+| `ifol-render-studio` | bin | Desktop GUI editor (egui/Vulkan) |
+| `ifol-render-cli` | bin | Headless CLI — render, export, test |
+| `ifol-render-wasm` | cdylib | WASM target for browser via WebGPU |
+| `server` | bin | (stub) Future server-side rendering |
+
 ## Design Principles
 
 1. **Data flows down, pixels flow up**
@@ -397,3 +426,137 @@ Instead, the export pipeline initializes an `FfmpegMediaBackend` that acts on a 
 3. Frontend sends new pass type in FrameData
 4. Backward compatible — old FrameData still works
 ```
+
+---
+
+## MediaBackend — Multi-Environment Architecture
+
+The `MediaBackend` trait abstracts platform-specific operations:
+
+```
+MediaBackend trait
+├── read_file_bytes(path)          // asset loading
+├── get_video_frame(path, time)    // encoded frame (JPEG/PNG)
+├── get_video_frame_rgba(path, t)  // raw RGBA pixels
+├── get_video_info(path)           // probe duration, dimensions
+└── start_export(w, h, fps, cfg)   // begin video encoding
+```
+
+### Platform Implementations
+
+| Platform | Backend | Video Decode | Video Encode |
+|----------|---------|-------------|-------------|
+| **Native** | `FfmpegMediaBackend` | VideoStream (FFmpeg pipe, raw RGBA) | FFmpeg pipe (H264/H265/VP9/ProRes) |
+| **WASM** | `WebMediaBackend` | JS → Canvas2D → getImageData → WASM cache | N/A (uses server CLI for export) |
+
+### cfg-gated Optimization
+
+On native, `decode_video_frame` skips the MediaBackend entirely and uses `VideoStream` directly.
+On WASM, it delegates to the JS-provided frame cache.
+This avoids unnecessary `Arc<RwLock>` + HashMap lookups on native (2× per frame).
+
+```rust
+#[cfg(target_arch = "wasm32")]  → backend.get_video_frame_rgba()
+#[cfg(not(wasm32))]             → VideoStream::frame_at() (direct FFmpeg pipe)
+```
+
+### Adding a New Environment
+
+1. Implement `MediaBackend` trait for your platform
+2. Pass to `CoreEngine::new_async(settings, Box::new(MyBackend))`
+3. All rendering works automatically — no Core changes needed
+
+Example targets: Android (MediaCodec), iOS (AVFoundation), Server (headless FFmpeg).
+
+---
+
+## Deployment
+
+### Windows / macOS / Linux (Desktop)
+
+**Prerequisites**: Rust 1.85+, GPU with Vulkan/DX12/Metal, FFmpeg in PATH or `tool/` directory.
+
+```bash
+# Build all
+cargo build --release
+
+# Run Studio GUI
+cargo run -p ifol-render-studio --release
+
+# CLI export
+cargo run -p ifol-render-cli --release -- export \
+  --scene scene.json --output video.mp4 --ffmpeg path/to/ffmpeg
+
+# CLI single-frame render
+cargo run -p ifol-render-cli --release -- frame-render \
+  --frame frame.json --output frame.png
+```
+
+**FFmpeg path resolution** (Studio):
+1. `tool/ffmpeg.exe` relative to working directory
+2. `tool/ffmpeg.exe` relative to executable
+3. System PATH (`ffmpeg`)
+4. User-specified path in Studio settings
+
+### Web (Browser — WebGPU)
+
+**Prerequisites**: wasm-pack, Node.js 18+, Chrome/Edge 113+ (WebGPU support).
+
+**Step 1: Build WASM module**
+```bash
+cd crates/wasm
+wasm-pack build --target web --release
+```
+
+**Step 2: Install web dependencies**
+```bash
+cd web
+npm install
+```
+
+**Step 3: Start asset server** (serves video/image files)
+```bash
+python web/server.py
+# Listens on http://localhost:8000
+```
+
+**Step 4: Start Vite dev server**
+```bash
+cd web
+npm run dev
+# Opens http://localhost:5173
+```
+
+**Web Architecture**:
+```
+Browser (Vite + JS)
+  ├── main.js           → UI, playback loop (rAF + wall-clock timing)
+  ├── ifol-render-wasm  → WASM module (WebGPU rendering)
+  └── server.py         → Asset proxy + CLI export dispatcher
+      └── ifol-render.exe export  (headless native export)
+```
+
+**Web Playback Pipeline**:
+1. `video.play()` — browser hardware-decodes video continuously
+2. `Canvas2D.drawImage(video)` → `getImageData()` — capture frame pixels
+3. `renderer.cache_video_frame()` — copy RGBA to WASM HashMap
+4. `renderer.render_frame_scaled()` — WebGPU composite + display
+
+**Web Export** delegates to native CLI for full-speed FFmpeg encoding.
+
+---
+
+## Video Frame Performance
+
+### Native — `update_rgba` texture reuse
+
+Video frames use `update_rgba` instead of `load_rgba` to write new pixel data into an existing GPU texture. This eliminates 8MB alloc/dealloc per frame at 30fps (240MB/s VRAM churn → 0).
+
+First frame: fallback to `load_rgba` (creates texture).
+Subsequent frames: `queue.write_texture` directly into existing texture.
+
+### Web — Known Limitation
+
+`getImageData()` CPU readback is ~15-30ms/frame at 1280×720. Combined with WASM boundary crossing and GPU re-upload, total per-frame cost is ~40-80ms (vs 33ms budget at 30fps). This causes frame drops during playback.
+
+**Future fix**: `WebGPU.copyExternalImageToTexture()` can import `HTMLVideoElement` directly to GPU texture without CPU readback, potentially reducing per-frame cost to <5ms.

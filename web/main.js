@@ -6,7 +6,6 @@ let sceneJson = null;
 let isPlaying = false;
 let currentFrame = 0;
 let totalFrames = 0;
-let playLoopId = null;
 
 const RENDER_W = 1280;
 const RENDER_H = 720;
@@ -26,6 +25,11 @@ const cachedVideoFrames = new Set();
 const videoPool = {};
 const extractCanvas = document.createElement('canvas');
 const extractCtx = extractCanvas.getContext('2d', { willReadFrequently: true });
+
+// ── Continuous Video Playback State ──
+// Instead of seeking every frame, we let the video play() continuously
+// and capture frames as they arrive via requestVideoFrameCallback or timeupdate.
+const videoPlaybackState = {};
 
 async function ensureVideoLoaded(assetPath) {
     if (videoPool[assetPath]) return videoPool[assetPath];
@@ -54,7 +58,29 @@ async function ensureVideoLoaded(assetPath) {
     return video;
 }
 
-// Extract a video frame scaled to targetW x targetH — matching FFmpeg native behavior.
+// Capture the current video frame to WASM memory.
+// This is a SYNCHRONOUS pixel grab — video must already be at the right time.
+// Reusable extraction dimensions (set once, avoid per-frame resize)
+let extractW = 0, extractH = 0;
+
+function captureVideoFrameToWasm(assetPath, video, timeSecs, targetW, targetH) {
+    const w = targetW || RENDER_W;
+    const h = targetH || RENDER_H;
+    // Only resize canvas when dimensions change (avoid GPU context thrashing)
+    if (extractW !== w || extractH !== h) {
+        extractCanvas.width = w;
+        extractCanvas.height = h;
+        extractW = w;
+        extractH = h;
+    }
+    extractCtx.drawImage(video, 0, 0, w, h);
+    
+    const imageData = extractCtx.getImageData(0, 0, w, h);
+    renderer.cache_video_frame(assetPath, timeSecs, new Uint8Array(imageData.data.buffer), w, h);
+}
+
+// Extract a video frame by seeking (for scrubbing / single-frame viewing).
+// Only used when NOT playing continuously.
 async function extractVideoFrame(assetPath, timeSecs, targetW, targetH) {
     const video = await ensureVideoLoaded(assetPath);
     if (!video || video.readyState < 2) return null;
@@ -65,12 +91,11 @@ async function extractVideoFrame(assetPath, timeSecs, targetW, targetH) {
         setTimeout(resolve, 200);
     });
 
-    // CRITICAL: Scale to render target resolution (matches native FFmpeg decode)
     const w = targetW || RENDER_W;
     const h = targetH || RENDER_H;
     extractCanvas.width = w;
     extractCanvas.height = h;
-    extractCtx.drawImage(video, 0, 0, w, h); // Browser GPU-scaled
+    extractCtx.drawImage(video, 0, 0, w, h);
     
     const imageData = extractCtx.getImageData(0, 0, w, h);
     return { data: imageData.data, width: w, height: h };
@@ -123,41 +148,6 @@ async function preloadAllSceneAssets(scene) {
     statusTxt.innerText = `Assets loaded. Ready to play.`;
 }
 
-// ── Fire-and-forget video frame decode (non-blocking) ──
-// Starts decoding in background without blocking the render loop.
-// Returns immediately — frame will be available for next render cycle.
-function startVideoFrameDecode(frameData) {
-    for (const update of frameData.texture_updates) {
-        if (update.DecodeVideoFrame) {
-            const path = update.DecodeVideoFrame.path;
-            const time = update.DecodeVideoFrame.timestamp_secs;
-            const w = update.DecodeVideoFrame.width || null;
-            const h = update.DecodeVideoFrame.height || null;
-            const cacheKey = `${path}@${time}`;
-            if (!cachedVideoFrames.has(cacheKey)) {
-                // Fire-and-forget — don't await
-                extractVideoFrame(path, time, w, h).then(result => {
-                    if (result) {
-                        renderer.cache_video_frame(path, time, new Uint8Array(result.data.buffer), result.width, result.height);
-                        cachedVideoFrames.add(cacheKey);
-                    }
-                }).catch(e => console.warn(`Video frame extract failed:`, e));
-            }
-        }
-    }
-}
-
-// ── Pre-buffer upcoming frames (background decode) ──
-const PREBUFFER_COUNT = 3;
-function prebufferAhead() {
-    for (let i = 1; i <= PREBUFFER_COUNT; i++) {
-        const futureIdx = currentFrame + i;
-        if (futureIdx < totalFrames) {
-            startVideoFrameDecode(sceneJson.frames[futureIdx]);
-        }
-    }
-}
-
 // ── Blocking video frame decode (for scrubbing / single-frame viewing) ──
 async function preloadFrameVideoFrames(frameData) {
     const promises = [];
@@ -184,22 +174,64 @@ async function preloadFrameVideoFrames(frameData) {
 }
 
 // ── Render the current frame ──
-// Always blocks on video frame decode for correct display.
-async function renderCurrentFrame() {
+// When playing, video frames are captured synchronously from the playing video.
+// When scrubbing, falls back to async seek + decode.
+// ── Performance diagnostics ──
+let perfCaptureMs = 0, perfRenderMs = 0, perfFrameCount = 0;
+
+async function renderCurrentFrame(isPlaybackRender = false) {
     if (!renderer || !sceneJson) return;
     
     const frameData = sceneJson.frames[currentFrame];
     if (!frameData) return;
 
-    // Wait for video frames to be decoded and cached in WASM
-    await preloadFrameVideoFrames(frameData);
+    if (isPlaybackRender) {
+        // During continuous playback:
+        // 1. Clear old WASM video frames to prevent memory bloat (if method exists)
+        if (typeof renderer.clear_video_frames === 'function') {
+            renderer.clear_video_frames();
+        }
+        cachedVideoFrames.clear();
+        
+        // 2. Capture current frame synchronously from playing video
+        const t0 = performance.now();
+        for (const update of frameData.texture_updates) {
+            if (update.DecodeVideoFrame) {
+                const path = update.DecodeVideoFrame.path;
+                const time = update.DecodeVideoFrame.timestamp_secs;
+                const w = update.DecodeVideoFrame.width || null;
+                const h = update.DecodeVideoFrame.height || null;
+                const video = videoPool[path];
+                if (video && video.readyState >= 2) {
+                    captureVideoFrameToWasm(path, video, time, w, h);
+                }
+            }
+        }
+        const captureTime = performance.now() - t0;
+        perfCaptureMs += captureTime;
+    } else {
+        // Scrubbing / single frame: blocking seek + decode
+        await preloadFrameVideoFrames(frameData);
+    }
     
     // Scene export resolution (pixel coords are authored at this size)
     const sceneW = sceneJson.settings?.width || 1920;
     const sceneH = sceneJson.settings?.height || 1080;
     
     try {
+        const t1 = performance.now();
         renderer.render_frame_scaled(JSON.stringify(frameData), sceneW, sceneH);
+        const renderTime = performance.now() - t1;
+        perfRenderMs += renderTime;
+        perfFrameCount++;
+        
+        // Log performance every 60 frames
+        if (isPlaybackRender && perfFrameCount % 60 === 0) {
+            const avgCapture = (perfCaptureMs / perfFrameCount).toFixed(1);
+            const avgRender = (perfRenderMs / perfFrameCount).toFixed(1);
+            console.log(`[perf] avg: capture=${avgCapture}ms, render=${avgRender}ms, total=${(parseFloat(avgCapture) + parseFloat(avgRender)).toFixed(1)}ms (${perfFrameCount} frames)`);
+        }
+        
         frameCounter.innerText = `${currentFrame} / ${totalFrames - 1}`;
         timeline.value = currentFrame;
     } catch (e) {
@@ -209,11 +241,9 @@ async function renderCurrentFrame() {
 }
 
 // ── Audio Sync ──
-// Finds the main video <video> element and plays its audio in sync
 let activeAudioVideo = null;
 
 function startAudioSync() {
-    // Find the video path used in the scene
     if (!sceneJson) return;
     const firstVideoUpdate = sceneJson.frames[0]?.texture_updates?.find(u => u.DecodeVideoFrame);
     if (!firstVideoUpdate) return;
@@ -222,7 +252,6 @@ function startAudioSync() {
     const video = videoPool[videoPath];
     if (!video) return;
     
-    // Calculate current time from frame index
     const fps = sceneJson.settings?.fps || 30;
     const currentTimeSecs = currentFrame / fps;
     
@@ -238,10 +267,39 @@ function stopAudioSync() {
         activeAudioVideo.muted = true;
         activeAudioVideo = null;
     }
-    // Also mute all pooled videos
     for (const v of Object.values(videoPool)) {
         v.pause();
         v.muted = true;
+    }
+}
+
+// ── Start continuous video playback for all scene videos ──
+function startContinuousVideoPlayback() {
+    if (!sceneJson) return;
+    const fps = sceneJson.settings?.fps || 30;
+    const startTimeSecs = currentFrame / fps;
+    
+    // Find all video paths and start them playing
+    const videoPaths = new Set();
+    for (const frame of sceneJson.frames) {
+        for (const update of frame.texture_updates) {
+            if (update.DecodeVideoFrame) videoPaths.add(update.DecodeVideoFrame.path);
+        }
+    }
+    
+    for (const path of videoPaths) {
+        const video = videoPool[path];
+        if (video) {
+            video.currentTime = startTimeSecs;
+            video.playbackRate = 1.0;
+            video.play().catch(() => {});
+        }
+    }
+}
+
+function stopContinuousVideoPlayback() {
+    for (const v of Object.values(videoPool)) {
+        v.pause();
     }
 }
 
@@ -250,30 +308,49 @@ function stopPlayback() {
     isPlaying = false;
     playBtn.innerText = "Play";
     stopAudioSync();
+    stopContinuousVideoPlayback();
 }
 
-// Simple async playback loop with proper timing
-async function playLoop() {
+// ── Wall-clock playback loop using requestAnimationFrame ──
+// Mirrors Studio's PlaybackMode::Realtime:
+//   - Uses wall-clock time to determine target frame
+//   - SKIPS frames if rendering is too slow (drops instead of accumulating delay)
+//   - Uses requestAnimationFrame for vsync-aligned timing
+let playbackStartTime = 0;
+let playbackStartFrame = 0;
+let lastDropLog = 0;
+let totalDroppedFrames = 0;
+
+function playLoop(timestamp) {
+    if (!isPlaying) return;
+    
     const fps = sceneJson.settings?.fps || 30;
-    const frameDuration = 1000.0 / fps;
+    const elapsed = (timestamp - playbackStartTime) / 1000.0;
+    const targetFrame = playbackStartFrame + Math.floor(elapsed * fps);
     
-    while (isPlaying && currentFrame < totalFrames - 1) {
-        const frameStart = performance.now();
-        
-        currentFrame++;
-        await renderCurrentFrame();
-        
-        // Wait remaining time to hit target FPS
-        const elapsed = performance.now() - frameStart;
-        const sleepMs = Math.max(0, frameDuration - elapsed);
-        if (sleepMs > 0) {
-            await new Promise(r => setTimeout(r, sleepMs));
-        }
-    }
-    
-    if (currentFrame >= totalFrames - 1) {
+    if (targetFrame >= totalFrames) {
+        currentFrame = totalFrames - 1;
+        renderCurrentFrame(true);
         stopPlayback();
+        console.log(`[playback] ended. Total dropped: ${totalDroppedFrames} frames`);
+        return;
     }
+    
+    if (targetFrame !== currentFrame && targetFrame >= 0) {
+        const skipped = targetFrame - currentFrame - 1;
+        if (skipped > 0) {
+            totalDroppedFrames += skipped;
+            // Batch drop logs (max once per second)
+            if (timestamp - lastDropLog > 1000) {
+                console.debug(`Dropped ${totalDroppedFrames} total frames so far`);
+                lastDropLog = timestamp;
+            }
+        }
+        currentFrame = targetFrame;
+        renderCurrentFrame(true);
+    }
+    
+    requestAnimationFrame(playLoop);
 }
 
 // ── Bootstrap ──
@@ -289,23 +366,17 @@ async function bootstrap() {
 
     statusTxt.innerText = "Initializing WASM Engine...";
     try {
-        // Handle devicePixelRatio to prevent zoom/crop on HiDPI displays.
-        // The WebGPU surface renders at canvas.width x canvas.height pixels.
-        // CSS display size must = canvas size / dpr to get 1:1 physical pixel mapping.
         const dpr = window.devicePixelRatio || 1;
         
-        // Set the canvas backing store to our render resolution
         canvas.width = RENDER_W;
         canvas.height = RENDER_H;
         
-        // Set CSS display size so that CSS_px * dpr = canvas.width
-        // This ensures the WebGPU surface maps 1:1 to physical display pixels
         const cssW = Math.round(RENDER_W / dpr);
         const cssH = Math.round(RENDER_H / dpr);
         canvas.style.width = `${cssW}px`;
         canvas.style.height = `${cssH}px`;
         
-        console.log(`Canvas init: dpr=${dpr}, backing=${canvas.width}x${canvas.height}, CSS=${cssW}x${cssH}px, physical=${cssW*dpr}x${cssH*dpr}px`);
+        console.log(`Canvas init: dpr=${dpr}, backing=${canvas.width}x${canvas.height}, CSS=${cssW}x${cssH}px`);
         
         renderer = await new IfolRenderWeb(canvas, canvas.width, canvas.height, 30.0);
         renderer.setup_builtins();
@@ -341,15 +412,29 @@ async function bootstrap() {
             if (currentFrame >= totalFrames - 1) currentFrame = 0;
             isPlaying = true;
             playBtn.innerText = "Pause";
+            
+            // Reset performance counters
+            perfCaptureMs = 0;
+            perfRenderMs = 0;
+            perfFrameCount = 0;
+            totalDroppedFrames = 0;
+            lastDropLog = 0;
+            
+            // Start continuous video playback (let browser decode ahead)
+            startContinuousVideoPlayback();
             startAudioSync();
-            playLoop(); // async, runs in background
+            
+            // Start rAF playback loop with wall-clock timing
+            playbackStartFrame = currentFrame;
+            playbackStartTime = performance.now();
+            requestAnimationFrame(playLoop);
         }
     });
 
     timeline.addEventListener('input', async (e) => {
         stopPlayback();
         currentFrame = parseInt(e.target.value);
-        await renderCurrentFrame();
+        await renderCurrentFrame(); // blocking seek for scrubbing
     });
 
     exportBtn.addEventListener('click', async () => {
@@ -357,12 +442,10 @@ async function bootstrap() {
         statusTxt.innerText = "Sending Export to Backend...";
         exportBtn.disabled = true;
         
-        // Read export settings from UI
         const exportDir = document.getElementById('export-dir').value.trim();
         const exportFilename = document.getElementById('export-filename').value.trim() || 'output.mp4';
         const exportFfmpeg = document.getElementById('export-ffmpeg').value.trim();
         
-        // Build query params for server
         const params = new URLSearchParams();
         if (exportDir) params.set('dir', exportDir);
         params.set('filename', exportFilename);

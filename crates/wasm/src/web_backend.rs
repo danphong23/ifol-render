@@ -38,12 +38,7 @@ impl MediaBackend for WebMediaBackend {
     fn get_video_frame_rgba(&self, path: &str, timestamp: f64) -> Option<(Vec<u8>, u32, u32)> {
         let key = format!("{}@{}", path, timestamp);
         let frames = self.video_frames.read().unwrap();
-        frames.get(&key).cloned().or_else(|| {
-            // Fallback: find closest frame for this path
-            frames.iter()
-                .find(|(k, _)| k.starts_with(path))
-                .map(|(_, v)| v.clone())
-        })
+        frames.get(&key).cloned()
     }
 
     fn decode_video(

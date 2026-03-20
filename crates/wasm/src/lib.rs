@@ -60,6 +60,13 @@ impl IfolRenderWeb {
         );
     }
 
+    /// Clear ALL cached video frames from WASM memory.
+    /// Call this periodically during playback to prevent unbounded memory growth.
+    /// (Each 1280×720 frame = 3.7MB, hundreds accumulate quickly.)
+    pub fn clear_video_frames(&self) {
+        self.backend.video_frames.write().unwrap().clear();
+    }
+
     /// Setup the pipeline standard builtins (Call this AFTER caching the fonts!)
     pub fn setup_builtins(&mut self) {
         self.engine.setup_builtins();

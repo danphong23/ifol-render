@@ -143,7 +143,7 @@ impl ExportSettings {
             }
         }
 
-        String::new() // fallback: use system PATH
+        "ffmpeg".to_string() // fallback: use system PATH
     }
 
     fn codec(&self) -> ifol_render_core::VideoCodec {
@@ -961,10 +961,15 @@ impl eframe::App for StudioApp {
                     }
                     if ui.button("🎬 Export Video...").clicked() {
                         ui.close_menu();
-                        // Initialize export settings from scene
+                        // Initialize export settings from scene, but PRESERVE ffmpeg_path
+                        // (otherwise opening the dialog wipes the user's custom FFmpeg setting)
                         if let Some(scene) = &self.scene {
+                            let saved_ffmpeg = self.export_settings.ffmpeg_path.clone();
                             self.export_settings =
                                 ExportSettings::new(scene.settings.width, scene.settings.height);
+                            if !saved_ffmpeg.trim().is_empty() {
+                                self.export_settings.ffmpeg_path = saved_ffmpeg;
+                            }
                         }
                         self.show_export_dialog = true;
                     }
