@@ -46,21 +46,19 @@ class FileAndMediaHandler(http.server.SimpleHTTPRequestHandler):
                 "--preset", "fast",
             ]
                 
-            print(f"Running export: {' '.join(cmd)}")
+            print(f"\n{'='*60}")
+            print(f"EXPORT STARTED")
+            print(f"Command: {' '.join(cmd)}")
+            print(f"Output:  {output_path}")
+            print(f"{'='*60}")
             
-            # Run synchronously and capture output
-            result = subprocess.run(cmd, cwd=root_cwd, capture_output=True, text=True)
+            # Start process in background — stderr streams to this terminal
+            subprocess.Popen(cmd, cwd=root_cwd)
             
-            if result.returncode == 0:
-                self.send_response(200)
-                self.end_headers()
-                msg = f"Export complete!\nOutput: {output_path}\n\n{result.stderr}"
-                self.wfile.write(msg.encode())
-            else:
-                self.send_response(500)
-                self.end_headers()
-                msg = f"Export failed (exit {result.returncode}):\n{result.stderr}"
-                self.wfile.write(msg.encode())
+            self.send_response(200)
+            self.end_headers()
+            msg = f"Export started! Watch server terminal for progress.\nOutput will be saved to: {output_path}"
+            self.wfile.write(msg.encode())
             return
 
     def do_GET(self):
