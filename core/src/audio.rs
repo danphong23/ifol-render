@@ -18,6 +18,7 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
+#[cfg(not(target_arch = "wasm32"))]
 use std::process::{Command, Stdio};
 
 // ══════════════════════════════════════
@@ -94,8 +95,10 @@ pub struct AudioScene {
 }
 
 // ══════════════════════════════════════
-// Processing
+// Processing (Native only — uses FFmpeg CLI)
 // ══════════════════════════════════════
+
+#[cfg(not(target_arch = "wasm32"))]
 
 /// Process an AudioScene JSON string → mixed PCM f32 samples.
 ///
@@ -110,6 +113,7 @@ pub fn process_audio_scene(
     process_audio(&scene, ffmpeg_bin)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Process an AudioScene struct → mixed PCM f32 samples.
 pub fn process_audio(
     scene: &AudioScene,
@@ -123,6 +127,7 @@ pub fn process_audio(
 // Decode
 // ══════════════════════════════════════
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Decode an audio file to raw PCM f32 samples using FFmpeg.
 ///
 /// Returns interleaved f32 samples at the given sample rate and channels.
@@ -194,6 +199,7 @@ pub fn decode_audio(
 // Streaming
 // ══════════════════════════════════════
 
+#[cfg(not(target_arch = "wasm32"))]
 /// A real-time audio stream from FFmpeg. Reads f32 PCM samples on demand.
 pub struct StreamingAudio {
     process: std::process::Child,
@@ -201,6 +207,7 @@ pub struct StreamingAudio {
     pub channels: u32,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl StreamingAudio {
     /// Start a new streaming audio process.
     pub fn new(
@@ -277,6 +284,7 @@ impl StreamingAudio {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for StreamingAudio {
     fn drop(&mut self) {
         let _ = self.process.kill();
@@ -288,6 +296,7 @@ impl Drop for StreamingAudio {
 // Mix
 // ══════════════════════════════════════
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Mix multiple audio clips into a single PCM buffer.
 ///
 /// Returns interleaved f32 samples for the full `duration` of the output.
@@ -364,6 +373,7 @@ pub fn mix_clips(
 // Export
 // ══════════════════════════════════════
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Export mixed audio to a WAV file using FFmpeg.
 pub fn export_wav(
     pcm_data: &[f32],

@@ -199,3 +199,49 @@ pub struct Keyframe {
     #[serde(default)]
     pub easing: Easing,
 }
+
+// ══════════════════════════════════════
+// Media types (platform-agnostic data)
+// ══════════════════════════════════════
+
+/// Video metadata. Data-only struct used by all platforms.
+/// On native, populated by `video::probe()` via ffprobe.
+/// On WASM, populated by `MediaBackend::get_video_info()` via JS.
+#[derive(Debug, Clone)]
+pub struct VideoInfo {
+    pub width: u32,
+    pub height: u32,
+    pub fps: f64,
+    pub duration_secs: f64,
+    pub codec: String,
+}
+
+/// System information regarding hardware rendering and OS capabilities.
+/// Data-only struct used by all platforms.
+/// On native, populated by `sysinfo::SysInfo::probe()`.
+/// On WASM, can be constructed with defaults.
+#[derive(Debug, Clone)]
+pub struct SysInfo {
+    pub os: String,
+    pub vendor_name: String,
+    pub has_nvidia: bool,
+    pub has_intel: bool,
+    pub has_amd: bool,
+    pub has_mac_hw: bool,
+    pub ffmpeg_hw_encoders: Vec<String>,
+}
+
+impl Default for SysInfo {
+    fn default() -> Self {
+        Self {
+            os: "unknown".into(),
+            vendor_name: "unknown".into(),
+            has_nvidia: false,
+            has_intel: false,
+            has_amd: false,
+            has_mac_hw: false,
+            ffmpeg_hw_encoders: Vec::new(),
+        }
+    }
+}
+

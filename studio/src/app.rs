@@ -534,7 +534,7 @@ impl StudioApp {
             let needs_scale = (scale_x - 1.0).abs() > 0.001 || (scale_y - 1.0).abs() > 0.001;
 
             let frame_data = if needs_scale {
-                Self::scale_frame(&scene.frames[self.current_frame], scale_x, scale_y)
+                scene.frames[self.current_frame].scaled(scale_x, scale_y)
             } else {
                 scene.frames[self.current_frame].clone()
             };
@@ -546,41 +546,7 @@ impl StudioApp {
         }
     }
 
-    /// Scale all entity coordinates in a frame by the given factors.
-    fn scale_frame(frame: &Frame, sx: f64, sy: f64) -> Frame {
-        use ifol_render_core::PassType;
-        let sx = sx as f32;
-        let sy = sy as f32;
-        Frame {
-            passes: frame
-                .passes
-                .iter()
-                .map(|pass| ifol_render_core::RenderPass {
-                    output: pass.output.clone(),
-                    pass_type: match &pass.pass_type {
-                        PassType::Entities {
-                            clear_color,
-                            entities,
-                        } => PassType::Entities {
-                            clear_color: *clear_color,
-                            entities: entities
-                                .iter()
-                                .map(|e| ifol_render_core::FlatEntity {
-                                    x: e.x * sx,
-                                    y: e.y * sy,
-                                    width: e.width * sx,
-                                    height: e.height * sy,
-                                    ..e.clone()
-                                })
-                                .collect(),
-                        },
-                        other => other.clone(),
-                    },
-                })
-                .collect(),
-            texture_updates: frame.texture_updates.clone(),
-        }
-    }
+
 
     fn total_frames(&self) -> usize {
         self.scene.as_ref().map(|s| s.frames.len()).unwrap_or(0)

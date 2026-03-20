@@ -1,7 +1,7 @@
 use ifol_render_core::backend::media::{MediaBackend, MediaDecoder, MediaEncoder};
 use ifol_render_core::export::ExportConfig;
 use ifol_render_core::audio::AudioClip;
-use ifol_render_core::{VideoInfo, sysinfo::SysInfo};
+use ifol_render_core::{VideoInfo, SysInfo};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 

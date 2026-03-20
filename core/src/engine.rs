@@ -3,18 +3,26 @@
 //! Wraps the GPU renderer, manages shaders & textures,
 //! and exposes a simple API: receive Frame → render → return pixels.
 
-use crate::backend::{FfmpegMediaBackend, MediaBackend};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::backend::FfmpegMediaBackend;
+use crate::backend::MediaBackend;
 use crate::draw;
-use crate::export::{ExportConfig, ExportProgress};
 use crate::frame::{Frame, PassType, RenderSettings, TextureUpdate};
 use crate::shaders;
-use crate::sysinfo::SysInfo;
 use crate::text::{self, TextOptions};
-use crate::video;
-use crate::video_stream::VideoStream;
 use ifol_render::{DrawCommand, GpuCapabilities, PipelineConfig, Renderer};
 use std::collections::HashMap;
 use std::sync::Arc;
+
+// Native-only imports
+#[cfg(not(target_arch = "wasm32"))]
+use crate::export::{ExportConfig, ExportProgress};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::sysinfo::SysInfo;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::video;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::video_stream::VideoStream;
 
 /// The core rendering engine.
 ///
@@ -26,15 +34,18 @@ pub struct CoreEngine {
     /// Cached font data (key → raw font bytes).
     font_cache: HashMap<String, Vec<u8>>,
     /// Cached video metadata (path → VideoInfo).
+    #[cfg(not(target_arch = "wasm32"))]
     video_info_cache: HashMap<String, video::VideoInfo>,
     /// Persistent video stream decoders (stream_key → VideoStream).
+    #[cfg(not(target_arch = "wasm32"))]
     video_streams: HashMap<String, VideoStream>,
     /// Path to FFmpeg binary. Engine-level config.
+    #[cfg(not(target_arch = "wasm32"))]
     ffmpeg_path: Option<String>,
     /// Text content cache — skip re-rasterization when content hasn't changed.
     /// Maps texture key → (content, font_size, alignment) signature.
     text_cache: HashMap<String, (String, u32, u32)>,
-    /// Polymorphic Media Backend (defaults to FFmpeg)
+    /// Polymorphic Media Backend
     pub backend: Arc<Box<dyn MediaBackend>>,
 }
 
@@ -47,12 +58,12 @@ impl CoreEngine {
         Self::build(renderer, settings, default_backend)
     }
 
-    /// Create an asynchronous wrapper for headless operation.
-    pub async fn new_async(settings: RenderSettings) -> Self {
+    /// Create a headless async CoreEngine with a caller-provided backend.
+    ///
+    /// On native, pass `FfmpegMediaBackend`. On WASM, pass `WebMediaBackend`.
+    pub async fn new_async(settings: RenderSettings, backend: Box<dyn MediaBackend>) -> Self {
         let renderer = Renderer::new_async(settings.width, settings.height).await;
-        // On WASM, Ffmpeg backend cannot be used, but we'll polyfill it later.
-        let default_backend = Box::new(FfmpegMediaBackend::new("ffmpeg")) as Box<dyn MediaBackend>;
-        Self::build(renderer, settings, default_backend)
+        Self::build(renderer, settings, backend)
     }
 
     /// Create a web renderer bound to an HTML Canvas
@@ -71,21 +82,26 @@ impl CoreEngine {
             renderer,
             settings,
             font_cache: HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             video_info_cache: HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             video_streams: HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             ffmpeg_path: None,
             text_cache: HashMap::new(),
             backend: Arc::new(backend),
         }
     }
 
-    /// Set the FFmpeg binary path (engine-level config).
+    /// Set the FFmpeg binary path (engine-level config). Native only.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_ffmpeg_path(&mut self, path: &str) {
         self.ffmpeg_path = Some(path.to_string());
         self.backend = Arc::new(Box::new(FfmpegMediaBackend::new(path)) as Box<dyn MediaBackend>);
     }
 
-    /// Get the configured FFmpeg binary path.
+    /// Get the configured FFmpeg binary path. Native only.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn ffmpeg_bin(&self) -> &str {
         self.ffmpeg_path.as_deref().unwrap_or("ffmpeg")
     }
@@ -184,8 +200,9 @@ impl CoreEngine {
 
     /// Decode a video frame and upload as texture.
     ///
-    /// Uses persistent VideoStream for fast sequential reads (~5ms).
+    /// On native: uses persistent VideoStream for fast sequential reads (~5ms).
     /// Falls back to single-frame decode for random access.
+    /// On WASM: delegates entirely to MediaBackend (Canvas2D / ffmpeg.wasm).
     pub fn decode_video_frame(
         &mut self,
         key: &str,
@@ -194,14 +211,13 @@ impl CoreEngine {
         width: Option<u32>,
         height: Option<u32>,
     ) -> Result<[u32; 2], String> {
+        #[allow(unused_variables)]
         let w = width.unwrap_or(self.settings.width);
+        #[allow(unused_variables)]
         let h = height.unwrap_or(self.settings.height);
-        let stream_key = format!("{}:{}x{}", path, w, h);
-        let ffmpeg_bin = self.ffmpeg_bin().to_string();
-        let fps = self.settings.fps;
 
-        // Always check WASM Backend override first (every frame, not just first)
-        // Try raw RGBA path first (from HTML5 Canvas getImageData)
+        // Always check Backend override first (every frame)
+        // Try raw RGBA path first (from HTML5 Canvas getImageData or similar)
         if let Some((pixels, fw, fh)) = self.backend.get_video_frame_rgba(path, timestamp_secs) {
             self.renderer.load_rgba(key, &pixels, fw, fh);
             return Ok([fw, fh]);
@@ -217,19 +233,30 @@ impl CoreEngine {
             }
         }
 
-        // Get or create VideoStream (native FFmpeg path)
-        if !self.video_streams.contains_key(&stream_key) {
-            let stream = VideoStream::start(path, timestamp_secs, w, h, fps, &ffmpeg_bin)?;
-            self.video_streams.insert(stream_key.clone(), stream);
+        // Native FFmpeg fallback — VideoStream for fast sequential decoding
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let stream_key = format!("{}:{}x{}", path, w, h);
+            let ffmpeg_bin = self.ffmpeg_bin().to_string();
+            let fps = self.settings.fps;
+
+            if !self.video_streams.contains_key(&stream_key) {
+                let stream = VideoStream::start(path, timestamp_secs, w, h, fps, &ffmpeg_bin)?;
+                self.video_streams.insert(stream_key.clone(), stream);
+            }
+
+            let stream = self.video_streams.get_mut(&stream_key).unwrap();
+            let pixels = stream.frame_at(timestamp_secs)?;
+            self.renderer.load_rgba(key, pixels, w, h);
+            return Ok([w, h]);
         }
 
-        let stream = self.video_streams.get_mut(&stream_key).unwrap();
-        let pixels = stream.frame_at(timestamp_secs)?;
-        self.renderer.load_rgba(key, pixels, w, h);
-        Ok([w, h])
+        #[cfg(target_arch = "wasm32")]
+        Err(format!("No video frame available for '{}' at {:.2}s — backend did not provide frame data", path, timestamp_secs))
     }
 
-    /// Get cached video info, probing if not yet cached.
+    /// Get cached video info, probing if not yet cached. Native only.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn video_info(&mut self, path: &str) -> Result<&video::VideoInfo, String> {
         if !self.video_info_cache.contains_key(path) {
             let info = if let Some(m) = self.backend.get_video_info(path) {
@@ -330,11 +357,12 @@ impl CoreEngine {
         last_pixels
     }
 
-    // ── Export ──
+    // ── Export (Native only) ──
 
     /// Export a sequence of frames to video via FFmpeg.
     /// If `audio_clips` is provided, it will statically mix them and mux the final audio into the output video.
     /// `frames` is an Iterator, allowing infinite-length batch generation to save memory.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn export_video<I>(
         &mut self,
         frames: I,

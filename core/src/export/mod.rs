@@ -3,6 +3,7 @@
 //! Uses FFmpeg for video encoding.
 //! Receives pre-computed frames (no ECS, no timeline logic).
 
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ffmpeg;
 
 /// Export configuration.

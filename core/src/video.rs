@@ -7,16 +7,7 @@
 //! because FFmpeg uses `-ss` before `-i` for input seeking.
 
 use std::process::{Command, Stdio};
-
-/// Video metadata from ffprobe.
-#[derive(Debug, Clone)]
-pub struct VideoInfo {
-    pub width: u32,
-    pub height: u32,
-    pub fps: f64,
-    pub duration_secs: f64,
-    pub codec: String,
-}
+pub use crate::types::VideoInfo;
 
 /// Probe video metadata using ffprobe.
 ///

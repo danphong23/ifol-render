@@ -27,6 +27,7 @@
 //! let pixels = engine.render_frame(&frame);
 //! ```
 
+// ── Platform-agnostic modules ──
 pub mod audio;
 pub mod backend;
 pub mod color;
@@ -35,19 +36,25 @@ pub mod engine;
 pub mod export;
 pub mod frame;
 pub mod shaders;
-pub mod sysinfo;
 pub mod text;
 pub mod types;
+
+// ── Native-only modules (FFmpeg, subprocess, threading) ──
+#[cfg(not(target_arch = "wasm32"))]
+pub mod sysinfo;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod video;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod video_stream;
 
 // ── Public re-exports ──
-pub use audio::{AudioClip, AudioConfig, AudioScene, StreamingAudio};
+pub use audio::{AudioClip, AudioConfig, AudioScene};
+#[cfg(not(target_arch = "wasm32"))]
+pub use audio::StreamingAudio;
 pub use engine::CoreEngine;
 pub use export::{ExportConfig, ExportProgress, VideoCodec};
 pub use frame::{FlatEntity, Frame, PassType, RenderPass, RenderSettings, TextureUpdate};
-pub use sysinfo::SysInfo;
-pub use video::VideoInfo;
+pub use types::{SysInfo, VideoInfo};
 
 // Re-export render types for consumers
 pub use ifol_render::{DrawCommand, EffectConfig, GpuCapabilities, PipelineConfig, Renderer};

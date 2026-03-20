@@ -1,16 +1,5 @@
 use std::process::Command;
-
-/// System information regarding hardware rendering and OS capabilities.
-#[derive(Debug, Clone)]
-pub struct SysInfo {
-    pub os: String,
-    pub vendor_name: String,
-    pub has_nvidia: bool,
-    pub has_intel: bool,
-    pub has_amd: bool,
-    pub has_mac_hw: bool,
-    pub ffmpeg_hw_encoders: Vec<String>,
-}
+pub use crate::types::SysInfo;
 
 /// Helper function: attempt a 1-frame dummy encode using the specified encoder.
 /// Prevents crash (OS Error 232) if the binary claims support but physical hw is missing.

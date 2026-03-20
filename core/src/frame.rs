@@ -128,6 +128,50 @@ pub struct Frame {
     pub texture_updates: Vec<TextureUpdate>,
 }
 
+impl Frame {
+    /// Scale all entity coordinates by the given factors.
+    ///
+    /// Use when the render resolution differs from the scene's authored resolution.
+    /// For example, if scene is authored at 1920×1080 but previewing at 640×360:
+    /// ```rust,ignore
+    /// let scaled = frame.scaled(640.0 / 1920.0, 360.0 / 1080.0);
+    /// engine.render_frame(&scaled);
+    /// ```
+    pub fn scaled(&self, sx: f64, sy: f64) -> Frame {
+        let sx = sx as f32;
+        let sy = sy as f32;
+        Frame {
+            passes: self
+                .passes
+                .iter()
+                .map(|pass| RenderPass {
+                    output: pass.output.clone(),
+                    pass_type: match &pass.pass_type {
+                        PassType::Entities {
+                            clear_color,
+                            entities,
+                        } => PassType::Entities {
+                            clear_color: *clear_color,
+                            entities: entities
+                                .iter()
+                                .map(|e| FlatEntity {
+                                    x: e.x * sx,
+                                    y: e.y * sy,
+                                    width: e.width * sx,
+                                    height: e.height * sy,
+                                    ..e.clone()
+                                })
+                                .collect(),
+                        },
+                        other => other.clone(),
+                    },
+                })
+                .collect(),
+            texture_updates: self.texture_updates.clone(),
+        }
+    }
+}
+
 /// A single render pass — produces an output texture.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderPass {
