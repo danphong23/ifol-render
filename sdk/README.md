@@ -2,142 +2,94 @@
 
 GPU-accelerated 2D rendering SDK for web. Built on WebGPU via WASM.
 
-## Features
-
-- **Unit coordinate system** — all positions/sizes in abstract units, pixels only at render time
-- **PPU (Pixels-Per-Unit)** — configurable import scale for media assets
-- **Multi-viewport** — edit viewport + camera view, or N viewports simultaneously
-- **Resolution scaling** — render at lower quality for performance, display at full size
-- **Image & video** — automatic decode pipeline (fetch → decode → GPU texture)
-- **Batch rendering** — push pre-computed frames for playback streaming
-- **Export** — render camera view to video via CLI backend
-
-## Quick Start
-
-```ts
-import { IfolRenderer } from 'ifol-render-sdk';
-
-const renderer = await IfolRenderer.create({
-  canvas: document.getElementById('viewport'),
-  scene: { ppu: 1, fps: 30, duration: 10 },
-});
-
-// Add shapes (position & size in world units)
-renderer.addShape('rect1', 'rect', {
-  x: 100, y: 50, width: 400, height: 300,
-  color: [0.2, 0.6, 1.0, 1.0],
-});
-
-// Add images (auto-sized from pixel dimensions / PPU)
-await renderer.addImage('bg', '/photos/background.jpg');
-
-// Add videos
-await renderer.addVideo('clip', '/videos/intro.mp4');
-
-// Control viewport
-renderer.setViewport({ centerX: 960, centerY: 540, zoom: 1.5, renderScale: 0.75 });
-
-// Playback
-renderer.play();
-renderer.startLoop(); // starts requestAnimationFrame loop
-```
+**SDK produces Frame JSON. App Layer pumps it to GPU.**
 
 ## Architecture
 
 ```
-Developer API
-  │
-  ├─ IfolRenderer — single entry point
-  │    ├─ addShape / addImage / addVideo / removeEntity
-  │    ├─ setViewport / setCamera
-  │    ├─ play / pause / seekTo
-  │    └─ startLoop → tick() → flatten → render
-  │
-  ├─ Scene — entity model in unit space
-  │    ├─ flattenForViewport() → pixel-space Frame
-  │    ├─ flattenForCamera() → pixel-space Frame
-  │    ├─ canvasToWorld() / worldToCanvas()
-  │    └─ hitTest() / hitTestBorder()
-  │
-  ├─ AssetManager — media decode pipeline
-  │    ├─ loadImage() → fetch → RGBA → Core cache
-  │    ├─ loadVideo() → HTML5 <video> → metadata
-  │    ├─ extractVideoFrame() → canvas → RGBA → Core cache
-  │    └─ cache lifecycle (evict, clear, destroy)
-  │
-  └─ Core WASM — GPU rendering engine
-       ├─ render_frame(Frame JSON)
-       ├─ cache_image / cache_video_frame
-       ├─ resize / clear_frames
-       └─ WebGPU pipeline → canvas pixels
+App Layer
+  ● core.render_frame(frameJSON) → GPU
+  ● UI events (pan, zoom, drag)
+  ● Export I/O, procedural animation
+  ● FPS control (requestAnimationFrame)
+
+SDK ──── produces Frame JSON ────────────
+  Scene         — entity CRUD in world units
+  Camera        — BoundCamera, FreeCamera (extensible)
+  RenderView    — Scene × Camera → Frame JSON
+  AssetManager  — image/video decode + shared cache
+  Timeline      — playback state (no FPS)
+  Animation     — keyframe tracks + easing (optional)
+
+Core WASM ── consumes Frame JSON ────────
+  render_frame(json) → GPU pixels
 ```
 
-## API Reference
+## Quick Start
 
-### `IfolRenderer`
+```ts
+import { Scene, FreeCamera, BoundCamera, RenderView, Timeline, AssetManager } from 'ifol-render-sdk';
 
-| Method | Description |
-|--------|-------------|
-| `create(opts)` | Initialize renderer with canvas + settings |
-| `addShape(id, type, opts)` | Add rect or circle entity |
-| `addImage(id, url, opts?)` | Load image + create entity |
-| `addVideo(id, url, opts?)` | Load video + create entity |
-| `removeEntity(id)` | Remove entity + cleanup assets |
-| `updateEntity(id, patch)` | Update entity properties |
-| `setViewport(patch)` | Update viewport center/zoom/renderScale |
-| `setCamera(patch)` | Update camera position/size |
-| `play() / pause() / stop()` | Playback control |
-| `seekTo(time)` | Seek to timestamp |
-| `startLoop() / stopLoop()` | Animation frame loop |
-| `canvasToWorld(x,y)` | CSS pixel → world unit |
-| `worldToCanvas(x,y)` | World unit → CSS pixel |
-| `destroy()` | Cleanup all resources |
+// Shared scene (unit-space)
+const scene = new Scene({ ppu: 1, duration: 10 });
 
-### `Scene`
+// Cameras
+const editCam = new FreeCamera({ centerX: 960, centerY: 540, zoom: 1, screenWidth: 800, screenHeight: 600, ppu: 1 });
+const exportCam = new BoundCamera(0, 0, 1920, 1080);
 
-| Method | Description |
-|--------|-------------|
-| `flattenForViewport(time, vp, excludeIds?)` | Unit → pixel frame for viewport |
-| `flattenForCamera(time, cam, w, h, scale, excludeIds?)` | Unit → pixel frame for camera |
-| `flattenForExport(time, cam, exportW, exportH)` | Unit → pixel frame for export |
-| `canvasToWorld(cx, cy, vp)` | Canvas pixel → world unit |
-| `worldToCanvas(wx, wy, vp)` | World unit → canvas pixel |
-| `hitTest(wx, wy, excludeIds?)` | Find topmost entity at position |
-| `hitTestBorder(wx, wy, entity, margin)` | Test if point is on entity border |
+// Render views (multi-view: same scene, different cameras)
+const editView = new RenderView(scene, editCam, { renderScale: 1 });
+const camView = new RenderView(scene, exportCam, { renderScale: 1 });
 
-### `AssetManager`
+// Add entities (world units)
+scene.addEntity({ id: 'bg', type: 'rect', x: 0, y: 0, width: 1920, height: 1080,
+  color: [0.1, 0.1, 0.2, 1], opacity: 1, rotation: 0,
+  blendMode: 'normal', shader: 'shapes', params: [], layer: 0, startTime: 0, duration: 10 });
 
-| Method | Description |
-|--------|-------------|
-| `loadImage(key, url)` | Fetch + decode + cache in Core |
-| `loadVideo(key, url)` | Create video element + get metadata |
-| `extractVideoFrame(key, timestamp)` | Decode frame → RGBA → Core |
-| `removeImage(key)` | Remove from registry |
-| `removeVideo(key)` | Stop + remove video element |
-| `clearVideoFrames()` | Clear all cached frames from WASM |
-| `destroy()` | Release all resources |
+// Timeline
+const tl = new Timeline(10);
+tl.play();
 
-## Coordinate System
+// App render loop (App controls FPS)
+function loop(ts) {
+  const time = tl.tick(ts);
+  const editFrame = editView.flattenAt(time);
+  const camFrame = camView.flattenAt(time);
+  editCore.render_frame(JSON.stringify(editFrame));
+  camCore.render_frame(JSON.stringify(camFrame));
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+```
 
-See [UNIT_SYSTEM.md](../docs/UNIT_SYSTEM.md) for full specification.
+## Modules
 
-**Key concepts:**
-- All entity positions/sizes are in **world units**
-- PPU converts media pixels → units on import: `unitSize = pixelSize / PPU`
-- Viewport determines visible region: `visibleW = screenW / (PPU × zoom)`
-- Flatten converts units → pixels for a specific render target
-- renderScale controls GPU quality: `backingSize = cssSize × renderScale`
+| Module | Class | Purpose |
+|--------|-------|---------|
+| `scene.ts` | `Scene` | Entity CRUD, visibleAt, hitTest |
+| `camera.ts` | `BoundCamera` | Fixed region (export, preview) |
+| `camera.ts` | `FreeCamera` | Center+zoom viewport, top-left anchor |
+| `render-view.ts` | `RenderView` | Scene × Camera → Frame JSON |
+| `flatten.ts` | `flatten()` | Pure function: entities + region → pixels |
+| `timeline.ts` | `Timeline` | Playback: play/pause/seek/tick |
+| `animation.ts` | `KeyframeTrack` | Property keyframes + easing |
+| `animation.ts` | `AnimationManager` | Attach tracks, applyAll(scene, t) |
+| `assets.ts` | `AssetManager` | Image/video decode + cache |
+
+## Key Design Decisions
+
+- **FPS is NOT in SDK** — App Layer controls frame rate
+- **Camera is NOT an entity** — it's a view definition (BoundCamera, FreeCamera)
+- **Multi-view**: N RenderViews share 1 Scene, produce independent Frame JSON
+- **Unit coordinate system**: all spatial values in world units, pixels only after flatten
+- **renderScale**: GPU renders at fraction of display size for performance
+- **Viewport resize anchors top-left** (not center)
+- **Keyframe animation** is SDK-level (serializable), procedural animation is App-level
 
 ## Building
 
 ```bash
-# Build WASM
-cd crates/wasm
-wasm-pack build --target web --release
-
-# Build SDK TypeScript
-cd sdk
-npm run build
+cd sdk && npm run build
 ```
 
 ## License
