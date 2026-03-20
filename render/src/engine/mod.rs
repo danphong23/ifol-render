@@ -14,8 +14,12 @@ pub struct GpuEngine {
     pub queue: wgpu::Queue,
     pub width: u32,
     pub height: u32,
+    /// Preferred format for the surface/display (pipelines must match this).
+    pub texture_format: wgpu::TextureFormat,
     /// Output texture for headless rendering.
     pub output_texture: Option<wgpu::Texture>,
+    /// WebGPU canvas surface (for target_arch = "wasm32").
+    pub surface: Option<wgpu::Surface<'static>>,
 }
 
 impl GpuEngine {
@@ -45,7 +49,8 @@ impl GpuEngine {
             .await
             .expect("Failed to create GPU device");
 
-        let output_texture = Some(Self::create_output_texture(&device, width, height));
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let output_texture = Some(Self::create_output_texture(&device, width, height, format));
 
         log::info!("GPU engine initialized: {:?}", adapter.get_info().name);
 
@@ -56,19 +61,95 @@ impl GpuEngine {
             queue,
             width,
             height,
+            texture_format: format,
             output_texture,
+            surface: None,
         }
     }
+
+    /// Create a GPU engine attached to an HTML canvas (Web).
+    #[cfg(target_arch = "wasm32")]
+    pub async fn new_web(
+        canvas: web_sys::HtmlCanvasElement,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        let instance = wgpu::Instance::default();
+
+        let surface = instance
+            .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
+            .expect("Failed to create WebGPU surface");
+
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+            })
+            .await
+            .expect("Failed to find GPU adapter for surface");
+
+        let (device, queue) = adapter
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    label: Some("ifol-render web device"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                    memory_hints: wgpu::MemoryHints::default(),
+                },
+                None,
+            )
+            .await
+            .expect("Failed to create GPU device");
+
+        let mut surface_config = surface
+            .get_default_config(&adapter, width, height)
+            .expect("Failed to get default surface configuration");
+        surface_config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT 
+            | wgpu::TextureUsages::COPY_DST 
+            | wgpu::TextureUsages::COPY_SRC;
+        let capabilities = surface.get_capabilities(&adapter);
+        let format = capabilities
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or(capabilities.formats[0]);
+
+        surface_config.format = format;
+        
+        surface.configure(&device, &surface_config);
+
+        log::info!("WebGPU engine initialized: {:?}, format: {:?}", adapter.get_info().name, format);
+
+        Self {
+            instance,
+            adapter,
+            device,
+            queue,
+            width,
+            height,
+            texture_format: format,
+            output_texture: None,
+            surface: Some(surface),
+        }
+    }
+
+
 
     /// Resize the output texture.
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
-        self.output_texture = Some(Self::create_output_texture(&self.device, width, height));
+        if self.surface.is_none() {
+            self.output_texture = Some(Self::create_output_texture(&self.device, width, height, self.texture_format));
+        } else {
+            // Reconfigure surface
+        }
         log::info!("Resized output to {}x{}", width, height);
     }
 
-    fn create_output_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
+    fn create_output_texture(device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) -> wgpu::Texture {
         device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Output"),
             size: wgpu::Extent3d {
@@ -79,7 +160,7 @@ impl GpuEngine {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::COPY_DST,

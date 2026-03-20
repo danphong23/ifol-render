@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ifol-render Web Preview</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background-color: #111;
+        color: white;
+        font-family: sans-serif;
+      }
+      h1 {
+        text-align: center;
+        margin: 12px 0;
+        font-size: 1.2em;
+      }
+      .viewer-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 8px;
+        background: #000;
+      }
+      canvas {
+        /* Display size is set dynamically in JS based on devicePixelRatio.
+           Internal resolution = 1280x720, CSS size = 1280/dpr x 720/dpr */
+        display: block;
+        border: 1px solid #333;
+      }
+      .toolbar {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 12px;
+        padding: 10px;
+        background: #222;
+      }
+      button {
+        padding: 8px 14px;
+        background: #007bff;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+        font-size: 0.85em;
+      }
+      button:hover {
+        background: #0056b3;
+      }
+      #export-btn {
+        background: #28a745;
+      }
+      #export-btn:hover {
+        background: #1e7e34;
+      }
+      input[type="range"] {
+        flex-grow: 1;
+        max-width: 400px;
+      }
+      #status {
+        text-align: center;
+        color: #aaa;
+        font-family: monospace;
+        padding: 6px;
+        font-size: 0.85em;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>ifol-render <span style="color: #61dafb">WebGPU Preview</span></h1>
+    
+    <div class="viewer-container">
+      <!-- Canvas dimensions are set in JavaScript before WebGPU init to prevent HiDPI issues -->
+      <canvas id="canvas"></canvas>
+    </div>
+
+    <div class="toolbar">
+      <button id="load-btn">Load Test Scene</button>
+      <button id="play-btn" disabled>Play</button>
+      <input type="range" id="timeline" min="0" max="0" value="0" disabled>
+      <span id="frame-counter">0 / 0</span>
+      <button id="export-btn" disabled>Export to Server</button>
+    </div>
+
+    <div id="status">Waiting for WASM engine...</div>
+
+    <script type="module" src="/main.js"></script>
+</body>
+</html>

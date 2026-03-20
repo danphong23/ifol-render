@@ -22,6 +22,15 @@ pub trait MediaEncoder: Send {
 /// A media backend handles all OS-specific or environment-specific (Desktop FFmpeg vs WASM WebCodecs) 
 /// video and audio operations.
 pub trait MediaBackend {
+    /// Extracted media binary blob
+    fn read_file_bytes(&self, path: &str) -> Option<Vec<u8>> { std::fs::read(path).ok() }
+    /// Proxy JSON decode mechanism
+    fn get_video_info(&self, _path: &str) -> Option<crate::VideoInfo> { None }
+    /// Raw uncompressed or JPEG/PNG blob representing the frame at timestamp
+    fn get_video_frame(&self, _path: &str, _timestamp: f64) -> Option<Vec<u8>> { None }
+    /// Raw RGBA pixels + dimensions for a video frame
+    fn get_video_frame_rgba(&self, _path: &str, _timestamp: f64) -> Option<(Vec<u8>, u32, u32)> { None }
+
     /// Spawn a video decoder stream for a specific file at a specific offset.
     fn decode_video(
         &self, 

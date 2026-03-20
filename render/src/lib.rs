@@ -22,6 +22,7 @@ use vertex::{QUAD_INDICES, QUAD_VERTICES, Vertex};
 
 // Re-export
 pub use engine::gpu::GpuCapabilities;
+use engine::GpuEngine;
 
 // ══════════════════════════════════════
 // Public API Types
@@ -223,9 +224,30 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    /// Create a new headless renderer.
+    /// Create a headless renderer (Native only).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(width: u32, height: u32) -> Self {
-        let engine = pollster::block_on(engine::GpuEngine::new_headless(width, height));
+        let engine = pollster::block_on(GpuEngine::new_headless(width, height));
+        Self::from_engine(engine)
+    }
+
+    /// Create an asynchronous headless renderer (for environments where block_on is not allowed).
+    pub async fn new_async(width: u32, height: u32) -> Self {
+        let engine = GpuEngine::new_headless(width, height).await;
+        Self::from_engine(engine)
+    }
+
+    /// Create a web renderer attached to an HTML canvas.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn new_web(canvas: web_sys::HtmlCanvasElement, width: u32, height: u32) -> Self {
+        let engine = GpuEngine::new_web(canvas, width, height).await;
+        Self::from_engine(engine)
+    }
+
+    /// Internal engine builder.
+    fn from_engine(engine: GpuEngine) -> Self {
+        let width = engine.width;
+        let height = engine.height;
 
         // Quad geometry (shared by all quad-based pipelines)
         let quad_vertex_buffer =
@@ -257,7 +279,7 @@ impl Renderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: engine.texture_format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -352,7 +374,7 @@ impl Renderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: self.engine.texture_format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
@@ -589,7 +611,7 @@ impl Renderer {
                 module: &shader,
                 entry_point: Some(&config.fragment_entry),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    format: self.engine.texture_format,
                     blend,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -667,34 +689,69 @@ impl Renderer {
 
     // ── Draw (Optimized) ─────────────────
 
-    pub fn render_frame(&mut self, commands: &[DrawCommand]) -> Vec<u8> {
-        self.render_frame_to(commands, None)
+    fn get_or_create_render_target(&mut self, key: &str, width: u32, height: u32) -> wgpu::TextureView {
+        let expected_size = (width as u64) * (height as u64) * 4;
+        let needs_create = match self.texture_cache.get(key) {
+            Some(entry) => entry.size_bytes != expected_size,
+            None => true,
+        };
+        if needs_create {
+            self.load_rgba(key, &vec![0; expected_size as usize], width, height);
+        }
+        let view = self.texture_cache.get(key).unwrap().texture.create_view(&Default::default());
+        self.texture_cache.get_mut(key).unwrap().last_used_frame = self.frame_number;
+        view
     }
 
-    /// Render draw commands directly to an offscreen GPU texture, or to the screen (None).
-    /// If `target_key` is specified, it skips the costly CPU readback entirely!
-    pub fn render_frame_to(&mut self, commands: &[DrawCommand], target_key: Option<&str>) -> Vec<u8> {
+    /// Render draw commands to the main output.
+    pub fn render_frame(&mut self, commands: &[DrawCommand], clear_color: [f32; 4]) -> Vec<u8> {
+        self.render_frame_to(commands, clear_color, None);
+        if self.engine.surface.is_none() {
+            self.engine.readback_output()
+        } else {
+            Vec::new() // No readback support over surface queues
+        }
+    }
+
+    /// If `output_key` is Some(key), the result is rendered ONLY into the `texture_cache` map.
+    /// If `output_key` is None, the result is rendered to the final engine output (WebGPU Surface or Native texture) 
+    /// and `engine.readback_output()` can be called.
+    pub fn render_frame_to(
+        &mut self,
+        commands: &[DrawCommand],
+        clear_color: [f32; 4],
+        output_key: Option<&str>,
+    ) {
+        if commands.is_empty() && output_key.is_some() {
+            // Nothing to draw to intermediate, skip to save GPU time
+            return;
+        }
+
+        // Determine the target texture view.
+        // For offscreen (output_key is Some), grab/create cached texture.
+        // For final (output_key is None), use surface or headless output_texture.
+        let output_view;
+        let mut surface_frame = None;
+
+        if let Some(key) = output_key {
+            output_view = self.get_or_create_render_target(key, self.engine.width, self.engine.height);
+        } else if let Some(ref surface) = self.engine.surface {
+            // WebGPU canvas rendering!
+            let frame = surface
+                .get_current_texture()
+                .expect("Failed to acquire next surface texture");
+            output_view = frame
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            surface_frame = Some(frame);
+        } else {
+            // Headless Native rendering!
+            let tex = self.engine.output_texture.as_ref().unwrap();
+            output_view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        }
+
         self.frame_number += 1;
         self.uniform_ring.reset();
-
-        // Target either a persistent Texture cache entry (Zero-Copy) or the swapchain output
-        let output_view = if let Some(key) = target_key {
-            let expected_size = (self.width as u64) * (self.height as u64) * 4;
-            let needs_create = match self.texture_cache.get(key) {
-                Some(entry) => entry.size_bytes != expected_size,
-                None => true,
-            };
-            if needs_create {
-                // Initialize an empty Rgba8Unorm buffer on GPU
-                self.load_rgba(key, &vec![0; expected_size as usize], self.width, self.height);
-            }
-            // Create fresh owned view to bypass borrow checker constraints later
-            let view = self.texture_cache.get(key).unwrap().texture.create_view(&Default::default());
-            self.texture_cache.get_mut(key).unwrap().last_used_frame = self.frame_number;
-            view
-        } else {
-            self.engine.output_texture.as_ref().unwrap().create_view(&Default::default())
-        };
 
         // Phase 1: Write all uniforms to ring buffer, build draw list
         struct PreparedDraw {
@@ -814,10 +871,10 @@ impl Renderer {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.0,
-                            g: 0.0,
-                            b: 0.0,
-                            a: 1.0,
+                            r: clear_color[0] as f64,
+                            g: clear_color[1] as f64,
+                            b: clear_color[2] as f64,
+                            a: clear_color[3] as f64,
                         }),
                         store: wgpu::StoreOp::Store,
                     },
@@ -856,17 +913,20 @@ impl Renderer {
                     rpass.draw(0..3, 0..1);
                 }
             }
+        } // encoder.begin_render_pass is dropped here
+
+        self.engine.queue.submit(std::iter::once(encoder.finish()));
+
+        // If we rendered to a WebGPU surface, we MUST present it.
+        if let Some(frame) = surface_frame {
+            frame.present();
         }
 
-        // Single submission for the entire frame
-        self.engine.queue.submit(std::iter::once(encoder.finish()));
-        
-        if target_key.is_some() {
-            // ZERO-COPY OVERRIDES: The texture resides natively in Video RAM!
-            Vec::new()
-        } else {
-            // Perform synchronous VRAM -> System RAM PCIe stall (Heavy)
-            self.engine.readback_output()
+        // If intermediate pass, mark the texture as written and update LRU
+        if let Some(key) = output_key {
+            if let Some(entry) = self.texture_cache.get_mut(key) {
+                entry.last_used_frame = self.frame_number;
+            }
         }
     }
 
@@ -877,11 +937,11 @@ impl Renderer {
         effect_configs: &[EffectConfig],
     ) -> Vec<u8> {
         if effect_configs.is_empty() {
-            return self.render_frame(commands);
+            return self.render_frame(commands, [0.0, 0.0, 0.0, 1.0]);
         }
 
         // First: normal draw pass
-        let _pixels = self.render_frame(commands);
+        self.render_frame_to(commands, [0.0, 0.0, 0.0, 1.0], Some("effect_input_temp"));
 
         // Init effect context if needed
         if self.effect_ctx.is_none() {
@@ -889,10 +949,11 @@ impl Renderer {
                 &self.engine.device,
                 self.width,
                 self.height,
+                self.engine.texture_format,
             ));
         }
 
-        let output_texture = self.engine.output_texture.as_ref().unwrap();
+        let _output_texture = self.engine.output_texture.as_ref();
 
         // Copy composite result into ping-pong input
         let mut encoder =
@@ -904,7 +965,7 @@ impl Renderer {
         self.effect_ctx
             .as_ref()
             .unwrap()
-            .load_from(&mut encoder, output_texture);
+            .load_from(&mut encoder, &self.texture_cache.get("effect_input_temp").unwrap().texture);
         self.engine.queue.submit(std::iter::once(encoder.finish()));
 
         // Run each effect

@@ -152,7 +152,7 @@ fn main() {
                 "resize" => {
                     // Test 1: render at initial size
                     let cmds = build_test_basic(width, height);
-                    let pixels = renderer.render_frame(&cmds);
+                    let pixels = renderer.render_frame(&cmds, [0.0, 0.0, 0.0, 1.0]);
                     let small_path = output.with_file_name("render_test_resize_small.png");
                     ifol_render_core::Renderer::save_png(
                         &pixels,
@@ -168,7 +168,7 @@ fn main() {
                     let new_h = 900;
                     renderer.resize(new_w, new_h);
                     let cmds2 = build_test_basic(new_w, new_h);
-                    let pixels2 = renderer.render_frame(&cmds2);
+                    let pixels2 = renderer.render_frame(&cmds2, [0.0, 0.0, 0.0, 1.0]);
                     let out_path = output.to_str().unwrap();
                     ifol_render_core::Renderer::save_png(&pixels2, new_w, new_h, out_path).unwrap();
                     println!("Saved resized: {} ({}x{})", out_path, new_w, new_h);
@@ -190,13 +190,13 @@ fn main() {
                         width,
                         height,
                     )];
-                    let bg_pixels = renderer.render_frame(&bg_cmds);
+                    let bg_pixels = renderer.render_frame(&bg_cmds, [0.0, 0.0, 0.0, 1.0]);
                     // Load the rendered gradient as a texture for masking
                     renderer.load_rgba("gradient_bg", &bg_pixels, width, height);
 
                     // Now draw mask shapes over the gradient
                     let cmds = build_test_masking(width, height);
-                    let pixels = renderer.render_frame(&cmds);
+                    let pixels = renderer.render_frame(&cmds, [0.0, 0.0, 0.0, 1.0]);
                     let out_path = output.to_str().unwrap();
                     ifol_render_core::Renderer::save_png(&pixels, width, height, out_path).unwrap();
                     println!("Saved: {}", out_path);
@@ -258,7 +258,7 @@ fn main() {
                         }
                     }
 
-                    let pixels = renderer.render_frame(&cmds);
+                    let pixels = renderer.render_frame(&cmds, [0.0, 0.0, 0.0, 1.0]);
                     let out_path = output.to_str().unwrap();
                     ifol_render_core::Renderer::save_png(&pixels, width, height, out_path).unwrap();
                     println!("Saved: {}", out_path);
@@ -307,7 +307,7 @@ fn main() {
 
                     // Render
                     let t_render = Instant::now();
-                    let pixels = renderer.render_frame(&cmds);
+                    let pixels = renderer.render_frame(&cmds, [0.0, 0.0, 0.0, 1.0]);
                     let render_ms = t_render.elapsed().as_secs_f64() * 1000.0;
 
                     // Save
@@ -354,7 +354,7 @@ fn main() {
                 }
             };
 
-            let pixels = renderer.render_frame(&commands);
+            let pixels = renderer.render_frame(&commands, [0.0, 0.0, 0.0, 1.0]);
             let out_path = output.to_str().unwrap();
             ifol_render_core::Renderer::save_png(&pixels, width, height, out_path)
                 .expect("Failed to save PNG");

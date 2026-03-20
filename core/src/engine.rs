@@ -39,12 +39,34 @@ pub struct CoreEngine {
 }
 
 impl CoreEngine {
-    /// Create a new CoreEngine with the given output settings.
-    ///
-    /// Initializes the GPU (headless), allocates buffers.
+    /// Create a new CoreEngine with the given output settings (Native only).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(settings: RenderSettings) -> Self {
         let renderer = Renderer::new(settings.width, settings.height);
         let default_backend = Box::new(FfmpegMediaBackend::new("ffmpeg")) as Box<dyn MediaBackend>;
+        Self::build(renderer, settings, default_backend)
+    }
+
+    /// Create an asynchronous wrapper for headless operation.
+    pub async fn new_async(settings: RenderSettings) -> Self {
+        let renderer = Renderer::new_async(settings.width, settings.height).await;
+        // On WASM, Ffmpeg backend cannot be used, but we'll polyfill it later.
+        let default_backend = Box::new(FfmpegMediaBackend::new("ffmpeg")) as Box<dyn MediaBackend>;
+        Self::build(renderer, settings, default_backend)
+    }
+
+    /// Create a web renderer bound to an HTML Canvas
+    #[cfg(target_arch = "wasm32")]
+    pub async fn new_web(
+        canvas: web_sys::HtmlCanvasElement, 
+        settings: RenderSettings,
+        backend: Box<dyn MediaBackend>,
+    ) -> Self {
+        let renderer = Renderer::new_web(canvas, settings.width, settings.height).await;
+        Self::build(renderer, settings, backend)
+    }
+
+    fn build(renderer: Renderer, settings: RenderSettings, backend: Box<dyn MediaBackend>) -> Self {
         Self {
             renderer,
             settings,
@@ -53,7 +75,7 @@ impl CoreEngine {
             video_streams: HashMap::new(),
             ffmpeg_path: None,
             text_cache: HashMap::new(),
-            backend: Arc::new(default_backend),
+            backend: Arc::new(backend),
         }
     }
 
@@ -111,7 +133,12 @@ impl CoreEngine {
     /// Cached: calling again with same key is a no-op.
     pub fn load_image(&mut self, key: &str, path: &str) -> Result<(), String> {
         if !self.renderer.has_texture(key) {
-            self.renderer.load_image(key, path)?;
+            let data = self.backend.read_file_bytes(path)
+                .ok_or_else(|| format!("Failed to read asset '{}'", path))?;
+            let img = image::load_from_memory(&data)
+                .map_err(|e| format!("Failed to decode image '{}': {}", path, e))?;
+            let rgba = img.into_rgba8();
+            self.renderer.load_rgba(key, &rgba, rgba.width(), rgba.height());
         }
         Ok(())
     }
@@ -148,8 +175,8 @@ impl CoreEngine {
     /// Load a font file into the font cache.
     pub fn load_font(&mut self, key: &str, path: &str) -> Result<(), String> {
         if !self.font_cache.contains_key(key) {
-            let data = std::fs::read(path)
-                .map_err(|e| format!("Failed to load font '{}': {}", path, e))?;
+            let data = self.backend.read_file_bytes(path)
+                .ok_or_else(|| format!("Failed to read font '{}'", path))?;
             self.font_cache.insert(key.to_string(), data);
         }
         Ok(())
@@ -173,7 +200,24 @@ impl CoreEngine {
         let ffmpeg_bin = self.ffmpeg_bin().to_string();
         let fps = self.settings.fps;
 
-        // Get or create VideoStream
+        // Always check WASM Backend override first (every frame, not just first)
+        // Try raw RGBA path first (from HTML5 Canvas getImageData)
+        if let Some((pixels, fw, fh)) = self.backend.get_video_frame_rgba(path, timestamp_secs) {
+            self.renderer.load_rgba(key, &pixels, fw, fh);
+            return Ok([fw, fh]);
+        }
+        // Try encoded image path (JPEG/PNG)
+        if let Some(pixels) = self.backend.get_video_frame(path, timestamp_secs) {
+            if let Ok(img) = image::load_from_memory(&pixels) {
+                let rgba = img.into_rgba8();
+                let actual_w = rgba.width();
+                let actual_h = rgba.height();
+                self.renderer.load_rgba(key, &rgba, actual_w, actual_h);
+                return Ok([actual_w, actual_h]);
+            }
+        }
+
+        // Get or create VideoStream (native FFmpeg path)
         if !self.video_streams.contains_key(&stream_key) {
             let stream = VideoStream::start(path, timestamp_secs, w, h, fps, &ffmpeg_bin)?;
             self.video_streams.insert(stream_key.clone(), stream);
@@ -181,18 +225,22 @@ impl CoreEngine {
 
         let stream = self.video_streams.get_mut(&stream_key).unwrap();
         let pixels = stream.frame_at(timestamp_secs)?;
-        self.renderer.update_rgba(key, pixels, w, h);
+        self.renderer.load_rgba(key, pixels, w, h);
         Ok([w, h])
     }
 
     /// Get cached video info, probing if not yet cached.
     pub fn video_info(&mut self, path: &str) -> Result<&video::VideoInfo, String> {
         if !self.video_info_cache.contains_key(path) {
-            let probe_path = self
-                .ffmpeg_path
-                .as_ref()
-                .map(|p| p.replace("ffmpeg", "ffprobe"));
-            let info = video::probe(path, probe_path.as_deref())?;
+            let info = if let Some(m) = self.backend.get_video_info(path) {
+                m
+            } else {
+                let probe_path = self
+                    .ffmpeg_path
+                    .as_ref()
+                    .map(|p| p.replace("ffmpeg", "ffprobe"));
+                video::probe(path, probe_path.as_deref())?
+            };
             self.video_info_cache.insert(path.to_string(), info);
         }
         Ok(&self.video_info_cache[path])
@@ -232,7 +280,7 @@ impl CoreEngine {
             match &pass.pass_type {
                 PassType::Entities {
                     entities,
-                    clear_color: _,
+                    clear_color,
                 } => {
                     // Sort entities by (layer, z_index)
                     let mut sorted = entities.clone();
@@ -246,7 +294,7 @@ impl CoreEngine {
                     );
 
                     // ZERO-COPY: Render directly to intermediate target in VRAM
-                    let _ = self.renderer.render_frame_to(&commands, Some(&pass.output));
+                    let _ = self.renderer.render_frame_to(&commands, *clear_color, Some(&pass.output));
                 }
 
                 PassType::Effect {
@@ -262,7 +310,7 @@ impl CoreEngine {
                     }];
 
                     // ZERO-COPY: Render directly to intermediate target in VRAM
-                    let _ = self.renderer.render_frame_to(&commands, Some(&pass.output));
+                    let _ = self.renderer.render_frame_to(&commands, [0.0, 0.0, 0.0, 0.0], Some(&pass.output));
                 }
 
                 PassType::Output { input } => {
@@ -274,7 +322,7 @@ impl CoreEngine {
                     }];
                     
                     // Sending None performs the CPU synchronization and mapped Download
-                    last_pixels = self.renderer.render_frame_to(&commands, None);
+                    last_pixels = self.renderer.render_frame(&commands, [0.0, 0.0, 0.0, 1.0]);
                 }
             }
         }
@@ -424,7 +472,7 @@ impl CoreEngine {
             match update {
                 TextureUpdate::LoadImage { key, path } => {
                     if !self.renderer.has_texture(key)
-                        && let Err(e) = self.renderer.load_image(key, path)
+                        && let Err(e) = self.load_image(key, path)
                     {
                         log::warn!("Failed to load image '{}': {}", path, e);
                     }
