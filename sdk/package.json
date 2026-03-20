@@ -1,0 +1,21 @@
+{
+  "name": "ifol-render-sdk",
+  "version": "0.1.0",
+  "description": "High-level SDK for ifol-render — scene model, batch streaming, viewport, asset management",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "node --test dist/tests/"
+  },
+  "dependencies": {
+    "ifol-render-wasm": "file:../crates/wasm/pkg"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  },
+  "license": "MIT OR Apache-2.0"
+}
