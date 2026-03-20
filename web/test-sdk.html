@@ -5,165 +5,61 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ifol-render SDK Test</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: 'Segoe UI', system-ui, sans-serif;
-      background: #1a1a2e; color: #e0e0e0;
-      height: 100vh; display: flex; flex-direction: column; overflow: hidden;
-      user-select: none;
-    }
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:100vh;display:flex;flex-direction:column;overflow:hidden;user-select:none}
 
-    /* ── Top Bar ── */
-    .top-bar {
-      display: flex; align-items: center; gap: 6px;
-      padding: 6px 12px; background: #16213e;
-      border-bottom: 1px solid #0f3460; flex-shrink: 0;
-    }
-    .top-bar h1 { font-size: 13px; color: #e94560; margin-right: 12px; white-space: nowrap; }
-    .top-bar button {
-      padding: 5px 12px; font-size: 11px;
-      border: 1px solid #0f3460; background: #1a1a2e; color: #e0e0e0;
-      border-radius: 4px; cursor: pointer; transition: background 0.15s; white-space: nowrap;
-    }
-    .top-bar button:hover { background: #0f3460; }
-    .top-bar input {
-      padding: 4px 8px; font-size: 11px;
-      background: #0a0a1a; border: 1px solid #0f3460; color: #e0e0e0;
-      border-radius: 4px;
-    }
-    .top-bar .sep { width: 1px; height: 24px; background: #0f3460; }
-    #assetUrl { width: 240px; }
-    #particleCount { width: 50px; text-align: center; }
+    .top-bar{display:flex;align-items:center;gap:6px;padding:5px 10px;background:#16213e;border-bottom:1px solid #0f3460;flex-shrink:0}
+    .top-bar h1{font-size:13px;color:#e94560;margin-right:10px;white-space:nowrap}
+    .top-bar button{padding:4px 10px;font-size:11px;border:1px solid #0f3460;background:#1a1a2e;color:#e0e0e0;border-radius:3px;cursor:pointer;white-space:nowrap}
+    .top-bar button:hover{background:#0f3460}
+    .top-bar input{padding:3px 7px;font-size:11px;background:#0a0a1a;border:1px solid #0f3460;color:#e0e0e0;border-radius:3px}
+    .sep{width:1px;height:22px;background:#0f3460}
+    #assetUrl{width:200px}
+    #particleCount{width:45px;text-align:center}
 
-    /* ── Main Layout ── */
-    .main-content { flex: 1; display: flex; overflow: hidden; }
+    .main-content{flex:1;display:flex;overflow:hidden}
 
-    /* ── Sidebar ── */
-    .sidebar {
-      width: 200px; background: #16213e;
-      border-right: 1px solid #0f3460;
-      display: flex; flex-direction: column; flex-shrink: 0;
-    }
-    .sidebar h3 {
-      padding: 8px 10px 4px; font-size: 10px;
-      text-transform: uppercase; color: #666; letter-spacing: 1px;
-    }
-    .entity-list { flex: 1; overflow-y: auto; padding: 2px 6px; }
-    .entity-item {
-      padding: 4px 8px; margin: 1px 0; border-radius: 3px;
-      font-size: 11px; cursor: pointer;
-      display: flex; justify-content: space-between; align-items: center;
-      border: 1px solid transparent;
-    }
-    .entity-item:hover { background: #1a1a2e; }
-    .entity-item.selected { background: #0f3460; border-color: #e94560; }
-    .entity-item .badge {
-      font-size: 9px; padding: 1px 5px; border-radius: 3px;
-      background: #0a0a1a; color: #666;
-    }
-    .sidebar-footer {
-      padding: 6px; border-top: 1px solid #0f3460;
-    }
-    .sidebar-footer button {
-      width: 100%; padding: 5px; font-size: 10px;
-      background: #2d0000; border: 1px solid #500; color: #e94560;
-      border-radius: 3px; cursor: pointer;
-    }
+    .sidebar{width:180px;background:#16213e;border-right:1px solid #0f3460;display:flex;flex-direction:column;flex-shrink:0}
+    .sidebar h3{padding:7px 8px 3px;font-size:10px;text-transform:uppercase;color:#555;letter-spacing:1px}
+    .entity-list{flex:1;overflow-y:auto;padding:2px 4px}
+    .entity-item{padding:3px 6px;margin:1px 0;border-radius:3px;font-size:10px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;border:1px solid transparent}
+    .entity-item:hover{background:#1a1a2e}
+    .entity-item.selected{background:#0f3460;border-color:#e94560}
+    .entity-item .badge{font-size:8px;padding:1px 4px;border-radius:2px;background:#0a0a1a;color:#555}
+    .sidebar-footer{padding:4px;border-top:1px solid #0f3460}
+    .sidebar-footer button{width:100%;padding:4px;font-size:9px;background:#2d0000;border:1px solid #500;color:#e94560;border-radius:2px;cursor:pointer}
 
-    /* ── Viewports ── */
-    .viewport-area {
-      flex: 1; display: flex; overflow: hidden; padding: 6px; gap: 0;
-    }
-    .viewport-wrap {
-      position: relative; overflow: hidden;
-      background: #0a0a1a; border: 1px solid #0f3460; border-radius: 4px;
-    }
-    #editViewportWrap { flex: 1; }
-    #cameraViewportWrap { width: 360px; flex-shrink: 0; display: flex; flex-direction: column; }
-    .viewport-label {
-      position: absolute; top: 4px; left: 8px;
-      font-size: 10px; color: #555; z-index: 5;
-      background: rgba(10,10,26,0.85); padding: 2px 6px; border-radius: 2px;
-      pointer-events: none;
-    }
-    .canvas-container {
-      position: relative; width: 100%; height: 100%;
-    }
-    /* Camera view: center canvas with correct aspect ratio */
-    #cameraViewportWrap .canvas-container {
-      display: flex; align-items: center; justify-content: center;
-      background: #050510;
-    }
-    canvas { display: block; }
-    #editCanvas { width: 100%; height: 100%; }
-    /* Selection overlay sits on top of edit canvas */
-    #selectionOverlay {
-      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-      pointer-events: none; z-index: 2;
-    }
+    .viewport-area{flex:1;display:flex;overflow:hidden;padding:4px;gap:0}
+    .viewport-wrap{position:relative;overflow:hidden;background:#0a0a1a;border:1px solid #0f3460;border-radius:3px}
+    #editViewportWrap{flex:1}
+    #cameraViewportWrap{width:340px;flex-shrink:0;display:flex;flex-direction:column}
+    .viewport-label{position:absolute;top:3px;left:6px;font-size:9px;color:#444;z-index:5;background:rgba(10,10,26,.85);padding:1px 5px;border-radius:2px;pointer-events:none}
+    .canvas-container{position:relative;width:100%;height:100%}
+    #cameraViewportWrap .canvas-container{display:flex;align-items:center;justify-content:center;background:#050510}
+    canvas{display:block}
+    #editCanvas{width:100%;height:100%}
+    #selectionOverlay{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:2}
 
-    /* ── Splitter ── */
-    #splitter {
-      width: 6px; cursor: col-resize; background: #0f3460;
-      flex-shrink: 0; z-index: 10;
-      transition: background 0.15s;
-    }
-    #splitter:hover, #splitter.active { background: #e94560; }
+    #splitter{width:5px;cursor:col-resize;background:#0f3460;flex-shrink:0;z-index:10;transition:background .15s}
+    #splitter:hover,#splitter.active{background:#e94560}
 
-    /* ── Properties ── */
-    .properties {
-      width: 200px; background: #16213e;
-      border-left: 1px solid #0f3460; padding: 8px;
-      flex-shrink: 0; overflow-y: auto;
-    }
-    .properties h3 {
-      font-size: 10px; text-transform: uppercase; color: #666;
-      letter-spacing: 1px; margin-bottom: 6px;
-    }
-    .prop-row {
-      display: flex; align-items: center; margin-bottom: 4px; gap: 4px;
-    }
-    .prop-row label {
-      font-size: 10px; color: #888; width: 24px; flex-shrink: 0;
-    }
-    .prop-row input {
-      flex: 1; padding: 3px 5px; font-size: 10px;
-      background: #0a0a1a; border: 1px solid #0f3460; color: #e0e0e0;
-      border-radius: 2px;
-    }
+    .properties{width:190px;background:#16213e;border-left:1px solid #0f3460;padding:6px;flex-shrink:0;overflow-y:auto}
+    .properties h3{font-size:10px;text-transform:uppercase;color:#555;letter-spacing:1px;margin-bottom:4px}
+    .prop-row{display:flex;align-items:center;margin-bottom:3px;gap:3px}
+    .prop-row label{font-size:9px;color:#777;width:22px;flex-shrink:0}
+    .prop-row input{flex:1;padding:2px 4px;font-size:10px;background:#0a0a1a;border:1px solid #0f3460;color:#e0e0e0;border-radius:2px}
 
-    /* ── Timeline ── */
-    .timeline {
-      height: 36px; background: #0a0a1a;
-      border-top: 1px solid #0f3460;
-      display: flex; align-items: center; padding: 0 12px; gap: 8px;
-      flex-shrink: 0;
-    }
-    .timeline button {
-      padding: 4px 10px; font-size: 11px;
-      background: #1a1a2e; border: 1px solid #0f3460;
-      color: #e0e0e0; border-radius: 3px; cursor: pointer;
-    }
-    .timeline button:hover { background: #0f3460; }
-    .timeline input[type="range"] { flex: 1; accent-color: #e94560; }
-    .time-display {
-      font-size: 11px; font-family: monospace; color: #4ecca3;
-      min-width: 90px;
-    }
+    .timeline{height:32px;background:#0a0a1a;border-top:1px solid #0f3460;display:flex;align-items:center;padding:0 10px;gap:6px;flex-shrink:0}
+    .timeline button{padding:3px 8px;font-size:10px;background:#1a1a2e;border:1px solid #0f3460;color:#e0e0e0;border-radius:3px;cursor:pointer}
+    .timeline button:hover{background:#0f3460}
+    .timeline input[type="range"]{flex:1;accent-color:#e94560}
+    .time-display{font-size:10px;font-family:monospace;color:#4ecca3;min-width:80px}
 
-    /* ── Bottom Metrics ── */
-    .bottom-bar {
-      display: flex; align-items: center; gap: 14px;
-      padding: 4px 16px; background: #16213e;
-      border-top: 1px solid #0f3460;
-      font-size: 10px; color: #666; flex-shrink: 0;
-    }
-    .metric { display: flex; gap: 3px; }
-    .metric .v { color: #4ecca3; font-weight: 600; }
+    .bottom-bar{display:flex;align-items:center;gap:12px;padding:3px 12px;background:#16213e;border-top:1px solid #0f3460;font-size:9px;color:#555;flex-shrink:0}
+    .metric{display:flex;gap:2px}.metric .v{color:#4ecca3;font-weight:600}
   </style>
 </head>
 <body>
-  <!-- Top Bar -->
   <div class="top-bar">
     <h1>ifol-render SDK Test</h1>
     <button id="btnAddRect">+ Rect</button>
@@ -171,30 +67,23 @@
     <div class="sep"></div>
     <button id="btnAddImage">+ Image</button>
     <button id="btnAddVideo">+ Video</button>
-    <input id="assetUrl" placeholder="Asset path (C:/path/to/file.png)" />
+    <input id="assetUrl" placeholder="Asset path (C:/file.png)" />
     <div class="sep"></div>
     <button id="btnParticles">⚡ Particles</button>
     <input id="particleCount" type="number" value="100" />
-    <button id="btnAnimEntity">🔄 Anim Entity</button>
+    <button id="btnAnimEntity">🔄 Anim</button>
     <div class="sep"></div>
-    <button id="btnClearAll" style="color:#e94560;">✕ Clear</button>
-    <button id="btnExport" style="margin-left:auto; background:#0f3460;">📦 Export</button>
+    <button id="btnClearAll" style="color:#e94560">✕ Clear</button>
+    <button id="btnExport" style="margin-left:auto;background:#0f3460">📦 Export</button>
   </div>
 
-  <!-- Main -->
   <div class="main-content">
-    <!-- Entity List -->
     <div class="sidebar">
       <h3>Entities</h3>
       <div class="entity-list" id="entityList"></div>
-      <div class="sidebar-footer">
-        <button id="btnDelete">🗑 Delete Selected</button>
-      </div>
+      <div class="sidebar-footer"><button id="btnDelete">🗑 Delete Selected</button></div>
     </div>
-
-    <!-- Viewports -->
     <div class="viewport-area">
-      <!-- Edit Viewport -->
       <div class="viewport-wrap" id="editViewportWrap">
         <div class="viewport-label" id="editLabel">Edit Viewport</div>
         <div class="canvas-container">
@@ -202,27 +91,20 @@
           <canvas id="selectionOverlay"></canvas>
         </div>
       </div>
-
-      <!-- Draggable Splitter -->
       <div id="splitter"></div>
-
-      <!-- Camera Viewport -->
       <div class="viewport-wrap" id="cameraViewportWrap">
-        <div class="viewport-label" id="cameraLabel">Camera View (1920×1080)</div>
+        <div class="viewport-label" id="cameraLabel">Camera View</div>
         <div class="canvas-container" id="cameraCanvasContainer">
           <canvas id="cameraCanvas"></canvas>
         </div>
       </div>
     </div>
-
-    <!-- Properties -->
     <div class="properties">
       <h3>Properties</h3>
-      <div id="propsContent"><p style="font-size:10px;color:#555;">Select an entity</p></div>
+      <div id="propsContent"><p style="font-size:9px;color:#444">Select an entity</p></div>
     </div>
   </div>
 
-  <!-- Timeline -->
   <div class="timeline">
     <button id="btnPlay">▶ Play</button>
     <button id="btnStop">⏹ Stop</button>
@@ -230,266 +112,234 @@
     <input type="range" id="scrubber" min="0" max="1000" value="0" />
   </div>
 
-  <!-- Metrics -->
   <div class="bottom-bar">
     <div class="metric">FPS:<span class="v" id="mFps">0</span></div>
     <div class="metric">Render:<span class="v" id="mRender">0ms</span></div>
     <div class="metric">Entities:<span class="v" id="mEntities">0</span></div>
-    <div class="metric">Animated:<span class="v" id="mAnimated">0</span></div>
-    <div class="metric">Buffer:<span class="v" id="mBuffer">0</span></div>
+    <div class="metric">Anims:<span class="v" id="mAnimated">0</span></div>
+    <div class="metric">Zoom:<span class="v" id="mZoom">100%</span></div>
+    <div class="metric">Pan:<span class="v" id="mPan">0,0</span></div>
     <div class="metric">Status:<span class="v" id="mStatus">Init</span></div>
   </div>
 
   <script type="module">
     import init, { IfolRenderWeb } from '../crates/wasm/pkg/ifol_render_wasm.js';
 
-    // ═══════════════════════════════════
-    // Constants
-    // ═══════════════════════════════════
+    // ═══ Constants (scene in "units" — maps to export resolution) ═══
     const SCENE_W = 1920, SCENE_H = 1080, FPS = 30, DURATION = 10;
     const ASSET_BASE = 'http://localhost:8000/asset?path=';
+    const CAM_BORDER = 12; // pixels — how thick the camera border hit zone is
 
-    // ═══════════════════════════════════
-    // State
-    // ═══════════════════════════════════
+    // ═══ State ═══
     let editRenderer = null, cameraRenderer = null;
     const entities = new Map();
-    let selectedId = null;
-    let nextId = 1;
+    let selectedId = null, nextId = 1;
     let playing = false, currentTime = 0;
     let playStartWall = 0, playStartTime = 0;
-
-    // Camera entity controls what the camera viewport shows
     let cameraEntityId = null;
 
-    // Animation system
-    const animations = new Map(); // entityId → { type, params }
+    // Animation registry: entityId → { type, ...params, t0 (start time) }
+    const anims = new Map();
 
-    // Perf
+    // Viewport transform (edit viewport only)
+    let vpZoom = 1, vpPanX = 0, vpPanY = 0;
+
+    // Interaction state
+    let drag = null, splitterDrag = false, vpDrag = null;
     let fpsCount = 0, lastFpsTick = 0, lastRenderMs = 0;
 
-    // Drag
-    let drag = null; // { id, startMx, startMy, startEx, startEy }
-
-    // Splitter drag
-    let splitterDrag = false;
-
-    // ═══════════════════════════════════
-    // Init
-    // ═══════════════════════════════════
+    // ═══ Init ═══
     async function start() {
       setStatus('Loading WASM...');
       await init();
 
-      // Edit viewport
-      const editWrap = document.getElementById('editViewportWrap');
       const editCanvas = document.getElementById('editCanvas');
-      const overlay = document.getElementById('selectionOverlay');
-      resizeEditCanvas();
-
-      editRenderer = await new IfolRenderWeb(editCanvas,
-        editCanvas.width, editCanvas.height, FPS);
+      syncEditSize();
+      editRenderer = await new IfolRenderWeb(editCanvas, editCanvas.width, editCanvas.height, FPS);
       editRenderer.setup_builtins();
 
-      // Camera viewport — fixed 16:9 aspect
       const camCanvas = document.getElementById('cameraCanvas');
-      fitCameraCanvas();
-      cameraRenderer = await new IfolRenderWeb(camCanvas,
-        camCanvas.width, camCanvas.height, FPS);
+      syncCamSize();
+      cameraRenderer = await new IfolRenderWeb(camCanvas, camCanvas.width, camCanvas.height, FPS);
       cameraRenderer.setup_builtins();
 
-      // Create camera entity
       createCameraEntity();
-
-      setStatus('Ready');
+      setStatus('Ready — scroll to zoom, middle-click to pan');
       setupEvents();
       requestAnimationFrame(loop);
     }
 
-    function resizeEditCanvas() {
+    // ═══ Canvas sizing ═══
+    function syncEditSize() {
       const wrap = document.getElementById('editViewportWrap');
-      const canvas = document.getElementById('editCanvas');
-      const overlay = document.getElementById('selectionOverlay');
-      const w = wrap.clientWidth;
-      const h = wrap.clientHeight;
-      canvas.width = w;
-      canvas.height = h;
-      overlay.width = w;
-      overlay.height = h;
-      if (editRenderer) editRenderer.resize(w, h);
-      document.getElementById('editLabel').textContent = `Edit Viewport (${w}×${h})`;
+      const c = document.getElementById('editCanvas');
+      const o = document.getElementById('selectionOverlay');
+      c.width = wrap.clientWidth;
+      c.height = wrap.clientHeight;
+      o.width = c.width; o.height = c.height;
+      if (editRenderer) editRenderer.resize(c.width, c.height);
+      document.getElementById('editLabel').textContent = `Edit Viewport (${c.width}×${c.height})`;
     }
 
-    function fitCameraCanvas() {
+    function syncCamSize() {
       const container = document.getElementById('cameraCanvasContainer');
-      const canvas = document.getElementById('cameraCanvas');
-      const cw = container.clientWidth;
-      const ch = container.clientHeight;
-      // Fit 16:9 inside the container maintaining aspect ratio
+      const c = document.getElementById('cameraCanvas');
+      const cw = container.clientWidth, ch = container.clientHeight;
       const aspect = 16 / 9;
       let w, h;
-      if (cw / ch > aspect) {
-        h = ch;
-        w = Math.round(h * aspect);
-      } else {
-        w = cw;
-        h = Math.round(w / aspect);
-      }
-      canvas.width = w;
-      canvas.height = h;
-      canvas.style.width = w + 'px';
-      canvas.style.height = h + 'px';
+      if (cw / ch > aspect) { h = ch; w = Math.round(h * aspect); }
+      else { w = cw; h = Math.round(w / aspect); }
+      c.width = w; c.height = h;
+      c.style.width = w + 'px'; c.style.height = h + 'px';
       if (cameraRenderer) cameraRenderer.resize(w, h);
-      document.getElementById('cameraLabel').textContent =
-        `Camera View (${w}×${h} → 1920×1080)`;
+      document.getElementById('cameraLabel').textContent = `Camera (${w}×${h})`;
     }
 
-    // ═══════════════════════════════════
-    // Camera Entity
-    // ═══════════════════════════════════
+    // ═══ Camera entity ═══
     function createCameraEntity() {
       cameraEntityId = addEntity('rect', {
         x: 0, y: 0, width: SCENE_W, height: SCENE_H,
-        color: [1, 1, 1, 0.08],
-        layer: 9999, // always on top in edit view
+        color: [1, 1, 1, 0.06], layer: 9999,
       }, '📷 camera');
     }
-
-    function getCameraTransform() {
-      const cam = entities.get(cameraEntityId);
-      if (!cam) return { x: 0, y: 0, w: SCENE_W, h: SCENE_H };
-      return { x: cam.x, y: cam.y, w: cam.width, h: cam.height };
+    function getCamRect() {
+      const c = entities.get(cameraEntityId);
+      return c ? { x: c.x, y: c.y, w: c.width, h: c.height } : { x: 0, y: 0, w: SCENE_W, h: SCENE_H };
     }
 
-    // ═══════════════════════════════════
-    // Entity CRUD
-    // ═══════════════════════════════════
-    function addEntity(type, props = {}, label = null) {
+    // ═══ Entity CRUD ═══
+    function addEntity(type, p = {}, label = null) {
       const id = `e${nextId++}`;
-      const e = {
+      entities.set(id, {
         id, type,
         label: label || `${type}_${nextId - 1}`,
-        x: props.x ?? rand(0, SCENE_W - 200),
-        y: props.y ?? rand(0, SCENE_H - 200),
-        width: props.width ?? 200,
-        height: props.height ?? 200,
-        color: props.color ?? rndColor(),
-        opacity: props.opacity ?? 1.0,
-        rotation: props.rotation ?? 0,
-        source: props.source ?? null,
-        layer: props.layer ?? entities.size,
+        x: p.x ?? rand(0, SCENE_W - 200),
+        y: p.y ?? rand(0, SCENE_H - 200),
+        width: p.width ?? 200, height: p.height ?? 200,
+        color: p.color ?? rndColor(),
+        opacity: p.opacity ?? 1, rotation: p.rotation ?? 0,
+        source: p.source ?? null,
+        layer: p.layer ?? entities.size,
         startTime: 0, duration: DURATION,
         shader: (type === 'rect' || type === 'circle') ? 'shapes' : 'composite',
         params: type === 'circle' ? [1.0] : [],
-      };
-      entities.set(id, e);
-      refreshEntityList();
+      });
+      refreshList();
       return id;
     }
-
     function removeEntity(id) {
-      entities.delete(id);
-      animations.delete(id);
+      entities.delete(id); anims.delete(id);
       if (selectedId === id) { selectedId = null; refreshProps(); }
       if (cameraEntityId === id) cameraEntityId = null;
-      refreshEntityList();
+      refreshList();
     }
 
-    // ═══════════════════════════════════
-    // Animation System
-    // ═══════════════════════════════════
+    // ═══ DETERMINISTIC Animation System ═══
+    // All animations are computed from (currentTime - t0), NOT from delta accumulation.
+    // Same currentTime = same visual result, always.
 
-    /** Rotating animation — entity orbits around its start position */
-    function addOrbitAnimation(id, radius = 100, speed = 1) {
-      const e = entities.get(id);
-      if (!e) return;
-      animations.set(id, {
-        type: 'orbit',
-        cx: e.x + e.width / 2,
-        cy: e.y + e.height / 2,
+    /** Deterministic bounce: compute position at absolute time via reflection */
+    function bouncePos(start, v, t, min, max) {
+      if (Math.abs(v) < 0.001) return Math.max(min, Math.min(start, max));
+      const range = max - min;
+      if (range <= 0) return min;
+      let p = start + v * t - min;
+      const period = 2 * range;
+      p = ((p % period) + period) % period;
+      if (p > range) p = period - p;
+      return p + min;
+    }
+
+    function addOrbitAnim(id, radius = 150, speed = 1) {
+      const e = entities.get(id); if (!e) return;
+      anims.set(id, {
+        type: 'orbit', t0: currentTime,
+        cx: e.x + e.width / 2, cy: e.y + e.height / 2,
         radius, speed,
       });
     }
-
-    /** Bounce animation — entity bounces inside scene bounds */
-    function addBounceAnimation(id, vx = null, vy = null) {
-      animations.set(id, {
-        type: 'bounce',
-        vx: vx ?? (100 + Math.random() * 300) * (Math.random() > 0.5 ? 1 : -1),
-        vy: vy ?? (100 + Math.random() * 300) * (Math.random() > 0.5 ? 1 : -1),
+    function addBounceAnim(id, vx = null, vy = null) {
+      const e = entities.get(id); if (!e) return;
+      anims.set(id, {
+        type: 'bounce', t0: currentTime,
+        x0: e.x, y0: e.y,
+        vx: vx ?? (100 + Math.random() * 300) * (Math.random() > .5 ? 1 : -1),
+        vy: vy ?? (100 + Math.random() * 300) * (Math.random() > .5 ? 1 : -1),
+        ew: e.width, eh: e.height,
+      });
+    }
+    function addPulseAnim(id, speed = 2) {
+      const e = entities.get(id); if (!e) return;
+      anims.set(id, {
+        type: 'pulse', t0: currentTime,
+        baseCx: e.x + e.width / 2, baseCy: e.y + e.height / 2,
+        baseW: e.width, baseH: e.height, speed,
       });
     }
 
-    /** Pulse animation — entity scales up and down */
-    function addPulseAnimation(id, minScale = 0.5, maxScale = 1.5, speed = 2) {
-      const e = entities.get(id);
-      if (!e) return;
-      animations.set(id, {
-        type: 'pulse',
-        baseW: e.width, baseH: e.height,
-        baseCx: e.x + e.width / 2,
-        baseCy: e.y + e.height / 2,
-        minScale, maxScale, speed,
-      });
-    }
-
-    function tickAnimations(dt) {
-      for (const [id, anim] of animations) {
+    /** Compute all animated entity positions at the given absolute time */
+    function computeAnimations(t) {
+      for (const [id, a] of anims) {
         const e = entities.get(id);
-        if (!e) { animations.delete(id); continue; }
+        if (!e) { anims.delete(id); continue; }
+        const dt = t - a.t0;
 
-        switch (anim.type) {
+        switch (a.type) {
           case 'orbit': {
-            const angle = currentTime * anim.speed * Math.PI * 2;
-            e.x = anim.cx + Math.cos(angle) * anim.radius - e.width / 2;
-            e.y = anim.cy + Math.sin(angle) * anim.radius - e.height / 2;
+            const angle = dt * a.speed * Math.PI * 2;
+            e.x = a.cx + Math.cos(angle) * a.radius - e.width / 2;
+            e.y = a.cy + Math.sin(angle) * a.radius - e.height / 2;
             e.rotation = angle;
             break;
           }
           case 'bounce': {
-            e.x += anim.vx * dt;
-            e.y += anim.vy * dt;
-            if (e.x < 0 || e.x + e.width > SCENE_W) { anim.vx *= -1; e.x = Math.max(0, Math.min(e.x, SCENE_W - e.width)); }
-            if (e.y < 0 || e.y + e.height > SCENE_H) { anim.vy *= -1; e.y = Math.max(0, Math.min(e.y, SCENE_H - e.height)); }
+            e.x = bouncePos(a.x0, a.vx, dt, 0, SCENE_W - a.ew);
+            e.y = bouncePos(a.y0, a.vy, dt, 0, SCENE_H - a.eh);
             break;
           }
           case 'pulse': {
-            const t = (Math.sin(currentTime * anim.speed * Math.PI * 2) + 1) / 2;
-            const s = anim.minScale + t * (anim.maxScale - anim.minScale);
-            e.width = anim.baseW * s;
-            e.height = anim.baseH * s;
-            e.x = anim.baseCx - e.width / 2;
-            e.y = anim.baseCy - e.height / 2;
+            const s = 0.7 + 0.6 * Math.sin(dt * a.speed * Math.PI * 2);
+            e.width = a.baseW * s;
+            e.height = a.baseH * s;
+            e.x = a.baseCx - e.width / 2;
+            e.y = a.baseCy - e.height / 2;
             break;
           }
         }
       }
     }
 
-    // ═══════════════════════════════════
-    // Flatten
-    // ═══════════════════════════════════
-    function flatten(time, targetW, targetH, cameraRect = null) {
-      // If cameraRect is provided, transform entities relative to camera
-      const cr = cameraRect || { x: 0, y: 0, w: SCENE_W, h: SCENE_H };
-      const sx = targetW / cr.w;
-      const sy = targetH / cr.h;
+    // ═══ Flatten (unit coords → pixel coords) ═══
+    // Uses UNIFORM scaling: min(sx, sy) to preserve aspect ratio.
+    // Entities are centered in the render target if aspect differs.
+    function flatten(time, targetW, targetH, region = null, vp = null) {
+      const r = region || { x: 0, y: 0, w: SCENE_W, h: SCENE_H };
+      const zoom = vp?.zoom ?? 1;
+      const panX = vp?.panX ?? 0;
+      const panY = vp?.panY ?? 0;
 
-      const flatEntities = [];
-      const texUpdates = [];
+      // Uniform scale: fit region into target, preserving aspect
+      const scaleX = targetW / r.w;
+      const scaleY = targetH / r.h;
+      const scale = Math.min(scaleX, scaleY) * zoom;
+      // Center offset
+      const ox = (targetW - r.w * scale) / 2 + panX * scale;
+      const oy = (targetH - r.h * scale) / 2 + panY * scale;
+
+      const flatEnts = [];
+      const texUp = [];
       let idx = 0;
 
       for (const e of entities.values()) {
         if (time < e.startTime || time >= e.startTime + e.duration) continue;
-        // Skip camera entity in camera view
-        if (cameraRect && e.id === cameraEntityId) continue;
+        if (region && e.id === cameraEntityId) continue; // hide camera in camera view
 
-        const flat = {
+        flatEnts.push({
           id: idx++,
-          x: (e.x - cr.x) * sx,
-          y: (e.y - cr.y) * sy,
-          width: e.width * sx,
-          height: e.height * sy,
+          x: (e.x - r.x) * scale + ox,
+          y: (e.y - r.y) * scale + oy,
+          width: e.width * scale,
+          height: e.height * scale,
           rotation: e.rotation,
           opacity: e.opacity,
           blend_mode: 0,
@@ -499,234 +349,202 @@
           params: [...e.params],
           layer: e.layer,
           z_index: 0,
-        };
+        });
 
         if (e.type === 'image' && e.source) {
           const k = `img_${e.id}`;
-          texUpdates.push({ LoadImage: { key: k, path: e.source } });
-          flat.textures = [k];
+          texUp.push({ LoadImage: { key: k, path: e.source } });
+          flatEnts[flatEnts.length - 1].textures = [k];
         } else if (e.type === 'video' && e.source) {
           const k = `vid_${e.id}`;
-          texUpdates.push({ DecodeVideoFrame: { key: k, path: e.source, timestamp_secs: time - e.startTime } });
-          flat.textures = [k];
+          texUp.push({ DecodeVideoFrame: { key: k, path: e.source, timestamp_secs: time - e.startTime } });
+          flatEnts[flatEnts.length - 1].textures = [k];
         }
-
-        flatEntities.push(flat);
       }
 
       return {
         passes: [
-          { output: 'main', pass_type: { Entities: { entities: flatEntities, clear_color: [0.04, 0.04, 0.08, 1] } } },
+          { output: 'main', pass_type: { Entities: { entities: flatEnts, clear_color: [0.04, 0.04, 0.08, 1] } } },
           { output: 'screen', pass_type: { Output: { input: 'main' } } },
         ],
-        texture_updates: texUpdates,
+        texture_updates: texUp,
       };
     }
 
-    // ═══════════════════════════════════
-    // Selection Overlay (2D Canvas)
-    // ═══════════════════════════════════
-    function drawSelectionOverlay() {
-      const overlay = document.getElementById('selectionOverlay');
-      const ctx = overlay.getContext('2d');
-      ctx.clearRect(0, 0, overlay.width, overlay.height);
-
+    // ═══ Selection Overlay ═══
+    function drawOverlay() {
+      const c = document.getElementById('selectionOverlay');
+      const ctx = c.getContext('2d');
+      ctx.clearRect(0, 0, c.width, c.height);
       if (!selectedId) return;
       const e = entities.get(selectedId);
       if (!e) return;
 
-      const sx = overlay.width / SCENE_W;
-      const sy = overlay.height / SCENE_H;
-      const px = e.x * sx;
-      const py = e.y * sy;
-      const pw = e.width * sx;
-      const ph = e.height * sy;
+      // Convert entity scene coords to canvas pixels (with viewport)
+      const scale0 = Math.min(c.width / SCENE_W, c.height / SCENE_H) * vpZoom;
+      const ox = (c.width - SCENE_W * scale0) / 2 + vpPanX * scale0;
+      const oy = (c.height - SCENE_H * scale0) / 2 + vpPanY * scale0;
+      const px = e.x * scale0 + ox, py = e.y * scale0 + oy;
+      const pw = e.width * scale0, ph = e.height * scale0;
 
-      // Dashed outline
       ctx.save();
-      ctx.strokeStyle = '#e94560';
+      ctx.strokeStyle = selectedId === cameraEntityId ? '#4ecca3' : '#e94560';
       ctx.lineWidth = 2;
-      ctx.setLineDash([6, 4]);
+      ctx.setLineDash([6, 3]);
       ctx.strokeRect(px, py, pw, ph);
 
       // Corner handles
       ctx.setLineDash([]);
-      ctx.fillStyle = '#e94560';
-      const hs = 6; // handle size
-      const corners = [[px, py], [px + pw, py], [px, py + ph], [px + pw, py + ph]];
-      for (const [cx, cy] of corners) {
-        ctx.fillRect(cx - hs / 2, cy - hs / 2, hs, hs);
-      }
+      ctx.fillStyle = ctx.strokeStyle;
+      const hs = 6;
+      for (const [hx, hy] of [[px, py], [px + pw, py], [px, py + ph], [px + pw, py + ph]])
+        ctx.fillRect(hx - hs / 2, hy - hs / 2, hs, hs);
 
       // Label
-      ctx.fillStyle = 'rgba(233,69,96,0.85)';
+      const lbl = `${e.label || e.id}  (${Math.round(e.x)}, ${Math.round(e.y)})`;
       ctx.font = '10px Segoe UI, sans-serif';
-      const label = `${e.label || e.id}  (${Math.round(e.x)}, ${Math.round(e.y)})`;
-      const tm = ctx.measureText(label);
-      ctx.fillRect(px, py - 16, tm.width + 8, 14);
+      const tw = ctx.measureText(lbl).width;
+      ctx.fillStyle = selectedId === cameraEntityId ? 'rgba(78,204,163,.85)' : 'rgba(233,69,96,.85)';
+      ctx.fillRect(px, py - 15, tw + 8, 13);
       ctx.fillStyle = '#fff';
-      ctx.fillText(label, px + 4, py - 5);
+      ctx.fillText(lbl, px + 4, py - 4);
 
-      // Camera entity: draw crosshair
+      // Camera: rule-of-thirds grid
       if (selectedId === cameraEntityId) {
-        ctx.strokeStyle = 'rgba(78, 204, 163, 0.5)';
+        ctx.strokeStyle = 'rgba(78,204,163,.3)';
         ctx.lineWidth = 1;
-        ctx.setLineDash([4, 4]);
-        // Draw rule-of-thirds grid
+        ctx.setLineDash([3, 3]);
         for (let i = 1; i < 3; i++) {
-          ctx.beginPath();
-          ctx.moveTo(px + pw * i / 3, py);
-          ctx.lineTo(px + pw * i / 3, py + ph);
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.moveTo(px, py + ph * i / 3);
-          ctx.lineTo(px + pw, py + ph * i / 3);
-          ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(px + pw * i / 3, py); ctx.lineTo(px + pw * i / 3, py + ph); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(px, py + ph * i / 3); ctx.lineTo(px + pw, py + ph * i / 3); ctx.stroke();
         }
       }
-
       ctx.restore();
     }
 
-    // ═══════════════════════════════════
-    // Render
-    // ═══════════════════════════════════
+    // ═══ Render ═══
     function renderFrame() {
       const t0 = performance.now();
+      computeAnimations(currentTime);
 
-      // Edit viewport: show ALL entities including camera entity at full scene coords
       if (editRenderer) {
-        const editCanvas = document.getElementById('editCanvas');
-        const frame = flatten(currentTime, editCanvas.width, editCanvas.height);
-        editRenderer.render_frame(JSON.stringify(frame));
+        const ec = document.getElementById('editCanvas');
+        const f = flatten(currentTime, ec.width, ec.height, null, { zoom: vpZoom, panX: vpPanX, panY: vpPanY });
+        editRenderer.render_frame(JSON.stringify(f));
       }
-
-      // Camera viewport: show only what camera entity sees
       if (cameraRenderer) {
-        const cam = getCameraTransform();
-        const camCanvas = document.getElementById('cameraCanvas');
-        const frame = flatten(currentTime, camCanvas.width, camCanvas.height, cam);
-        cameraRenderer.render_frame(JSON.stringify(frame));
+        const cc = document.getElementById('cameraCanvas');
+        const cam = getCamRect();
+        const f = flatten(currentTime, cc.width, cc.height, cam);
+        cameraRenderer.render_frame(JSON.stringify(f));
       }
-
-      drawSelectionOverlay();
+      drawOverlay();
       lastRenderMs = performance.now() - t0;
     }
 
-    // ═══════════════════════════════════
-    // Main Loop
-    // ═══════════════════════════════════
-    let lastLoopTime = 0;
+    // ═══ Main Loop ═══
     function loop(ts) {
       requestAnimationFrame(loop);
-      const dt = lastLoopTime ? (ts - lastLoopTime) / 1000 : 0;
-      lastLoopTime = ts;
-
-      // FPS
       fpsCount++;
-      if (ts - lastFpsTick >= 1000) {
-        document.getElementById('mFps').textContent = fpsCount;
-        fpsCount = 0;
-        lastFpsTick = ts;
-      }
+      if (ts - lastFpsTick >= 1000) { document.getElementById('mFps').textContent = fpsCount; fpsCount = 0; lastFpsTick = ts; }
 
-      // Playback
       if (playing) {
         currentTime = playStartTime + (ts - playStartWall) / 1000;
         if (currentTime >= DURATION) { currentTime = 0; playStartTime = 0; playStartWall = ts; }
         document.getElementById('scrubber').value = (currentTime / DURATION) * 1000;
-        document.getElementById('timeDisplay').textContent =
-          `${currentTime.toFixed(2)} / ${DURATION.toFixed(2)}`;
-      }
-
-      // Tick animations
-      if (playing || animations.size > 0) {
-        tickAnimations(dt);
+        document.getElementById('timeDisplay').textContent = `${currentTime.toFixed(2)} / ${DURATION.toFixed(2)}`;
       }
 
       renderFrame();
 
-      // Metrics
       document.getElementById('mRender').textContent = lastRenderMs.toFixed(1) + 'ms';
       document.getElementById('mEntities').textContent = entities.size;
-      document.getElementById('mAnimated').textContent = animations.size;
-      document.getElementById('mBuffer').textContent =
-        editRenderer ? editRenderer.buffered_count() : 0;
+      document.getElementById('mAnimated').textContent = anims.size;
+      document.getElementById('mZoom').textContent = (vpZoom * 100).toFixed(0) + '%';
+      document.getElementById('mPan').textContent = `${vpPanX.toFixed(0)},${vpPanY.toFixed(0)}`;
     }
 
-    // ═══════════════════════════════════
-    // Events
-    // ═══════════════════════════════════
+    // ═══ Hit test helpers ═══
+    function canvasToScene(canvasX, canvasY, canvas) {
+      const scale = Math.min(canvas.width / SCENE_W, canvas.height / SCENE_H) * vpZoom;
+      const ox = (canvas.width - SCENE_W * scale) / 2 + vpPanX * scale;
+      const oy = (canvas.height - SCENE_H * scale) / 2 + vpPanY * scale;
+      return { x: (canvasX - ox) / scale, y: (canvasY - oy) / scale };
+    }
+
+    /** Camera entity: hit only on border (within borderPx pixels of edge) */
+    function hitTestCameraBorder(sceneX, sceneY, borderScene) {
+      const c = entities.get(cameraEntityId);
+      if (!c) return false;
+      const inOuter = sceneX >= c.x - borderScene && sceneX <= c.x + c.width + borderScene &&
+                      sceneY >= c.y - borderScene && sceneY <= c.y + c.height + borderScene;
+      const inInner = sceneX >= c.x + borderScene && sceneX <= c.x + c.width - borderScene &&
+                      sceneY >= c.y + borderScene && sceneY <= c.y + c.height - borderScene;
+      return inOuter && !inInner;
+    }
+
+    // ═══ Particles ═══
+    function spawnParticles(n) {
+      for (let i = 0; i < n; i++) {
+        const t = i / n;
+        const id = addEntity('rect', {
+          x: SCENE_W / 2 + Math.cos(t * Math.PI * 2) * (200 + Math.random() * 400),
+          y: SCENE_H / 2 + Math.sin(t * Math.PI * 2) * (200 + Math.random() * 400),
+          width: 8 + Math.random() * 24, height: 8 + Math.random() * 24,
+          color: [Math.random(), Math.random(), Math.random(), .4 + Math.random() * .6],
+          rotation: Math.random() * Math.PI * 2,
+          layer: 100 + entities.size,
+        });
+        addBounceAnim(id);
+      }
+      setStatus(`Spawned ${n} particles (total: ${entities.size})`);
+    }
+
+    // ═══ Events ═══
     function setupEvents() {
-      // ── Entity buttons ──
       document.getElementById('btnAddRect').onclick = () => addEntity('rect');
       document.getElementById('btnAddCircle').onclick = () => addEntity('circle');
-
       document.getElementById('btnAddImage').onclick = async () => {
         const p = document.getElementById('assetUrl').value.trim();
         if (!p) return alert('Enter asset path');
-        const id = addEntity('image', { source: p, width: 400, height: 300 });
-        // Pre-cache to WASM
+        addEntity('image', { source: p, width: 400, height: 300 });
         try {
           const res = await fetch(`${ASSET_BASE}${encodeURIComponent(p)}`);
           if (res.ok) {
-            const buf = await res.arrayBuffer();
-            editRenderer.cache_image(p, new Uint8Array(buf));
-            cameraRenderer.cache_image(p, new Uint8Array(buf));
-            setStatus(`Cached image: ${p}`);
-          } else {
-            setStatus(`Image 404: ${p}`);
+            const buf = new Uint8Array(await res.arrayBuffer());
+            editRenderer.cache_image(p, buf);
+            cameraRenderer.cache_image(p, buf);
+            setStatus(`Cached: ${p}`);
           }
-        } catch (e) { setStatus(`Fetch error: ${e.message}`); }
+        } catch (e) { setStatus(`Error: ${e.message}`); }
       };
-
-      document.getElementById('btnAddVideo').onclick = async () => {
+      document.getElementById('btnAddVideo').onclick = () => {
         const p = document.getElementById('assetUrl').value.trim();
         if (!p) return alert('Enter asset path');
         addEntity('video', { source: p, width: 640, height: 360 });
-        setStatus(`Added video: ${p}`);
       };
-
-      document.getElementById('btnParticles').onclick = () => {
-        const n = parseInt(document.getElementById('particleCount').value) || 100;
-        spawnParticles(n);
-      };
-
+      document.getElementById('btnParticles').onclick = () => spawnParticles(parseInt(document.getElementById('particleCount').value) || 100);
       document.getElementById('btnAnimEntity').onclick = () => {
         const id = addEntity('rect', {
-          x: SCENE_W / 2 - 40, y: SCENE_H / 2 - 40,
-          width: 80, height: 80,
-          color: [0.2, 0.8, 1.0, 0.9],
+          x: SCENE_W / 2 - 40, y: SCENE_H / 2 - 40, width: 80, height: 80,
+          color: [.2, .8, 1, .9],
         }, '🔄 anim');
-        const animType = ['orbit', 'bounce', 'pulse'][Math.floor(Math.random() * 3)];
-        if (animType === 'orbit') addOrbitAnimation(id, 150 + Math.random() * 200, 0.5 + Math.random());
-        else if (animType === 'bounce') addBounceAnimation(id);
-        else addPulseAnimation(id);
-        setStatus(`Added ${animType} animation entity`);
+        const r = Math.random();
+        if (r < .33) addOrbitAnim(id, 150 + Math.random() * 200, .5 + Math.random());
+        else if (r < .66) addBounceAnim(id);
+        else addPulseAnim(id);
       };
-
       document.getElementById('btnClearAll').onclick = () => {
-        entities.clear();
-        animations.clear();
-        selectedId = null;
-        nextId = 1;
-        refreshEntityList();
-        refreshProps();
-        createCameraEntity();
-        setStatus('Cleared all');
+        entities.clear(); anims.clear(); selectedId = null; nextId = 1;
+        vpZoom = 1; vpPanX = 0; vpPanY = 0;
+        refreshList(); refreshProps(); createCameraEntity();
       };
+      document.getElementById('btnDelete').onclick = () => { if (selectedId) removeEntity(selectedId); };
 
-      document.getElementById('btnDelete').onclick = () => {
-        if (selectedId) removeEntity(selectedId);
-      };
-
-      // ── Playback ──
+      // Playback
       document.getElementById('btnPlay').onclick = () => {
         if (playing) { playing = false; document.getElementById('btnPlay').textContent = '▶ Play'; }
-        else {
-          playing = true; playStartWall = performance.now(); playStartTime = currentTime;
-          document.getElementById('btnPlay').textContent = '⏸ Pause';
-        }
+        else { playing = true; playStartWall = performance.now(); playStartTime = currentTime; document.getElementById('btnPlay').textContent = '⏸ Pause'; }
       };
       document.getElementById('btnStop').onclick = () => {
         playing = false; currentTime = 0;
@@ -737,149 +555,123 @@
       document.getElementById('scrubber').oninput = (ev) => {
         if (playing) { playing = false; document.getElementById('btnPlay').textContent = '▶ Play'; }
         currentTime = (ev.target.value / 1000) * DURATION;
-        document.getElementById('timeDisplay').textContent =
-          `${currentTime.toFixed(2)} / ${DURATION.toFixed(2)}`;
+        document.getElementById('timeDisplay').textContent = `${currentTime.toFixed(2)} / ${DURATION.toFixed(2)}`;
       };
-
       document.getElementById('btnExport').onclick = async () => {
         setStatus('Exporting...');
-        try {
-          const res = await fetch('http://localhost:8000/export', { method: 'POST' });
-          const d = await res.json();
-          setStatus(d.status === 'ok' ? 'Export done!' : `Error: ${d.error}`);
-        } catch (e) { setStatus(`Export error: ${e.message}`); }
+        try { const r = await fetch('http://localhost:8000/export', { method: 'POST' }); const d = await r.json(); setStatus(d.status === 'ok' ? 'Done!' : d.error); }
+        catch (e) { setStatus(e.message); }
       };
 
-      // ── Canvas drag ──
-      const editCanvas = document.getElementById('editCanvas');
-      editCanvas.addEventListener('mousedown', (ev) => {
-        const rect = editCanvas.getBoundingClientRect();
-        const mx = (ev.clientX - rect.left) * (SCENE_W / editCanvas.width);
-        const my = (ev.clientY - rect.top) * (SCENE_H / editCanvas.height);
+      // ── Canvas: click/drag ──
+      const ec = document.getElementById('editCanvas');
 
-        // Hit test reverse layer order
-        const sorted = [...entities.values()].sort((a, b) => b.layer - a.layer);
+      ec.addEventListener('mousedown', (ev) => {
+        if (ev.button === 1) { // middle click → pan viewport
+          vpDrag = { startX: ev.clientX, startY: ev.clientY, vpX0: vpPanX, vpY0: vpPanY };
+          ev.preventDefault();
+          return;
+        }
+        if (ev.button !== 0) return;
+
+        const rect = ec.getBoundingClientRect();
+        const s = canvasToScene(ev.clientX - rect.left, ev.clientY - rect.top, ec);
+        const borderScene = CAM_BORDER / (Math.min(ec.width / SCENE_W, ec.height / SCENE_H) * vpZoom);
+
+        // Hit test: camera border first (highest layer)
+        if (cameraEntityId && hitTestCameraBorder(s.x, s.y, borderScene)) {
+          selectedId = cameraEntityId;
+          const c = entities.get(cameraEntityId);
+          drag = { id: cameraEntityId, sx: s.x, sy: s.y, ex: c.x, ey: c.y };
+          refreshList(); refreshProps(); return;
+        }
+
+        // Hit test: other entities (reverse layer order, skip camera)
+        const sorted = [...entities.values()].filter(e => e.id !== cameraEntityId).sort((a, b) => b.layer - a.layer);
         for (const e of sorted) {
-          if (mx >= e.x && mx <= e.x + e.width && my >= e.y && my <= e.y + e.height) {
+          if (s.x >= e.x && s.x <= e.x + e.width && s.y >= e.y && s.y <= e.y + e.height) {
             selectedId = e.id;
-            drag = { id: e.id, startMx: mx, startMy: my, startEx: e.x, startEy: e.y };
-            refreshEntityList();
-            refreshProps();
-            return;
+            drag = { id: e.id, sx: s.x, sy: s.y, ex: e.x, ey: e.y };
+            refreshList(); refreshProps(); return;
           }
         }
-        selectedId = null;
-        drag = null;
-        refreshEntityList();
-        refreshProps();
+        selectedId = null; drag = null;
+        refreshList(); refreshProps();
       });
 
-      editCanvas.addEventListener('mousemove', (ev) => {
-        if (!drag) return;
-        const rect = editCanvas.getBoundingClientRect();
-        const mx = (ev.clientX - rect.left) * (SCENE_W / editCanvas.width);
-        const my = (ev.clientY - rect.top) * (SCENE_H / editCanvas.height);
-        const e = entities.get(drag.id);
-        if (e) {
-          e.x = drag.startEx + (mx - drag.startMx);
-          e.y = drag.startEy + (my - drag.startMy);
+      ec.addEventListener('mousemove', (ev) => {
+        // Viewport pan (middle mouse)
+        if (vpDrag) {
+          const scale = Math.min(ec.width / SCENE_W, ec.height / SCENE_H) * vpZoom;
+          vpPanX = vpDrag.vpX0 + (ev.clientX - vpDrag.startX) / scale;
+          vpPanY = vpDrag.vpY0 + (ev.clientY - vpDrag.startY) / scale;
+          return;
         }
+        // Entity drag
+        if (!drag) return;
+        const rect = ec.getBoundingClientRect();
+        const s = canvasToScene(ev.clientX - rect.left, ev.clientY - rect.top, ec);
+        const e = entities.get(drag.id);
+        if (e) { e.x = drag.ex + (s.x - drag.sx); e.y = drag.ey + (s.y - drag.sy); }
       });
 
-      editCanvas.addEventListener('mouseup', () => { drag = null; });
-      editCanvas.addEventListener('mouseleave', () => { drag = null; });
+      window.addEventListener('mouseup', () => { drag = null; vpDrag = null; splitterDrag = false; document.getElementById('splitter').classList.remove('active'); });
+      ec.addEventListener('mouseleave', () => { drag = null; });
 
-      // ── Splitter drag ──
-      const splitter = document.getElementById('splitter');
-      const viewportArea = document.querySelector('.viewport-area');
-
-      splitter.addEventListener('mousedown', (ev) => {
-        splitterDrag = true;
-        splitter.classList.add('active');
+      // Viewport zoom (scroll wheel)
+      ec.addEventListener('wheel', (ev) => {
         ev.preventDefault();
-      });
+        const zoomFactor = ev.deltaY < 0 ? 1.1 : 1 / 1.1;
+        const newZoom = Math.max(0.1, Math.min(10, vpZoom * zoomFactor));
 
+        // Zoom toward mouse position
+        const rect = ec.getBoundingClientRect();
+        const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+        const s = canvasToScene(mx, my, ec);
+        vpZoom = newZoom;
+        // Adjust pan so scene point under mouse stays put
+        const s2 = canvasToScene(mx, my, ec);
+        vpPanX += (s2.x - s.x);
+        vpPanY += (s2.y - s.y);
+      }, { passive: false });
+
+      // Splitter
+      const splitter = document.getElementById('splitter');
+      splitter.addEventListener('mousedown', (ev) => { splitterDrag = true; splitter.classList.add('active'); ev.preventDefault(); });
       window.addEventListener('mousemove', (ev) => {
         if (!splitterDrag) return;
-        const areaRect = viewportArea.getBoundingClientRect();
-        const mouseX = ev.clientX - areaRect.left;
-        const totalW = areaRect.width - 6; // minus splitter
-
-        const camWrap = document.getElementById('cameraViewportWrap');
-        const newCamW = Math.max(200, Math.min(totalW - 200, totalW - mouseX));
-        camWrap.style.width = newCamW + 'px';
-
-        resizeEditCanvas();
-        fitCameraCanvas();
+        const area = document.querySelector('.viewport-area').getBoundingClientRect();
+        const camW = Math.max(200, Math.min(area.width - 250, area.width - (ev.clientX - area.left)));
+        document.getElementById('cameraViewportWrap').style.width = camW + 'px';
+        syncEditSize(); syncCamSize();
       });
 
-      window.addEventListener('mouseup', () => {
-        if (splitterDrag) {
-          splitterDrag = false;
-          splitter.classList.remove('active');
-        }
-      });
-
-      // ── Window resize ──
-      const ro = new ResizeObserver(() => {
-        resizeEditCanvas();
-        fitCameraCanvas();
-      });
+      // Resize observer
+      const ro = new ResizeObserver(() => { syncEditSize(); syncCamSize(); });
       ro.observe(document.getElementById('editViewportWrap'));
       ro.observe(document.getElementById('cameraCanvasContainer'));
     }
 
-    // ═══════════════════════════════════
-    // Particles
-    // ═══════════════════════════════════
-    function spawnParticles(n) {
-      for (let i = 0; i < n; i++) {
-        const t = i / n;
-        const id = addEntity('rect', {
-          x: SCENE_W / 2 + Math.cos(t * Math.PI * 2) * (200 + Math.random() * 400),
-          y: SCENE_H / 2 + Math.sin(t * Math.PI * 2) * (200 + Math.random() * 400),
-          width: 8 + Math.random() * 24,
-          height: 8 + Math.random() * 24,
-          color: [Math.random(), Math.random(), Math.random(), 0.4 + Math.random() * 0.6],
-          rotation: Math.random() * Math.PI * 2,
-          layer: 100 + entities.size,
-        });
-        // Each particle gets bounce animation
-        addBounceAnimation(id);
-      }
-      setStatus(`Spawned ${n} animated particles (total: ${entities.size})`);
-    }
-
-    // ═══════════════════════════════════
-    // UI Helpers
-    // ═══════════════════════════════════
+    // ═══ UI ═══
     function rand(a, b) { return a + Math.random() * (b - a); }
-    function rndColor() {
-      return [0.2 + Math.random() * 0.8, 0.2 + Math.random() * 0.8,
-              0.2 + Math.random() * 0.8, 1.0];
-    }
+    function rndColor() { return [.2 + Math.random() * .8, .2 + Math.random() * .8, .2 + Math.random() * .8, 1]; }
     function setStatus(s) { document.getElementById('mStatus').textContent = s; }
 
-    function refreshEntityList() {
-      const list = document.getElementById('entityList');
-      list.innerHTML = '';
+    function refreshList() {
+      const el = document.getElementById('entityList');
+      el.innerHTML = '';
       for (const [id, e] of entities) {
-        const div = document.createElement('div');
-        div.className = `entity-item${selectedId === id ? ' selected' : ''}`;
-        const hasAnim = animations.has(id) ? ' 🔄' : '';
-        const isCam = id === cameraEntityId ? ' 📷' : '';
-        div.innerHTML = `<span>${e.label || e.id}${hasAnim}${isCam}</span><span class="badge">${e.type}</span>`;
-        div.onclick = () => { selectedId = id; refreshEntityList(); refreshProps(); };
-        list.appendChild(div);
+        const d = document.createElement('div');
+        d.className = `entity-item${selectedId === id ? ' selected' : ''}`;
+        const ico = anims.has(id) ? ' 🔄' : id === cameraEntityId ? ' 📷' : '';
+        d.innerHTML = `<span>${e.label}${ico}</span><span class="badge">${e.type}</span>`;
+        d.onclick = () => { selectedId = id; refreshList(); refreshProps(); };
+        el.appendChild(d);
       }
     }
-
     function refreshProps() {
       const el = document.getElementById('propsContent');
-      if (!selectedId || !entities.has(selectedId)) {
-        el.innerHTML = '<p style="font-size:10px;color:#555;">Select an entity</p>';
-        return;
-      }
+      if (!selectedId || !entities.has(selectedId)) { el.innerHTML = '<p style="font-size:9px;color:#444">Select an entity</p>'; return; }
       const e = entities.get(selectedId);
       el.innerHTML = `
         <div class="prop-row"><label>X</label><input type="number" value="${e.x.toFixed(0)}" data-p="x"/></div>
@@ -887,23 +679,13 @@
         <div class="prop-row"><label>W</label><input type="number" value="${e.width.toFixed(0)}" data-p="width"/></div>
         <div class="prop-row"><label>H</label><input type="number" value="${e.height.toFixed(0)}" data-p="height"/></div>
         <div class="prop-row"><label>Rot</label><input type="number" step="0.1" value="${e.rotation.toFixed(2)}" data-p="rotation"/></div>
-        <div class="prop-row"><label>α</label><input type="number" step="0.05" min="0" max="1" value="${e.opacity.toFixed(2)}" data-p="opacity"/></div>
-      `;
+        <div class="prop-row"><label>α</label><input type="number" step="0.05" min="0" max="1" value="${e.opacity.toFixed(2)}" data-p="opacity"/></div>`;
       el.querySelectorAll('input').forEach(inp => {
-        inp.onchange = () => {
-          const e2 = entities.get(selectedId);
-          if (e2) e2[inp.dataset.p] = parseFloat(inp.value);
-        };
+        inp.onchange = () => { const e2 = entities.get(selectedId); if (e2) e2[inp.dataset.p] = parseFloat(inp.value); };
       });
     }
 
-    // ═══════════════════════════════════
-    // Start
-    // ═══════════════════════════════════
-    start().catch(e => {
-      console.error('Init failed:', e);
-      setStatus(`Error: ${e.message}`);
-    });
+    start().catch(e => { console.error(e); setStatus(`Error: ${e.message}`); });
   </script>
 </body>
 </html>
