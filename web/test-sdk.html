@@ -149,6 +149,8 @@
     let vpCenterX = SCENE_W / 2, vpCenterY = SCENE_H / 2;
     let vpZoom = 1;
     let renderScale = 1.0; // 0.25 – 1.0
+    // Track previous screen size for top-left-anchored resize
+    let prevScreenW = 0, prevScreenH = 0;
 
     // Animation (deterministic — absolute time)
     const anims = new Map();
@@ -197,21 +199,42 @@
     }
 
     // ═══ Canvas sizing ═══
-    // Key: viewport resize changes visible area (more/less world), NOT zoom.
-    // renderScale changes GPU backing resolution (quality) independently.
+    // Key: viewport resize anchors the TOP-LEFT corner.
+    // Entities stay the same pixel size. Only the field of view
+    // extends/shrinks on the right and bottom edges.
     function syncEditSize() {
       const wrap = document.getElementById('editViewportWrap');
       const c = document.getElementById('editCanvas');
       const o = document.getElementById('selectionOverlay');
-      // CSS size = display size (determines how much world is visible)
       const cssW = wrap.clientWidth, cssH = wrap.clientHeight;
+
+      // ── Anchor top-left: adjust center so left/top edge stays fixed ──
+      if (prevScreenW > 0 && prevScreenH > 0) {
+        // Current left/top edge in world units (what we want to preserve)
+        const oldVisW = prevScreenW / (PPU * vpZoom);
+        const oldVisH = prevScreenH / (PPU * vpZoom);
+        const leftEdge = vpCenterX - oldVisW / 2;
+        const topEdge  = vpCenterY - oldVisH / 2;
+
+        // New visible size at same zoom
+        const newVisW = cssW / (PPU * vpZoom);
+        const newVisH = cssH / (PPU * vpZoom);
+
+        // Recompute center so that left/top edge remains the same
+        vpCenterX = leftEdge + newVisW / 2;
+        vpCenterY = topEdge  + newVisH / 2;
+      }
+      prevScreenW = cssW;
+      prevScreenH = cssH;
+
+      // CSS size = display size
       c.style.width = cssW + 'px';
       c.style.height = cssH + 'px';
       // Backing size = GPU render target (renderScale controls quality)
       const backW = Math.round(cssW * renderScale);
       const backH = Math.round(cssH * renderScale);
       c.width = backW; c.height = backH;
-      // Selection overlay always at full CSS resolution for crisp lines
+      // Selection overlay at full CSS resolution for crisp lines
       o.width = cssW; o.height = cssH;
       if (editCore) editCore.resize(backW, backH);
       document.getElementById('editLabel').textContent = `Edit (${cssW}×${cssH} → ${backW}×${backH})`;
