@@ -87,9 +87,8 @@ export function flatten(
     // Texture references
     if (e.source && (e.type === 'image' || e.type === 'video')) {
       flat.textures = [e.source];
-      if (e.type === 'image') {
-        texUpdates.push({ LoadImage: { key: e.source, path: e.source } });
-      }
+      // Both image and video use LoadImage (video frames are cached as images)
+      texUpdates.push({ LoadImage: { key: e.source, path: e.source } });
     }
 
     flatEntities.push(flat);

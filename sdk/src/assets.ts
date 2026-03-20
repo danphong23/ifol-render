@@ -137,34 +137,56 @@ export class AssetManager {
 
   /**
    * Extract a single video frame as RGBA at the given timestamp.
-   * Seeks the video to the timestamp, draws to canvas, and caches in Core.
+   * Seeks the video to the timestamp, draws to canvas, and caches in Core
+   * as an encoded image (JPEG for speed). Uses reduced resolution for performance.
    */
   async extractVideoFrame(key: string, timestamp: number): Promise<void> {
     const asset = this.videos.get(key);
     if (!asset?.element) throw new Error(`Video '${key}' not loaded`);
 
     const video = asset.element;
-    const w = asset.pixelWidth;
-    const h = asset.pixelHeight;
+
+    // Skip if timestamp hasn't changed significantly
+    const lastTs = this.lastVideoTimestamp.get(key);
+    if (lastTs !== undefined && Math.abs(timestamp - lastTs) < 0.03) return;
+
+    // Reduced resolution for performance (max 640px width)
+    const maxW = 640;
+    const scale = Math.min(1, maxW / asset.pixelWidth);
+    const w = Math.round(asset.pixelWidth * scale);
+    const h = Math.round(asset.pixelHeight * scale);
 
     // Seek to timestamp
-    video.currentTime = Math.max(0, Math.min(timestamp, asset.duration));
+    const target = Math.max(0, Math.min(timestamp, asset.duration));
+    if (Math.abs(video.currentTime - target) > 0.05) {
+      video.currentTime = target;
+      await new Promise<void>((resolve) => {
+        const onSeeked = () => { video.removeEventListener('seeked', onSeeked); resolve(); };
+        video.addEventListener('seeked', onSeeked);
+        setTimeout(resolve, 100);
+      });
+    }
 
-    await new Promise<void>((resolve) => {
-      video.onseeked = () => resolve();
-      // If already at correct time, seeked won't fire
-      if (Math.abs(video.currentTime - timestamp) < 0.01) resolve();
-    });
+    // Reuse canvas for performance
+    if (!this.videoCanvas || this.videoCanvas.width !== w || this.videoCanvas.height !== h) {
+      this.videoCanvas = new OffscreenCanvas(w, h);
+      this.videoCtx = this.videoCanvas.getContext('2d')!;
+    }
 
-    // Draw to canvas and extract RGBA
-    const canvas = new OffscreenCanvas(w, h);
-    const ctx = canvas.getContext('2d')!;
-    ctx.drawImage(video, 0, 0, w, h);
-    const rgba = new Uint8Array(ctx.getImageData(0, 0, w, h).data.buffer);
+    this.videoCtx!.drawImage(video, 0, 0, w, h);
 
-    // Cache in Core
-    this.coreVideoCache?.(key, timestamp, rgba, w, h);
+    // Encode as JPEG (much faster than PNG)
+    const blob = await this.videoCanvas!.convertToBlob({ type: 'image/jpeg', quality: 0.7 });
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+
+    // Push as regular image cache (overwrites previous frame for this key)
+    this.coreCache?.(key, bytes);
+    this.lastVideoTimestamp.set(key, timestamp);
   }
+
+  private lastVideoTimestamp = new Map<string, number>();
+  private videoCanvas: OffscreenCanvas | null = null;
+  private videoCtx: OffscreenCanvasRenderingContext2D | null = null;
 
   getVideo(key: string): VideoAsset | undefined {
     return this.videos.get(key);
