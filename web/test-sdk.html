@@ -354,13 +354,24 @@
     }
 
     // ═══ Render (App pumps Frame JSON → Core) ═══
-    function renderFrame() {
+    async function renderFrame() {
       const t0 = performance.now();
       const time = timeline.currentTime;
       computeAnimations(time);
 
       // Sync camera entity → SDK BoundCamera
       syncCameraFromEntity();
+
+      // Extract video frames for current time (App responsibility)
+      for (const e of scene.allEntities()) {
+        if (e.type === 'video' && e.source) {
+          const va = assets.getVideo(e.source);
+          if (va) {
+            const localTime = Math.max(0, Math.min(time - e.startTime, va.duration));
+            try { await assets.extractVideoFrame(e.source, localTime); } catch (_) {}
+          }
+        }
+      }
 
       // SDK: produce Frame JSON
       if (editCore) editCore.render_frame(JSON.stringify(editView.flattenAt(time)));

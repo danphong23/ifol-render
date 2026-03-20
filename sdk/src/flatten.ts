@@ -35,6 +35,14 @@ export function flatten(
   const offsetX = (renderW - region.width * scale) / 2;
   const offsetY = (renderH - region.height * scale) / 2;
 
+  // Camera rotation: rotate entities around camera center (inverse)
+  const camRot = region.rotation || 0;
+  const cosR = Math.cos(-camRot);
+  const sinR = Math.sin(-camRot);
+  // Camera center in world units
+  const camCX = region.left + region.width / 2;
+  const camCY = region.top + region.height / 2;
+
   const flatEntities: FlatEntity[] = [];
   const texUpdates: TextureUpdate[] = [];
 
@@ -43,16 +51,29 @@ export function flatten(
 
   let idx = 0;
   for (const e of sorted) {
-    // Transform: unit → pixel
-    // If camera has rotation, we'd apply inverse rotation here.
-    // For now, rotation=0 regions use direct projection.
+    // Entity center in world units
+    let ecx = e.x + e.width / 2;
+    let ecy = e.y + e.height / 2;
+
+    // Apply inverse camera rotation around camera center
+    if (camRot !== 0) {
+      const dx = ecx - camCX;
+      const dy = ecy - camCY;
+      ecx = camCX + dx * cosR - dy * sinR;
+      ecy = camCY + dx * sinR + dy * cosR;
+    }
+
+    // Project rotated center to pixel space
+    const px = (ecx - e.width / 2 - region.left) * scale + offsetX;
+    const py = (ecy - e.height / 2 - region.top) * scale + offsetY;
+
     const flat: FlatEntity = {
       id: idx++,
-      x: (e.x - region.left) * scale + offsetX,
-      y: (e.y - region.top) * scale + offsetY,
+      x: px,
+      y: py,
       width: e.width * scale,
       height: e.height * scale,
-      rotation: e.rotation,
+      rotation: e.rotation - camRot, // combine entity + inverse camera rotation
       opacity: e.opacity,
       blend_mode: blendModeToInt(e.blendMode),
       color: e.color,
@@ -69,7 +90,6 @@ export function flatten(
       if (e.type === 'image') {
         texUpdates.push({ LoadImage: { key: e.source, path: e.source } });
       }
-      // Video: UploadRgba handled by AssetManager before flatten
     }
 
     flatEntities.push(flat);
