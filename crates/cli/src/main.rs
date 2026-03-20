@@ -22,6 +22,39 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Export a scene JSON to video using FFmpeg (for backend/headless use).
+    ///
+    /// Example: ifol-render export --scene scene.json --ffmpeg /path/to/ffmpeg --output video.mp4
+    Export {
+        /// Path to scene JSON file (contains settings, frames, and optional audio_clips).
+        #[arg(short, long)]
+        scene: PathBuf,
+        /// Output video file path.
+        #[arg(short, long, default_value = "output.mp4")]
+        output: String,
+        /// Path to FFmpeg binary. If omitted, searches system PATH.
+        #[arg(long)]
+        ffmpeg: Option<String>,
+        /// Video codec: h264, h265, vp9, prores, png
+        #[arg(long, default_value = "h264")]
+        codec: String,
+        /// Constant Rate Factor (quality). Lower = better. Range: 0–51.
+        #[arg(long, default_value = "23")]
+        crf: u32,
+        /// Encoding preset: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+        #[arg(long, default_value = "medium")]
+        preset: String,
+        /// Pixel format for FFmpeg.
+        #[arg(long, default_value = "yuv420p")]
+        pixel_format: String,
+        /// Override output width (default: from scene settings).
+        #[arg(long)]
+        width: Option<u32>,
+        /// Override output height (default: from scene settings).
+        #[arg(long)]
+        height: Option<u32>,
+    },
+
     /// Render a Frame JSON file to PNG using CoreEngine.
     FrameRender {
         /// Path to Frame JSON file.
@@ -54,6 +87,144 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Export {
+            scene,
+            output,
+            ffmpeg,
+            codec,
+            crf,
+            preset,
+            pixel_format,
+            width,
+            height,
+        } => {
+            eprintln!("ifol-render export: {:?} → {}", scene, output);
+
+            // Read and parse scene JSON
+            let json = std::fs::read_to_string(&scene).unwrap_or_else(|e| {
+                eprintln!("Failed to read {:?}: {}", scene, e);
+                std::process::exit(1);
+            });
+
+            let doc: serde_json::Value = serde_json::from_str(&json).unwrap_or_else(|e| {
+                eprintln!("Invalid JSON: {}", e);
+                std::process::exit(1);
+            });
+
+            // Parse settings
+            let settings: ifol_render_core::RenderSettings = doc
+                .get("settings")
+                .map(|s| serde_json::from_value(s.clone()).unwrap_or_else(|e| {
+                    eprintln!("Invalid settings: {}", e);
+                    std::process::exit(1);
+                }))
+                .unwrap_or_default();
+
+            // Parse frames
+            let frames: Vec<ifol_render_core::Frame> = doc
+                .get("frames")
+                .map(|f| serde_json::from_value(f.clone()).unwrap_or_else(|e| {
+                    eprintln!("Invalid frames: {}", e);
+                    std::process::exit(1);
+                }))
+                .unwrap_or_else(|| {
+                    eprintln!("Missing 'frames' array in scene JSON");
+                    std::process::exit(1);
+                });
+
+            // Parse audio clips (optional)
+            let audio_clips: Vec<ifol_render_core::AudioClip> = doc
+                .get("audio_clips")
+                .map(|a| serde_json::from_value(a.clone()).unwrap_or_else(|e| {
+                    eprintln!("Warning: Invalid audio_clips: {}", e);
+                    Vec::new()
+                }))
+                .unwrap_or_default();
+
+            // Parse codec
+            let video_codec = ifol_render_core::export::VideoCodec::parse_codec(&codec)
+                .unwrap_or_else(|| {
+                    eprintln!("Unknown codec '{}'. Available: h264, h265, vp9, prores, png", codec);
+                    std::process::exit(1);
+                });
+
+            let total = frames.len();
+            let out_w = width.unwrap_or(settings.width);
+            let out_h = height.unwrap_or(settings.height);
+            let fps = settings.fps;
+
+            eprintln!(
+                "Scene: {}x{} @ {}fps, {} frames, {} audio clips",
+                out_w, out_h, fps, total, audio_clips.len()
+            );
+            eprintln!(
+                "Export: codec={}, crf={}, preset={}, pix_fmt={}",
+                video_codec.encoder_name(), crf, preset, pixel_format
+            );
+
+            // Create headless CoreEngine
+            let render_settings = ifol_render_core::RenderSettings {
+                width: out_w,
+                height: out_h,
+                fps,
+                ..Default::default()
+            };
+            let mut engine = ifol_render_core::CoreEngine::new(render_settings);
+            engine.setup_builtins();
+
+            if let Some(ref fp) = ffmpeg {
+                engine.set_ffmpeg_path(fp);
+            }
+
+            let caps = engine.capabilities();
+            eprintln!("GPU: {} ({})", caps.gpu_name, caps.backend);
+
+            // Build export config
+            let export_config = ifol_render_core::export::ExportConfig {
+                output_path: output.clone(),
+                codec: video_codec,
+                pixel_format,
+                crf,
+                preset: Some(preset),
+                fps: Some(fps),
+                width: Some(out_w),
+                height: Some(out_h),
+                ffmpeg_path: ffmpeg,
+            };
+
+            let start = std::time::Instant::now();
+
+            // Run export
+            match engine.export_video(
+                frames.into_iter(),
+                total,
+                &audio_clips,
+                &export_config,
+                |prog| {
+                    eprint!(
+                        "\rFrame {}/{} ({:.1}%) | {:.1} fps | ETA: {:.0}s   ",
+                        prog.current_frame,
+                        prog.total_frames,
+                        prog.percent(),
+                        prog.export_fps,
+                        prog.eta_seconds
+                    );
+                    true // never cancel from CLI
+                },
+            ) {
+                Ok(()) => {
+                    let elapsed = start.elapsed().as_secs_f64();
+                    eprintln!("\nExport complete: {} ({:.1}s)", output, elapsed);
+                    // Print success to stdout for machine parsing
+                    println!("{}", output);
+                }
+                Err(err) => {
+                    eprintln!("\nExport failed: {}", err);
+                    std::process::exit(1);
+                }
+            }
+        }
+
         Commands::FrameRender { frame, output } => {
             println!("Frame render: {:?} → {:?}", frame, output);
 
