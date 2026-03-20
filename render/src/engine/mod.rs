@@ -169,12 +169,25 @@ impl GpuEngine {
     }
 
     /// Readback pixels from output texture to CPU.
+    /// Returns pixels in RGBA byte order regardless of the GPU texture format.
     pub fn readback_output(&self) -> Vec<u8> {
         let texture = self.output_texture.as_ref().unwrap();
-        self.readback_texture(texture, self.width, self.height)
+        let mut pixels = self.readback_texture(texture, self.width, self.height);
+
+        // GPU texture may be BGRA — convert readback to RGBA for consumers
+        if matches!(
+            self.texture_format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        ) {
+            for chunk in pixels.chunks_exact_mut(4) {
+                chunk.swap(0, 2); // B ↔ R
+            }
+        }
+
+        pixels
     }
 
-    /// Readback pixels from any GPU texture to CPU.
+    /// Readback pixels from any GPU texture to CPU (raw bytes, no format conversion).
     pub fn readback_texture(&self, texture: &wgpu::Texture, width: u32, height: u32) -> Vec<u8> {
         let padded_bytes_per_row = Self::padded_bytes_per_row(width);
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
