@@ -123,7 +123,42 @@ async function preloadAllSceneAssets(scene) {
     statusTxt.innerText = `Assets loaded. Ready to play.`;
 }
 
-// ── Pre-cache video frames for a specific frame ──
+// ── Fire-and-forget video frame decode (non-blocking) ──
+// Starts decoding in background without blocking the render loop.
+// Returns immediately — frame will be available for next render cycle.
+function startVideoFrameDecode(frameData) {
+    for (const update of frameData.texture_updates) {
+        if (update.DecodeVideoFrame) {
+            const path = update.DecodeVideoFrame.path;
+            const time = update.DecodeVideoFrame.timestamp_secs;
+            const w = update.DecodeVideoFrame.width || null;
+            const h = update.DecodeVideoFrame.height || null;
+            const cacheKey = `${path}@${time}`;
+            if (!cachedVideoFrames.has(cacheKey)) {
+                // Fire-and-forget — don't await
+                extractVideoFrame(path, time, w, h).then(result => {
+                    if (result) {
+                        renderer.cache_video_frame(path, time, new Uint8Array(result.data.buffer), result.width, result.height);
+                        cachedVideoFrames.add(cacheKey);
+                    }
+                }).catch(e => console.warn(`Video frame extract failed:`, e));
+            }
+        }
+    }
+}
+
+// ── Pre-buffer upcoming frames (background decode) ──
+const PREBUFFER_COUNT = 3;
+function prebufferAhead() {
+    for (let i = 1; i <= PREBUFFER_COUNT; i++) {
+        const futureIdx = currentFrame + i;
+        if (futureIdx < totalFrames) {
+            startVideoFrameDecode(sceneJson.frames[futureIdx]);
+        }
+    }
+}
+
+// ── Blocking video frame decode (for scrubbing / single-frame viewing) ──
 async function preloadFrameVideoFrames(frameData) {
     const promises = [];
     for (const update of frameData.texture_updates) {
@@ -149,25 +184,28 @@ async function preloadFrameVideoFrames(frameData) {
 }
 
 // ── Render the current frame ──
-async function renderCurrentFrame() {
+// When blocking=true (scrubbing), waits for video frames.
+// When blocking=false (playback), renders immediately with whatever is cached.
+async function renderCurrentFrame(blocking = true) {
     if (!renderer || !sceneJson) return;
     
     const frameData = sceneJson.frames[currentFrame];
     if (!frameData) return;
 
-    statusTxt.innerText = `Rendering Frame ${currentFrame}...`;
-    
-    // Only video frames need per-frame pre-load (images/fonts already cached at scene load)
-    await preloadFrameVideoFrames(frameData);
+    if (blocking) {
+        // Scrubbing / single-frame: wait for video frames
+        await preloadFrameVideoFrames(frameData);
+    } else {
+        // Playback: fire-and-forget decode, render immediately
+        startVideoFrameDecode(frameData);
+    }
     
     // Scene export resolution (pixel coords are authored at this size)
     const sceneW = sceneJson.settings?.width || 1920;
     const sceneH = sceneJson.settings?.height || 1080;
     
     try {
-        // render_frame_scaled auto-scales coords from export res → current engine res
         renderer.render_frame_scaled(JSON.stringify(frameData), sceneW, sceneH);
-        statusTxt.innerText = `Frame ${currentFrame} / ${totalFrames - 1}`;
         frameCounter.innerText = `${currentFrame} / ${totalFrames - 1}`;
         timeline.value = currentFrame;
     } catch (e) {
@@ -181,22 +219,31 @@ function stopPlayback() {
     isPlaying = false;
     playBtn.innerText = "Play";
     if (playLoopId) {
-        clearTimeout(playLoopId);
+        cancelAnimationFrame(playLoopId);
         playLoopId = null;
     }
 }
 
-async function playLoop() {
+// rAF-based playback loop with proper FPS timing
+let lastFrameTime = 0;
+function playLoop(timestamp) {
     if (!isPlaying) return;
-    if (currentFrame >= totalFrames - 1) {
-        stopPlayback();
-        return;
+    
+    const fps = sceneJson.settings?.fps || 30;
+    const frameDuration = 1000.0 / fps;
+    
+    if (timestamp - lastFrameTime >= frameDuration) {
+        if (currentFrame >= totalFrames - 1) {
+            stopPlayback();
+            return;
+        }
+        currentFrame++;
+        renderCurrentFrame(false); // non-blocking for smooth playback
+        prebufferAhead(); // decode next frames in background
+        lastFrameTime = timestamp;
     }
-    currentFrame++;
-    await renderCurrentFrame();
-    if (isPlaying) {
-        playLoopId = setTimeout(playLoop, 33);
-    }
+    
+    playLoopId = requestAnimationFrame(playLoop);
 }
 
 // ── Bootstrap ──
@@ -264,7 +311,8 @@ async function bootstrap() {
             if (currentFrame >= totalFrames - 1) currentFrame = 0;
             isPlaying = true;
             playBtn.innerText = "Pause";
-            playLoop();
+            lastFrameTime = performance.now();
+            playLoopId = requestAnimationFrame(playLoop);
         }
     });
 
