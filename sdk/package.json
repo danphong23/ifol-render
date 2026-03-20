@@ -1,14 +1,17 @@
 {
   "name": "ifol-render-sdk",
-  "version": "0.1.0",
-  "description": "High-level SDK for ifol-render — scene model, batch streaming, viewport, asset management",
+  "version": "0.2.0",
+  "description": "GPU-accelerated 2D rendering SDK for web. Unit coordinate system, multi-viewport, resolution scaling.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist"],
+  "files": ["dist", "README.md"],
   "scripts": {
-    "build": "tsc",
+    "build:wasm": "cd ../crates/wasm && wasm-pack build --target web --release",
+    "build:ts": "tsc",
+    "build": "npm run build:ts",
     "dev": "tsc --watch",
+    "check": "tsc --noEmit",
     "test": "node --test dist/tests/"
   },
   "dependencies": {
@@ -17,5 +20,6 @@
   "devDependencies": {
     "typescript": "^5.4.0"
   },
-  "license": "MIT OR Apache-2.0"
+  "keywords": ["rendering", "webgpu", "wasm", "2d", "video-editor", "gpu"],
+  "license": "MIT"
 }
