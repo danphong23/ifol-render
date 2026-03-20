@@ -128,7 +128,7 @@
     // ═══ Constants (scene in "units" — maps to export resolution) ═══
     const SCENE_W = 1920, SCENE_H = 1080, FPS = 30, DURATION = 10;
     const ASSET_BASE = 'http://localhost:8000/asset?path=';
-    const CAM_BORDER = 12; // pixels — how thick the camera border hit zone is
+    const CAM_BORDER = 12;
 
     // ═══ State ═══
     let editRenderer = null, cameraRenderer = null;
@@ -137,16 +137,15 @@
     let playing = false, currentTime = 0;
     let playStartWall = 0, playStartTime = 0;
     let cameraEntityId = null;
-
-    // Animation registry: entityId → { type, ...params, t0 (start time) }
     const anims = new Map();
-
-    // Viewport transform (edit viewport only)
     let vpZoom = 1, vpPanX = 0, vpPanY = 0;
-
-    // Interaction state
     let drag = null, splitterDrag = false, vpDrag = null;
     let fpsCount = 0, lastFpsTick = 0, lastRenderMs = 0;
+
+    // Asset cache tracking (which paths are already cached in WASM)
+    const cachedAssets = new Set();
+    // Video elements for frame extraction
+    const videoElements = new Map(); // path → { video, canvas, ctx }
 
     // ═══ Init ═══
     async function start() {
@@ -351,14 +350,17 @@
           z_index: 0,
         });
 
-        if (e.type === 'image' && e.source) {
-          const k = `img_${e.id}`;
-          texUp.push({ LoadImage: { key: k, path: e.source } });
-          flatEnts[flatEnts.length - 1].textures = [k];
+        if (e.type === 'image' && e.source && cachedAssets.has(e.source)) {
+          // Use source path as key — matches what cache_image stored
+          texUp.push({ LoadImage: { key: e.source, path: e.source } });
+          flatEnts[flatEnts.length - 1].textures = [e.source];
         } else if (e.type === 'video' && e.source) {
-          const k = `vid_${e.id}`;
-          texUp.push({ DecodeVideoFrame: { key: k, path: e.source, timestamp_secs: time - e.startTime } });
-          flatEnts[flatEnts.length - 1].textures = [k];
+          // Extract video frame and upload as RGBA
+          extractVideoFrame(e.source, time - e.startTime);
+          const vk = `vidframe_${e.source}`;
+          if (cachedAssets.has(vk)) {
+            flatEnts[flatEnts.length - 1].textures = [vk];
+          }
         }
       }
 
@@ -507,21 +509,28 @@
       document.getElementById('btnAddImage').onclick = async () => {
         const p = document.getElementById('assetUrl').value.trim();
         if (!p) return alert('Enter asset path');
-        addEntity('image', { source: p, width: 400, height: 300 });
+        setStatus(`Loading image: ${p}`);
         try {
           const res = await fetch(`${ASSET_BASE}${encodeURIComponent(p)}`);
-          if (res.ok) {
-            const buf = new Uint8Array(await res.arrayBuffer());
-            editRenderer.cache_image(p, buf);
-            cameraRenderer.cache_image(p, buf);
-            setStatus(`Cached: ${p}`);
-          }
-        } catch (e) { setStatus(`Error: ${e.message}`); }
+          if (!res.ok) { setStatus(`Image not found: ${p}`); return; }
+          const buf = new Uint8Array(await res.arrayBuffer());
+          // Cache into BOTH renderers under the source path
+          editRenderer.cache_image(p, buf);
+          cameraRenderer.cache_image(p, buf);
+          cachedAssets.add(p);
+          addEntity('image', { source: p, width: 400, height: 300 });
+          setStatus(`Image loaded: ${p}`);
+        } catch (e) { setStatus(`Error loading image: ${e.message}`); }
       };
-      document.getElementById('btnAddVideo').onclick = () => {
+      document.getElementById('btnAddVideo').onclick = async () => {
         const p = document.getElementById('assetUrl').value.trim();
         if (!p) return alert('Enter asset path');
-        addEntity('video', { source: p, width: 640, height: 360 });
+        setStatus(`Loading video: ${p}`);
+        try {
+          await setupVideoElement(p);
+          addEntity('video', { source: p, width: 640, height: 360 });
+          setStatus(`Video loaded: ${p}`);
+        } catch (e) { setStatus(`Error loading video: ${e.message}`); }
       };
       document.getElementById('btnParticles').onclick = () => spawnParticles(parseInt(document.getElementById('particleCount').value) || 100);
       document.getElementById('btnAnimEntity').onclick = () => {
@@ -650,6 +659,45 @@
       const ro = new ResizeObserver(() => { syncEditSize(); syncCamSize(); });
       ro.observe(document.getElementById('editViewportWrap'));
       ro.observe(document.getElementById('cameraCanvasContainer'));
+    }
+
+    // ═══ Video Frame Extraction ═══
+    async function setupVideoElement(path) {
+      if (videoElements.has(path)) return;
+      const url = `${ASSET_BASE}${encodeURIComponent(path)}`;
+      const video = document.createElement('video');
+      video.crossOrigin = 'anonymous';
+      video.preload = 'auto';
+      video.muted = true;
+      video.src = url;
+      await new Promise((resolve, reject) => {
+        video.onloadeddata = resolve;
+        video.onerror = () => reject(new Error(`Failed to load video: ${path}`));
+        setTimeout(() => reject(new Error('Video load timeout')), 10000);
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 360;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      videoElements.set(path, { video, canvas, ctx });
+    }
+
+    function extractVideoFrame(path, timestamp) {
+      const ve = videoElements.get(path);
+      if (!ve) return;
+      const { video, canvas, ctx } = ve;
+      // Seek video to timestamp (async, best-effort)
+      if (Math.abs(video.currentTime - timestamp) > 0.05) {
+        video.currentTime = Math.max(0, Math.min(timestamp, video.duration - 0.01));
+      }
+      // Draw current frame to canvas and extract RGBA
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const vk = `vidframe_${path}`;
+      // Upload RGBA to both renderers
+      editRenderer.load_rgba(vk, imageData.data, canvas.width, canvas.height);
+      cameraRenderer.load_rgba(vk, imageData.data, canvas.width, canvas.height);
+      cachedAssets.add(vk);
     }
 
     // ═══ UI ═══
