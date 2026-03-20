@@ -358,6 +358,9 @@ impl Renderer {
     }
 
     /// Load raw RGBA bytes as a texture.
+    ///
+    /// Input data is always RGBA byte order. If the GPU surface format is BGRA,
+    /// this method swaps R↔B channels before uploading to maintain correct colors.
     pub fn load_rgba(&mut self, key: &str, data: &[u8], width: u32, height: u32) {
         let size_bytes = (width as u64) * (height as u64) * 4;
 
@@ -374,10 +377,26 @@ impl Renderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: self.engine.data_texture_format,
+            format: self.engine.texture_format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
+
+        // Swap RGBA → BGRA if GPU surface format expects BGRA byte order.
+        // This is the case on WebGPU (Chrome/Edge) where surface is Bgra8Unorm.
+        let needs_swap = matches!(
+            self.engine.texture_format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        );
+
+        let upload_data;
+        let final_data = if needs_swap {
+            upload_data = rgba_to_bgra(data);
+            &upload_data[..]
+        } else {
+            data
+        };
+
         self.engine.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -385,7 +404,7 @@ impl Renderer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            data,
+            final_data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * width),
@@ -427,6 +446,19 @@ impl Renderer {
         if let Some(entry) = self.texture_cache.get_mut(key) {
             let expected_size = (width as u64) * (height as u64) * 4;
             if entry.size_bytes == expected_size {
+                // Swap RGBA → BGRA if needed (same logic as load_rgba)
+                let needs_swap = matches!(
+                    self.engine.texture_format,
+                    wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+                );
+                let upload_data;
+                let final_data = if needs_swap {
+                    upload_data = rgba_to_bgra(data);
+                    &upload_data[..]
+                } else {
+                    data
+                };
+
                 // Same dimensions — just update the data (fast path)
                 self.engine.queue.write_texture(
                     wgpu::TexelCopyTextureInfo {
@@ -435,7 +467,7 @@ impl Renderer {
                         origin: wgpu::Origin3d::ZERO,
                         aspect: wgpu::TextureAspect::All,
                     },
-                    data,
+                    final_data,
                     wgpu::TexelCopyBufferLayout {
                         offset: 0,
                         bytes_per_row: Some(4 * width),
@@ -1127,4 +1159,19 @@ impl Renderer {
         log::info!("Saved PNG: {} ({}x{})", path, width, height);
         Ok(())
     }
+}
+
+// ══════════════════════════════════════
+// Color channel swap helpers
+// ══════════════════════════════════════
+
+/// Swap R and B channels in RGBA pixel data → BGRA byte order.
+/// Used when GPU surface format is BGRA but input data is RGBA.
+#[inline]
+fn rgba_to_bgra(data: &[u8]) -> Vec<u8> {
+    let mut out = data.to_vec();
+    for chunk in out.chunks_exact_mut(4) {
+        chunk.swap(0, 2); // R ↔ B
+    }
+    out
 }
