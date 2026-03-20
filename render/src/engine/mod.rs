@@ -14,8 +14,11 @@ pub struct GpuEngine {
     pub queue: wgpu::Queue,
     pub width: u32,
     pub height: u32,
-    /// Preferred format for the surface/display (pipelines must match this).
+    /// Preferred format for the surface/display (pipelines and render targets must match this).
     pub texture_format: wgpu::TextureFormat,
+    /// Format for uploaded data textures (images, video frames, text).
+    /// Always Rgba8UnormSrgb — matches RGBA byte order of source data.
+    pub data_texture_format: wgpu::TextureFormat,
     /// Output texture for headless rendering.
     pub output_texture: Option<wgpu::Texture>,
     /// WebGPU canvas surface (for target_arch = "wasm32").
@@ -62,6 +65,7 @@ impl GpuEngine {
             width,
             height,
             texture_format: format,
+            data_texture_format: wgpu::TextureFormat::Rgba8UnormSrgb,
             output_texture,
             surface: None,
         }
@@ -130,6 +134,7 @@ impl GpuEngine {
             width,
             height,
             texture_format: format,
+            data_texture_format: wgpu::TextureFormat::Rgba8UnormSrgb,
             output_texture: None,
             surface: Some(surface),
         }
