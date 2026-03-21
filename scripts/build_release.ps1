@@ -28,7 +28,7 @@ cargo build --release -p ifol-render-studio
 
 $BinDir = "$ReleaseDir\ifol-render-windows-x64"
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-Copy-Item "target\release\ifol-render-cli.exe" -Destination $BinDir
+Copy-Item "target\release\ifol-render.exe" -Destination $BinDir
 Copy-Item "target\release\ifol-render-studio.exe" -Destination $BinDir
 Compress-Archive -Path "$BinDir\*" -DestinationPath "$ReleaseDir\ifol-render-windows-x64.zip" -Force
 Write-Host "  -> $ReleaseDir\ifol-render-windows-x64.zip" -ForegroundColor Green

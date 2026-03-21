@@ -59,3 +59,6 @@ examples/comprehensive_test.json
 
 # Duplicate font (canonical copy in assets/fonts/)
 examples/NotoSans-Regular.ttf
+
+# Release build output
+release_builds/
