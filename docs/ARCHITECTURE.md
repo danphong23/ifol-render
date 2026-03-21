@@ -56,10 +56,11 @@ The system follows a **3-layer architecture** where each layer has a single resp
 |-------|------|---------|
 | `ifol-render` | lib | GPU render tool — pure draw command executor |
 | `ifol-render-core` | lib | Core engine — textures, shaders, video decode, export |
-| `ifol-render-studio` | bin | Desktop GUI editor (egui/Vulkan) |
+| `ifol-audio` | lib | Audio mixing, effects, and muxing (standalone) |
+| `ifol-render-studio` | bin | Desktop GUI editor (egui/wgpu) |
 | `ifol-render-cli` | bin | Headless CLI — render, export, test |
 | `ifol-render-wasm` | cdylib | WASM target for browser via WebGPU |
-| `server` | bin | (stub) Future server-side rendering |
+| `ifol-render-server` | bin | HTTP server for web asset serving |
 
 ## Design Principles
 

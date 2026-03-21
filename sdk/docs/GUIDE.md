@@ -14,7 +14,7 @@ YOUR APP (you decide everything)
 SDK TOOLKIT (pure data transforms)
   ● DrawableEntity — pixel-space element
   ● FrameBuilder — composable frame assembly
-  ● AudioClipBuilder — audio clip data for export
+  ● AudioScene — audio track & clip management
   ● flatten() — Entity[] + Camera → Frame
   ● AssetManager — image/video load & cache
   ↓ Frame JSON
@@ -157,15 +157,24 @@ async function doExport() {
 
 ### Export Audio (Core handles via FFmpeg)
 ```ts
-import { AudioClipBuilder, buildExportPayload } from 'ifol-render-sdk';
+import { AudioScene, buildExportPayload } from 'ifol-render-sdk';
 
-const bgm = new AudioClipBuilder('C:/music/bgm.mp3')
-  .setVolume(0.8).setFadeIn(1.0).setFadeOut(2.0);
+const audio = new AudioScene();
+audio.addClip({
+  source: 'music.mp3',
+  startTime: 0,
+  volume: 0.8,
+  fadeIn: 1.0,
+  fadeOut: 2.0,
+}, 'bgm');
 
-const sfx = new AudioClipBuilder('C:/sfx/boom.wav')
-  .setStartTime(3.5).setDuration(1.0);
+audio.addClip({
+  source: 'sfx/boom.wav',
+  startTime: 3.5,
+  duration: 1.0,
+}, 'sfx');
 
-const payload = buildExportPayload(config, frames, [bgm, sfx]);
+const payload = buildExportPayload(config, frames, audio.flattenForExport());
 ```
 
 ### Preview Audio (App handles via Web Audio API)

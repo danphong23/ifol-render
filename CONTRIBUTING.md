@@ -19,28 +19,32 @@ Thank you for your interest in contributing! We welcome all contributions — bu
 
 - [Rust](https://rustup.rs/) 1.85+ (stable)
 - GPU with Vulkan/DX12/Metal driver
+- [FFmpeg](https://ffmpeg.org/) (for video export)
 
 ### Build
 
 ```bash
 cargo build --workspace        # Build all crates
-cargo run -p ifol-render-editor  # Run the editor
+cargo run -p ifol-render-studio  # Run the Studio GUI
 cargo test --workspace         # Run all tests
 ```
 
 ### Shader Development
 
-Shaders in `shaders/` are loaded at runtime. Edit → save → restart (or hot-reload when implemented).
+Shaders in `shaders/` are WGSL files loaded at compile time via `include_str!()`. Edit → save → rebuild.
 
 ## Project Structure
 
 | Crate | Purpose |
 |---|---|
-| `crates/core` | ECS, components, systems, datatypes, color management |
-| `crates/gpu` | wgpu engine, render graph, resource manager |
-| `crates/wasm` | WASM target for browser integration |
-| `crates/cli` | CLI rendering tool |
-| `editor` | Standalone GUI editor (egui) |
+| `render/` | wgpu GPU executor — pure draw command execution |
+| `core/` | Core engine — shaders, textures, video decode, export pipeline |
+| `audio/` | Audio mixing and muxing (standalone crate) |
+| `studio/` | Desktop GUI editor (egui + wgpu) |
+| `crates/cli/` | Headless CLI — render, export, GPU tests |
+| `crates/wasm/` | WASM target for browser (WebGPU) |
+| `crates/server/` | HTTP server for web asset serving |
+| `sdk/` | TypeScript SDK — produces Frame JSON for Core |
 
 ## Coding Guidelines
 
@@ -63,27 +67,26 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 - `test:` — adding tests
 - `chore:` — maintenance
 
+### Adding a New Shader
+
+1. Create `shaders/my_shader.wgsl` with vertex + fragment shader
+2. Register in `core/src/lib.rs` → `setup_builtins()` using `register_pipeline()` or `register_effect()`
+3. Use in Frame JSON: `entity.shader = "my_shader"`
+4. No render crate changes needed — render is shader-agnostic
+
 ### Adding a New Effect
 
-1. Create `shaders/my_effect.wgsl` with the fragment shader
-2. Create `crates/gpu/src/passes/my_effect.rs` implementing `RenderPass`
-3. Register in `crates/gpu/src/passes/mod.rs`
-4. Add tests
-
-### Adding a New Component
-
-1. Add component struct in `crates/core/src/ecs/components.rs`
-2. Add field to `Components` struct in `crates/core/src/ecs/mod.rs`
-3. Add system in `crates/core/src/ecs/systems.rs` if needed
-4. Register in pipeline in `crates/core/src/ecs/pipeline.rs`
+1. Create `shaders/effects/my_effect.wgsl` with fullscreen fragment shader
+2. Register via `renderer.register_effect("my_effect", wgsl, params, pass_count)`
+3. Use via `EffectConfig { effect_type: "my_effect", params: {...} }`
 
 ## Pull Request Process
 
 1. Ensure `cargo check --workspace` passes
 2. Ensure `cargo test --workspace` passes
 3. Ensure `cargo clippy --workspace` has no warnings
-4. Update documentation if needed
-5. Add yourself to contributors (optional)
+4. Ensure `cargo fmt --all -- --check` passes
+5. Update documentation if needed
 
 ## Code of Conduct
 

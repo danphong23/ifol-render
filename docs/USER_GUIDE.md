@@ -38,7 +38,7 @@ cargo run -p ifol-render-studio
 - **Timeline Scrubbing**: Drag the slider at the bottom panel to instantly jump to a specific frame. The audio decoder will hot-seek to match the visual frame perfectly using native FFmpeg byte-seeking. Note that frame-seeking heavily depends on codec keyframes.
 
 ### Background Video Textures (Missing Video Issue)
-If your `DecodeVideoFrame` background texture renders as a **blank white screen**:
+If your video background fails to render (appears as a **blank white screen**):
 1. Check that FFmpeg is installed and accessible in the system PATH.
 2. If FFmpeg is installed in a custom location, click the **Export** button and fill in the absolute path to your `ffmpeg.exe` binary in the configuration window.
 
@@ -57,13 +57,17 @@ If your `DecodeVideoFrame` background texture renders as a **blank white screen*
 
 The `ifol-render-cli` crate operates entirely headless via terminal commands and is ideal for server farm orchestration or CI/CD testing.
 
-### Frame Array Subsets
-Given a massive JSON file spanning an entire continuous movie, the CLI tool reads a specific frame structure object.
-
 ### Basic Export Command
+```bash
+cargo run --release -p ifol-render-cli -- export --scene path/to/scene.json --output exported.mp4
+```
+
+### Single Frame Render
 ```bash
 cargo run --release -p ifol-render-cli -- frame-render --frame path/to/frame.json --output exported.png
 ```
+
+See [CLI_GUIDE.md](CLI_GUIDE.md) for full command reference.
 
 ## 4. Troubleshooting
 - **wgpu Panic / Validation Error**: Check that your graphics drivers support Vulkan 1.2+ or DirectX 12. If running on ancient hardware, set `WGPU_BACKEND=gl` to fallback to OpenGL, though Zero-Copy pass capabilities may be degraded.

@@ -38,31 +38,35 @@ cargo run -p ifol-render-studio
 ### CLI Usage
 
 ```bash
-# Show scene info
-cargo run -p ifol-render-cli -- info -s examples/test_render.json
-
-# Preview a frame at timestamp 2.5s
-cargo run -p ifol-render-cli -- preview -s examples/test_render.json -t 2.5 -o preview.png
-
 # Export video (H264)
-cargo run -p ifol-render-cli -- export -s examples/test_render.json -o output.mp4 -c h264
+cargo run -p ifol-render-cli -- export -s examples/test_render.json -o output.mp4
 
-# Export with custom FFmpeg path
-cargo run -p ifol-render-cli -- export -s examples/test_render.json -o output.mp4 --ffmpeg path/to/ffmpeg
+# Export with custom FFmpeg path and codec
+cargo run -p ifol-render-cli -- export -s scene.json -o output.mp4 --ffmpeg path/to/ffmpeg --codec h264 --crf 18
+
+# Render a single frame to PNG
+cargo run -p ifol-render-cli -- frame-render --frame frame.json --output preview.png
+
+# GPU render test
+cargo run -p ifol-render-cli -- render-test --test basic --output test.png
 ```
 
 ## Architecture
 
 ```
 ifol-render/
-├── core/           ECS, components, systems, scene API, color, export pipeline
-├── render/         wgpu GPU engine, render graph, resource manager, passes
-├── studio/         Professional GUI editor (egui + egui_tiles)
+├── render/         wgpu GPU engine — pure draw command executor
+├── core/           Core engine — shaders, textures, video decode, export
+├── audio/          Audio mixing and muxing (standalone crate)
+├── studio/         Professional GUI editor (egui + wgpu)
 ├── crates/
-│   ├── cli/        Command-line rendering and export tool
-│   └── wasm/       WebAssembly target for browser integration
+│   ├── cli/        Headless CLI — render, export, GPU tests
+│   ├── wasm/       WebAssembly target for browser (WebGPU)
+│   └── server/     HTTP server for web assets
+├── sdk/            TypeScript SDK — produces Frame JSON
 ├── shaders/        WGSL shader files
-├── examples/       Example scene files (.json)
+├── web/            Browser test page
+├── scripts/        Build and release scripts
 └── docs/           Architecture and guides
 ```
 

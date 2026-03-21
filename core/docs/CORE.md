@@ -3,11 +3,11 @@
 ## Quick Start
 
 ```rust
-use ifol_render_core::{CoreEngine, RenderSettings, FrameData, FlatEntity, RenderPass, PassType};
+use ifol_render_core::{CoreEngine, RenderSettings, Frame, RenderPass, PassType};
 
 // 1. Create engine
-let settings = RenderSettings { width: 1920, height: 1080, background: [0.0, 0.0, 0.0, 1.0] };
-let mut engine = CoreEngine::new(settings).await;
+let settings = RenderSettings { width: 1920, height: 1080, fps: 30.0, ..Default::default() };
+let mut engine = CoreEngine::new(settings);
 
 // 2. Register built-in shaders
 engine.setup_builtins();
@@ -17,41 +17,12 @@ engine.load_image("bg", "assets/background.png")?;
 engine.rasterize_text("title", "Hello World", 64.0, [1.0, 1.0, 1.0, 1.0]);
 
 // 4. Build frame
-let frame = FrameData {
+let frame = Frame {
     passes: vec![
         RenderPass {
             output: "main".into(),
             pass_type: PassType::Entities {
-                entities: vec![
-                    FlatEntity {
-                        id: 1,
-                        x: 0.0, y: 0.0,
-                        width: 1920.0, height: 1080.0,
-                        rotation: 0.0,
-                        opacity: 1.0,
-                        blend_mode: 0,
-                        color: [1.0, 1.0, 1.0, 1.0],
-                        shader: "composite".into(),
-                        textures: vec!["bg".into()],
-                        params: vec![],
-                        layer: 0,
-                        z_index: 0.0,
-                    },
-                    FlatEntity {
-                        id: 2,
-                        x: 810.0, y: 440.0,
-                        width: 300.0, height: 50.0,
-                        rotation: 0.0,
-                        opacity: 0.9,
-                        blend_mode: 0,
-                        color: [1.0, 1.0, 1.0, 1.0],
-                        shader: "composite".into(),
-                        textures: vec!["title".into()],
-                        params: vec![],
-                        layer: 1,
-                        z_index: 0.0,
-                    },
-                ],
+                entities: vec![/* DrawCommand structs */],
                 clear_color: [0.0, 0.0, 0.0, 1.0],
             },
         },
@@ -60,7 +31,6 @@ let frame = FrameData {
             pass_type: PassType::Output { input: "main".into() },
         },
     ],
-    texture_updates: vec![],
 };
 
 // 5. Render
