@@ -184,6 +184,28 @@
           </select>
         </div>
       </div>
+      <div class="field">
+        <label>🎧 Audio Clip (optional — file path on backend)</label>
+        <input id="expAudioPath" placeholder="C:/music/bgm.mp3" />
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Audio Volume</label>
+          <input id="expAudioVol" type="number" value="1.0" step="0.1" min="0" max="1" />
+        </div>
+        <div class="field">
+          <label>Audio Start (s)</label>
+          <input id="expAudioStart" type="number" value="0" step="0.1" />
+        </div>
+        <div class="field">
+          <label>Fade In (s)</label>
+          <input id="expAudioFadeIn" type="number" value="0" step="0.1" />
+        </div>
+        <div class="field">
+          <label>Fade Out (s)</label>
+          <input id="expAudioFadeOut" type="number" value="0" step="0.5" />
+        </div>
+      </div>
       <div class="actions">
         <button class="btn-cancel" onclick="document.getElementById('exportModal').classList.remove('active')">Cancel</button>
         <button class="btn-export" id="btnDoExport">🚀 Start Export</button>
@@ -625,6 +647,18 @@
             if (i % 30 === 0) setStatus(`Frame ${i}/${total}...`);
           }
           setStatus(`Sending ${total} frames to backend...`);
+          // Collect audio clips from dialog
+          const audioClips = [];
+          const audioPath = document.getElementById('expAudioPath').value.trim();
+          if (audioPath) {
+            audioClips.push({
+              path: audioPath,
+              start_time: parseFloat(document.getElementById('expAudioStart').value) || 0,
+              volume: parseFloat(document.getElementById('expAudioVol').value) || 1.0,
+              fade_in: parseFloat(document.getElementById('expAudioFadeIn').value) || 0,
+              fade_out: parseFloat(document.getElementById('expAudioFadeOut').value) || 0,
+            });
+          }
           const payload = {
             settings: { width: expW, height: expH, fps: expFps, background: [0,0,0,1] },
             frames,
@@ -632,6 +666,7 @@
             ffmpeg: ffmpegPath,
             codec, crf, preset,
             pixel_format: pixFmt,
+            audio_clips: audioClips.length > 0 ? audioClips : undefined,
           };
           const res = await fetch('http://localhost:8000/export', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },

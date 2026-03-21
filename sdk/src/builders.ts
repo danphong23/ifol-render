@@ -265,6 +265,69 @@ export class FrameBuilder {
 // Export Scene Builder
 // ══════════════════════════════════════════════════
 
+/**
+ * Build an audio clip instruction for export.
+ *
+ * Matches Core's `AudioClip` struct exactly.
+ * Core uses FFmpeg to decode any audio format, then mixes in-process.
+ *
+ * ```ts
+ * const bgm = new AudioClipBuilder('C:/music/bgm.mp3')
+ *   .setVolume(0.8)
+ *   .setFadeIn(1.0)
+ *   .setFadeOut(2.0);
+ *
+ * const sfx = new AudioClipBuilder('C:/sfx/boom.wav')
+ *   .setStartTime(3.5)
+ *   .setDuration(2.0);
+ *
+ * // Pass to export
+ * const payload = buildExportPayload(config, frames, [bgm, sfx]);
+ * ```
+ */
+export class AudioClipBuilder {
+  /** Path to source audio file (any format FFmpeg can decode) */
+  path: string;
+  /** Start time in the output timeline (seconds) */
+  start_time: number = 0;
+  /** Duration to play (seconds). undefined = play to end of source */
+  duration?: number;
+  /** Offset within the source file — skip N seconds from start (seconds) */
+  offset: number = 0;
+  /** Volume: 0.0 (silent) to 1.0 (full). Default: 1.0 */
+  volume: number = 1.0;
+  /** Fade in duration (seconds). Default: 0 */
+  fade_in: number = 0;
+  /** Fade out duration (seconds). Default: 0 */
+  fade_out: number = 0;
+
+  constructor(path: string) {
+    this.path = path;
+  }
+
+  // ── Chainable setters ──
+
+  setStartTime(secs: number): this { this.start_time = secs; return this; }
+  setDuration(secs: number): this { this.duration = secs; return this; }
+  setOffset(secs: number): this { this.offset = secs; return this; }
+  setVolume(vol: number): this { this.volume = vol; return this; }
+  setFadeIn(secs: number): this { this.fade_in = secs; return this; }
+  setFadeOut(secs: number): this { this.fade_out = secs; return this; }
+
+  /** Convert to plain JSON for Core */
+  toJSON(): object {
+    return {
+      path: this.path,
+      start_time: this.start_time,
+      duration: this.duration,
+      offset: this.offset,
+      volume: this.volume,
+      fade_in: this.fade_in,
+      fade_out: this.fade_out,
+    };
+  }
+}
+
 /** Export configuration for the CLI backend */
 export interface ExportConfig {
   /** Output file path */
@@ -287,19 +350,27 @@ export interface ExportConfig {
   pixelFormat?: string;
   /** Background color RGBA (default: black) */
   background?: [number, number, number, number];
-  /** Audio clips to mix into export */
-  audioClips?: Array<{ path: string; start_time: number; duration: number; volume?: number }>;
 }
 
 /**
  * Build a complete export payload for CLI/backend.
  *
  * ```ts
- * const exportData = buildExportPayload(config, frames);
- * await fetch('/export', { body: JSON.stringify(exportData) });
+ * // Without audio
+ * const payload = buildExportPayload(config, frames);
+ *
+ * // With audio
+ * const bgm = new AudioClipBuilder('music.mp3').setVolume(0.8);
+ * const payload = buildExportPayload(config, frames, [bgm]);
+ *
+ * await fetch('/export', { body: JSON.stringify(payload) });
  * ```
  */
-export function buildExportPayload(config: ExportConfig, frames: object[]): object {
+export function buildExportPayload(
+  config: ExportConfig,
+  frames: object[],
+  audioClips?: AudioClipBuilder[],
+): object {
   return {
     settings: {
       width: config.width,
@@ -314,6 +385,7 @@ export function buildExportPayload(config: ExportConfig, frames: object[]): obje
     crf: config.crf,
     preset: config.preset,
     pixel_format: config.pixelFormat,
-    audio_clips: config.audioClips,
+    audio_clips: audioClips?.map(c => c.toJSON()),
   };
 }
+

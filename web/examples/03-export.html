@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>ifol-render — 03 Export</title>
+  <style>
+    body { margin:0; background:#111; color:#ccc; font-family:sans-serif; padding:20px; }
+    canvas { border:1px solid #333; display:block; margin:10px 0; }
+    .controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    button { background:#0f3460; border:none; color:#ccc; padding:8px 16px; cursor:pointer; border-radius:4px; }
+    button:hover { background:#1a4a7a; }
+    .status { color:#4ecca3; font-size:12px; margin-top:8px; }
+  </style>
+</head>
+<body>
+  <h2>03 — Batch Export Flow</h2>
+  <p style="color:#666; font-size:12px;">
+    Shows how App collects frames at each time step, then sends to backend for FFmpeg encoding.
+    <br>Requires: asset-server.py running on port 8000.
+  </p>
+  <canvas id="preview" width="640" height="360"></canvas>
+  <div class="controls">
+    <button id="btnPreview">▶ Preview Animation</button>
+    <button id="btnExport">📦 Export to MP4</button>
+  </div>
+  <div class="status" id="status">Ready</div>
+
+  <script type="module">
+    import init, { IfolRenderWeb } from '../wasm/ifol_render_wasm.js';
+
+    const W = 640, H = 360;
+    const DURATION = 5;  // seconds
+    const FPS = 30;
+
+    await init();
+    const canvas = document.getElementById('preview');
+    const core = await new IfolRenderWeb(canvas, W, H, FPS);
+    core.setup_builtins();
+
+    // ── Scene: simple animated shapes ──
+    function buildFrame(time) {
+      const entities = [
+        // Background gradient (dark)
+        { id: 0, x: 0, y: 0, width: W, height: H,
+          rotation: 0, opacity: 1, blend_mode: 0,
+          color: [0.05, 0.05, 0.15, 1],
+          shader: 'shapes', textures: [], params: [],
+          layer: 0, z_index: 0 },
+        // Rotating green rect
+        { id: 1,
+          x: W/2 - 80, y: H/2 - 60,
+          width: 160, height: 120,
+          rotation: time * 0.5,
+          opacity: 0.9, blend_mode: 0,
+          color: [0.3, 0.9, 0.6, 1],
+          shader: 'shapes', textures: [], params: [],
+          layer: 1, z_index: 0 },
+        // Bouncing circle
+        { id: 2,
+          x: W/2 + Math.cos(time * 3) * 150 - 30,
+          y: H/2 + Math.sin(time * 2) * 100 - 30,
+          width: 60, height: 60,
+          rotation: 0, opacity: 0.8, blend_mode: 0,
+          color: [0.9, 0.4, 0.5, 1],
+          shader: 'shapes', textures: [], params: [1.0],
+          layer: 2, z_index: 0 },
+      ];
+
+      return {
+        passes: [{
+          output: 'main',
+          pass_type: { Entities: { entities, clear_color: [0,0,0,1] } },
+        }, {
+          output: 'screen',
+          pass_type: { Output: { input: 'main' } },
+        }],
+        texture_updates: [],
+      };
+    }
+
+    // ── Preview: App controls the render loop ──
+    let time = 0, playing = false;
+    function loop(ts) {
+      if (playing) {
+        time += 1/60;
+        if (time > DURATION) time = 0;
+        core.render_frame(JSON.stringify(buildFrame(time)));
+      }
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+    core.render_frame(JSON.stringify(buildFrame(0)));
+
+    document.getElementById('btnPreview').onclick = () => {
+      playing = !playing;
+      document.getElementById('btnPreview').textContent = playing ? '⏸ Pause' : '▶ Preview Animation';
+    };
+
+    // ── Export: App collects ALL frames, sends to backend ──
+    document.getElementById('btnExport').onclick = async () => {
+      const status = document.getElementById('status');
+      status.textContent = 'Collecting frames...';
+
+      const frames = [];
+      const total = Math.round(DURATION * FPS);
+
+      for (let i = 0; i < total; i++) {
+        const t = i / FPS;
+        frames.push(buildFrame(t));
+        if (i % 30 === 0) status.textContent = `Frame ${i}/${total}...`;
+      }
+
+      status.textContent = `Sending ${total} frames to backend...`;
+
+      // This is exactly what buildExportPayload() does in the SDK
+      const payload = {
+        settings: { width: W, height: H, fps: FPS, background: [0,0,0,1] },
+        frames,
+        output: `export_demo_${Date.now()}.mp4`,
+        codec: 'h264',
+        crf: 23,
+        preset: 'medium',
+      };
+
+      try {
+        const res = await fetch('http://localhost:8000/export', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const d = await res.json();
+        status.textContent = d.status === 'ok' ? `✅ Exported: ${d.path}` : `❌ ${d.error}`;
+      } catch (e) {
+        status.textContent = `❌ ${e.message}`;
+      }
+    };
+  </script>
+</body>
+</html>

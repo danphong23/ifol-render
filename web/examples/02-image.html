@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>ifol-render — 02 Image</title>
+  <style>
+    body { margin:0; background:#111; display:flex; flex-direction:column; align-items:center; padding:20px; color:#ccc; font-family:sans-serif; }
+    canvas { border:1px solid #333; margin-top:10px; }
+    .controls { display:flex; gap:8px; align-items:center; }
+    .controls input { background:#222; border:1px solid #444; color:#ccc; padding:4px 8px; width:300px; }
+    .controls button { background:#0d6; border:none; color:#000; padding:6px 12px; cursor:pointer; border-radius:4px; }
+    .status { color:#888; font-size:12px; margin-top:6px; }
+  </style>
+</head>
+<body>
+  <h2>02 — Load & Display Image</h2>
+  <div class="controls">
+    <input id="imgPath" placeholder="Image path (C:/photos/hero.png)" />
+    <button id="btnLoad">Load Image</button>
+  </div>
+  <div class="status" id="status">Enter an image path and click Load</div>
+  <canvas id="viewport" width="960" height="540"></canvas>
+
+  <script type="module">
+    import init, { IfolRenderWeb } from '../wasm/ifol_render_wasm.js';
+
+    const ASSET_SERVER = 'http://localhost:8000/asset?path=';
+    const W = 960, H = 540;
+
+    await init();
+    const canvas = document.getElementById('viewport');
+    const core = await new IfolRenderWeb(canvas, W, H, 60);
+    core.setup_builtins();
+
+    // Render empty background
+    renderFrame([]);
+
+    document.getElementById('btnLoad').onclick = async () => {
+      const path = document.getElementById('imgPath').value.trim();
+      if (!path) return;
+      document.getElementById('status').textContent = 'Loading...';
+
+      try {
+        // ── Step 1: Fetch image bytes & inject into Core cache ──
+        const url = ASSET_SERVER + encodeURIComponent(path);
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        const rawBytes = new Uint8Array(await blob.arrayBuffer());
+
+        // Use actual file path as cache key (matches both web & CLI)
+        core.cache_image(path, rawBytes);
+
+        // Get dimensions
+        const bitmap = await createImageBitmap(blob);
+        const imgW = bitmap.width, imgH = bitmap.height;
+        bitmap.close();
+
+        // ── Step 2: Build Frame with image entity ──
+        // Scale image to fit canvas
+        const scale = Math.min(W / imgW, H / imgH, 1);
+        const displayW = imgW * scale;
+        const displayH = imgH * scale;
+        const x = (W - displayW) / 2;
+        const y = (H - displayH) / 2;
+
+        renderFrame([{
+          id: 1, x, y, width: displayW, height: displayH,
+          rotation: 0, opacity: 1, blend_mode: 0,
+          color: [1, 1, 1, 1],
+          shader: 'composite',
+          textures: [path],  // key matches cache_image key
+          params: [], layer: 1, z_index: 0,
+        }], [
+          { LoadImage: { key: path, path: path } },
+        ]);
+
+        document.getElementById('status').textContent = `✅ ${imgW}×${imgH}px → ${displayW.toFixed(0)}×${displayH.toFixed(0)}`;
+      } catch (e) {
+        document.getElementById('status').textContent = `❌ ${e.message}`;
+      }
+    };
+
+    function renderFrame(entities, texUpdates = []) {
+      const frame = {
+        passes: [{
+          output: 'main',
+          pass_type: { Entities: {
+            entities: [
+              // Background
+              { id: 0, x: 0, y: 0, width: W, height: H,
+                rotation: 0, opacity: 1, blend_mode: 0,
+                color: [0.08, 0.08, 0.12, 1],
+                shader: 'shapes', textures: [], params: [],
+                layer: 0, z_index: 0 },
+              ...entities,
+            ],
+            clear_color: [0, 0, 0, 1],
+          }},
+        }, {
+          output: 'screen',
+          pass_type: { Output: { input: 'main' } },
+        }],
+        texture_updates: texUpdates,
+      };
+      core.render_frame(JSON.stringify(frame));
+    }
+  </script>
+</body>
+</html>

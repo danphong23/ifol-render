@@ -16,6 +16,7 @@ export {
   DrawableEntity,
   FrameBuilder,
   TextureUpdates,
+  AudioClipBuilder,
   buildExportPayload,
 } from './builders.js';
 export type { ExportConfig, TextureUpdateData } from './builders.js';
