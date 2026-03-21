@@ -38,60 +38,41 @@ fn pixel_to_clip_matrix(entity: &FlatEntity, out_w: f32, out_h: f32) -> [f32; 16
     let cx = entity.x + half_w;
     let cy = entity.y + half_h;
 
-    // Size of the quad in clip space (half-extents)
-    let sx = half_w / out_w;
-    let sy = half_h / out_h;
-
-    // Center position in clip space
+    // Center position in clip space (py already inverts Y)
     let px = cx / out_w * 2.0 - 1.0;
     let py = 1.0 - cy / out_h * 2.0;
 
+    // Pixel-to-clip scale factors.
+    // BOTH positive — py handles Y inversion, so column vectors
+    // must NOT also invert Y or the image flips upside down.
+    let csx = 2.0 / out_w;
+    let csy = 2.0 / out_h;
+
     if entity.rotation.abs() < 1e-6 {
-        // No rotation — simple axis-aligned matrix
+        // No rotation — axis-aligned scaling
         [
-            sx * 2.0,
-            0.0,
-            0.0,
-            0.0, // column 0
-            0.0,
-            sy * 2.0,
-            0.0,
-            0.0, // column 1
-            0.0,
-            0.0,
-            1.0,
-            0.0, // column 2
-            px,
-            py,
-            0.0,
-            1.0, // column 3 (translation)
+            half_w * csx, 0.0,          0.0, 0.0, // column 0
+            0.0,          half_h * csy, 0.0, 0.0, // column 1
+            0.0,          0.0,          1.0, 0.0, // column 2
+            px,           py,           0.0, 1.0, // column 3
         ]
     } else {
         let cos = entity.rotation.cos();
         let sin = entity.rotation.sin();
 
-        // Scale + Rotate + Translate
-        // Rotation around entity center, in clip space
-        let sx2 = sx * 2.0;
-        let sy2 = sy * 2.0;
-
+        // Decomposition: Translate(px,py) × ClipScale × Rotate(θ) × PixelSize
+        //
+        // The vertex y-axis (up) is opposite to pixel y-axis (down).
+        // Rotation is in PIXEL space (uniform, no aspect distortion).
+        // The mapping from vertex → pixel → rotated pixel → clip gives:
+        //
+        //   col0 = [halfW·cos·csx,  -halfW·sin·csy,  0, 0]
+        //   col1 = [halfH·sin·csx,   halfH·cos·csy,  0, 0]
         [
-            sx2 * cos,
-            sx2 * sin,
-            0.0,
-            0.0, // column 0
-            -sy2 * sin,
-            sy2 * cos,
-            0.0,
-            0.0, // column 1
-            0.0,
-            0.0,
-            1.0,
-            0.0, // column 2
-            px,
-            py,
-            0.0,
-            1.0, // column 3
+            half_w *  cos * csx,   -half_w * sin * csy,    0.0, 0.0, // column 0
+            half_h *  sin * csx,    half_h * cos * csy,    0.0, 0.0, // column 1
+            0.0,                    0.0,                   1.0, 0.0, // column 2
+            px,                     py,                    0.0, 1.0, // column 3
         ]
     }
 }

@@ -34,6 +34,12 @@ export interface Entity {
   rotation: number;    // radians
   opacity: number;     // 0–1
 
+  // Rotation anchor point (0–1, relative to entity bounds)
+  // Defaults to center (0.5, 0.5). SDK converts to correct
+  // coordinates for Core rendering.
+  anchorX: number;     // 0 = left edge, 0.5 = center, 1 = right edge
+  anchorY: number;     // 0 = top edge, 0.5 = center, 1 = bottom edge
+
   // Appearance
   color: [number, number, number, number]; // RGBA 0–1
   blendMode: BlendMode;
@@ -42,6 +48,9 @@ export interface Entity {
 
   // Media reference (key in AssetManager)
   source?: string;
+  // Actual filesystem path — used for CLI export (backend loads from disk)
+  // On web, source is the cache key; sourcePath is the original file path.
+  sourcePath?: string;
 
   // Timeline
   layer: number;
@@ -134,6 +143,7 @@ export interface RenderPass {
 export interface TextureUpdate {
   LoadImage?: { key: string; path: string };
   UploadRgba?: { key: string; data: number[]; width: number; height: number };
+  DecodeVideoFrame?: { key: string; path: string; timestamp_secs: number; width?: number; height?: number };
   Evict?: { key: string };
 }
 

@@ -85,28 +85,56 @@ class AssetHandler(http.server.BaseHTTPRequestHandler):
         if not os.path.isfile(CLI_PATH):
             return {"status": "error", "error": f"CLI not found: {CLI_PATH}"}
         
-        # Write scene JSON to temp file
+        # Build proper scene JSON with settings embedded
         frames = data.get('frames', [])
         scene_path = data.get('scene_path')
         output_path = data.get('output', os.path.join(tempfile.gettempdir(), f'ifol_export_{int(time.time())}.mp4'))
         
+        settings = data.get('settings', {})
+        width = settings.get('width', data.get('width', 1920))
+        height = settings.get('height', data.get('height', 1080))
+        fps = settings.get('fps', data.get('fps', 30))
+        
         if scene_path and os.path.isfile(scene_path):
-            # Use existing scene file
             pass
         elif frames:
-            # Write frames to temp JSON
+            scene_data = {
+                "settings": {
+                    "width": width,
+                    "height": height,
+                    "fps": fps,
+                    "background": settings.get('background', [0, 0, 0, 1])
+                },
+                "frames": frames
+            }
+            if 'audio_clips' in data:
+                scene_data['audio_clips'] = data['audio_clips']
+            
             scene_path = os.path.join(tempfile.gettempdir(), f'ifol_scene_{int(time.time())}.json')
             with open(scene_path, 'w') as f:
-                json.dump(frames, f)
+                json.dump(scene_data, f)
         else:
             return {"status": "error", "error": "No frames or scene_path provided"}
         
-        # Run CLI
+        # Build CLI command with all params
         cmd = [CLI_PATH, 'export', '--scene', scene_path, '-o', output_path]
-        width = data.get('width', 1920)
-        height = data.get('height', 1080)
-        fps = data.get('fps', 30)
-        cmd.extend(['--width', str(width), '--height', str(height), '--fps', str(fps)])
+        
+        # Optional CLI flags
+        if data.get('ffmpeg'):
+            cmd.extend(['--ffmpeg', data['ffmpeg']])
+        if data.get('codec'):
+            cmd.extend(['--codec', data['codec']])
+        if data.get('crf') is not None:
+            cmd.extend(['--crf', str(data['crf'])])
+        if data.get('preset'):
+            cmd.extend(['--preset', data['preset']])
+        if data.get('pixel_format'):
+            cmd.extend(['--pixel-format', data['pixel_format']])
+        # --width/--height override scene settings if provided
+        if data.get('width'):
+            cmd.extend(['--width', str(data['width'])])
+        if data.get('height'):
+            cmd.extend(['--height', str(data['height'])])
         
         print(f'[export] Running: {" ".join(cmd)}')
         

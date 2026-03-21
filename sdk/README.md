@@ -1,97 +1,119 @@
 # ifol-render-sdk
 
-GPU-accelerated 2D rendering SDK for web. Built on WebGPU via WASM.
+**Render Pipeline Toolkit** — produces Frame JSON for Core WASM.
 
-**SDK produces Frame JSON. App Layer pumps it to GPU.**
+SDK = toolkit, NOT framework. Dev chooses how to manage their app.
 
 ## Architecture
 
 ```
-App Layer
-  ● core.render_frame(frameJSON) → GPU
-  ● UI events (pan, zoom, drag)
-  ● Export I/O, procedural animation
-  ● FPS control (requestAnimationFrame)
+App Layer (dev decides everything)
+  ● Any scene management (Array, ECS, Redux, ...)
+  ● UI, interaction, undo/redo
+  ● FPS control, playback
+  ● Bones, particles, VFX, ...
+  ↓ builds DrawableEntity / FrameBuilder
 
-SDK ──── produces Frame JSON ────────────
-  Scene         — entity CRUD in world units
-  Camera        — BoundCamera, FreeCamera (extensible)
-  RenderView    — Scene × Camera → Frame JSON
-  AssetManager  — image/video decode + shared cache
-  Timeline      — playback state (no FPS)
-  Animation     — keyframe tracks + easing (optional)
+SDK Toolkit (produces Frame JSON)
+  ● DrawableEntity — pixel-space drawable element class
+  ● FrameBuilder — composable frame assembly
+  ● flatten() — convenience Entity[] → Frame
+  ● Camera, AssetManager
+  ↓ Frame JSON
 
-Core WASM ── consumes Frame JSON ────────
-  render_frame(json) → GPU pixels
+Core WASM (GPU rendering)
+  ● render_frame(json) → pixels
+  ● export_video() → mp4
 ```
 
-## Quick Start
+## Usage — Builder API (Primary)
+
+Dev with **any framework** can use builders to construct Frame JSON:
 
 ```ts
-import { Scene, FreeCamera, BoundCamera, RenderView, Timeline, AssetManager } from 'ifol-render-sdk';
+import { DrawableEntity, FrameBuilder, TextureUpdates } from 'ifol-render-sdk';
 
-// Shared scene (unit-space)
-const scene = new Scene({ ppu: 1, duration: 10 });
+// 1. Create drawable entities (pixel-space)
+const bg = new DrawableEntity(0, 0, 0, 1920, 1080)
+  .setShader('shapes')
+  .setColor(0.1, 0.1, 0.2, 1)
+  .setLayer(0);
 
-// Cameras
-const editCam = new FreeCamera({ centerX: 960, centerY: 540, zoom: 1, screenWidth: 800, screenHeight: 600, ppu: 1 });
-const exportCam = new BoundCamera(0, 0, 1920, 1080);
+const img = new DrawableEntity(1, 100, 200, 400, 300)
+  .setShader('composite')
+  .addTexture('hero.png')
+  .setRotation(Math.PI / 6)
+  .setOpacity(0.9)
+  .setLayer(1);
 
-// Render views (multi-view: same scene, different cameras)
-const editView = new RenderView(scene, editCam, { renderScale: 1 });
-const camView = new RenderView(scene, exportCam, { renderScale: 1 });
+const circle = new DrawableEntity(2, 500, 300, 100, 100)
+  .setShader('shapes')
+  .setParams([1.0])  // shapes shader: 1.0 = circle
+  .setColor(0, 1, 0.5, 0.8)
+  .setLayer(2);
 
-// Add entities (world units)
-scene.addEntity({ id: 'bg', type: 'rect', x: 0, y: 0, width: 1920, height: 1080,
-  color: [0.1, 0.1, 0.2, 1], opacity: 1, rotation: 0,
-  blendMode: 'normal', shader: 'shapes', params: [], layer: 0, startTime: 0, duration: 10 });
+// 2. Build frame
+const frame = new FrameBuilder()
+  .setClearColor(0, 0, 0, 1)
+  .addEntity(bg)
+  .addEntity(img)
+  .addEntity(circle)
+  .addTextureUpdate(TextureUpdates.loadImage('hero.png', '/assets/hero.png'))
+  .build();
 
-// Timeline
-const tl = new Timeline(10);
-tl.play();
+// 3. Render
+core.render_frame(JSON.stringify(frame));
+```
 
-// App render loop (App controls FPS)
-function loop(ts) {
-  const time = tl.tick(ts);
-  const editFrame = editView.flattenAt(time);
-  const camFrame = camView.flattenAt(time);
-  editCore.render_frame(JSON.stringify(editFrame));
-  camCore.render_frame(JSON.stringify(camFrame));
-  requestAnimationFrame(loop);
+## Usage — flatten() Convenience
+
+If you manage entities in world units with the `Entity` interface:
+
+```ts
+import { flatten, BoundCamera } from 'ifol-render-sdk';
+
+const cam = new BoundCamera(0, 0, 1920, 1080);
+const frame = flatten(myEntities, cam.getRegion(time), 1920, 1080, time);
+core.render_frame(JSON.stringify(frame));
+```
+
+## Export
+
+```ts
+import { buildExportPayload, FrameBuilder } from 'ifol-render-sdk';
+
+// Build frames for each time step
+const frames = [];
+for (let t = 0; t < duration; t += 1/fps) {
+  frames.push(new FrameBuilder().addEntities(getEntitiesAt(t)).build());
 }
-requestAnimationFrame(loop);
+
+// Build export payload with all settings
+const payload = buildExportPayload({
+  output: 'my_video.mp4',
+  width: 1920, height: 1080, fps: 30,
+  codec: 'h264', crf: 23, preset: 'medium',
+  ffmpeg: '/usr/bin/ffmpeg',  // optional
+}, frames);
+
+await fetch('/export', { body: JSON.stringify(payload) });
 ```
 
 ## Modules
 
-| Module | Class | Purpose |
-|--------|-------|---------|
-| `scene.ts` | `Scene` | Entity CRUD, visibleAt, hitTest |
-| `camera.ts` | `BoundCamera` | Fixed region (export, preview) |
-| `camera.ts` | `FreeCamera` | Center+zoom viewport, top-left anchor |
-| `render-view.ts` | `RenderView` | Scene × Camera → Frame JSON |
-| `flatten.ts` | `flatten()` | Pure function: entities + region → pixels |
-| `timeline.ts` | `Timeline` | Playback: play/pause/seek/tick |
-| `animation.ts` | `KeyframeTrack` | Property keyframes + easing |
-| `animation.ts` | `AnimationManager` | Attach tracks, applyAll(scene, t) |
-| `assets.ts` | `AssetManager` | Image/video decode + cache |
-
-## Key Design Decisions
-
-- **FPS is NOT in SDK** — App Layer controls frame rate
-- **Camera is NOT an entity** — it's a view definition (BoundCamera, FreeCamera)
-- **Multi-view**: N RenderViews share 1 Scene, produce independent Frame JSON
-- **Unit coordinate system**: all spatial values in world units, pixels only after flatten
-- **renderScale**: GPU renders at fraction of display size for performance
-- **Viewport resize anchors top-left** (not center)
-- **Keyframe animation** is SDK-level (serializable), procedural animation is App-level
+| Module | Purpose |
+|--------|---------|
+| `builders.ts` | **DrawableEntity**, **FrameBuilder**, **TextureUpdates** — primary API |
+| `flatten.ts` | `flatten()` — Entity[] + Camera → Frame |
+| `camera.ts` | BoundCamera, FreeCamera — viewport math |
+| `assets.ts` | AssetManager — image/video decode + cache |
+| `scene.ts` | Scene — optional entity CRUD helper |
+| `render-view.ts` | RenderView — optional Scene × Camera wrapper |
+| `timeline.ts` | Timeline — optional playback state |
+| `animation.ts` | AnimationManager — optional keyframes |
 
 ## Building
 
 ```bash
 cd sdk && npm run build
 ```
-
-## License
-
-MIT

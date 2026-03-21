@@ -18,6 +18,7 @@ import type {
  * @param region - World region to render (from Camera.getRegion)
  * @param renderW - Render target width in pixels
  * @param renderH - Render target height in pixels
+ * @param time - Current playback time in seconds (for video frame timestamps)
  * @returns Frame ready for Core WASM render_frame()
  */
 export function flatten(
@@ -25,6 +26,7 @@ export function flatten(
   region: WorldRegion,
   renderW: number,
   renderH: number,
+  time: number = 0,
 ): Frame {
   // Uniform scale: fit region into render target (no distortion)
   const scaleX = renderW / region.width;
@@ -51,29 +53,65 @@ export function flatten(
 
   let idx = 0;
   for (const e of sorted) {
-    // Entity center in world units
-    let ecx = e.x + e.width / 2;
-    let ecy = e.y + e.height / 2;
+    // Anchor point (default: center of entity)
+    const ax = e.anchorX ?? 0.5;
+    const ay = e.anchorY ?? 0.5;
+
+    // Entity anchor point in world units
+    let eax = e.x + e.width * ax;
+    let eay = e.y + e.height * ay;
 
     // Apply inverse camera rotation around camera center
     if (camRot !== 0) {
-      const dx = ecx - camCX;
-      const dy = ecy - camCY;
-      ecx = camCX + dx * cosR - dy * sinR;
-      ecy = camCY + dx * sinR + dy * cosR;
+      const dx = eax - camCX;
+      const dy = eay - camCY;
+      eax = camCX + dx * cosR - dy * sinR;
+      eay = camCY + dx * sinR + dy * cosR;
     }
 
-    // Project rotated center to pixel space
-    const px = (ecx - e.width / 2 - region.left) * scale + offsetX;
-    const py = (ecy - e.height / 2 - region.top) * scale + offsetY;
+    // Project anchor point to pixel space
+    const anchorPx = (eax - region.left) * scale + offsetX;
+    const anchorPy = (eay - region.top) * scale + offsetY;
+
+    // Width and height in pixels
+    const pw = e.width * scale;
+    const ph = e.height * scale;
+
+    // When anchor != center, pre-compute offset so Core (which always
+    // rotates around entity center) produces the correct result.
+    // Core receives (x, y) as top-left, rotates around (x + w/2, y + h/2).
+    // We need the entity center to end up at the right place after rotation.
+    const entityRot = e.rotation - camRot;
+
+    // Offset from anchor to center in entity-local space
+    const offX = (0.5 - ax) * pw;
+    const offY = (0.5 - ay) * ph;
+
+    // Rotate this offset by entity rotation to get world-space offset
+    let centerPx: number, centerPy: number;
+    if (Math.abs(entityRot) < 1e-6 || (Math.abs(ax - 0.5) < 1e-6 && Math.abs(ay - 0.5) < 1e-6)) {
+      // No rotation or center anchor — simple offset
+      centerPx = anchorPx + offX;
+      centerPy = anchorPy + offY;
+    } else {
+      // Rotate offset from anchor to center
+      const c = Math.cos(entityRot);
+      const s = Math.sin(entityRot);
+      centerPx = anchorPx + offX * c - offY * s;
+      centerPy = anchorPy + offX * s + offY * c;
+    }
+
+    // Core expects top-left (x, y) — derive from center
+    const px = centerPx - pw / 2;
+    const py = centerPy - ph / 2;
 
     const flat: FlatEntity = {
       id: idx++,
       x: px,
       y: py,
-      width: e.width * scale,
-      height: e.height * scale,
-      rotation: e.rotation - camRot, // combine entity + inverse camera rotation
+      width: pw,
+      height: ph,
+      rotation: entityRot,
       opacity: e.opacity,
       blend_mode: blendModeToInt(e.blendMode),
       color: e.color,
@@ -85,10 +123,18 @@ export function flatten(
     };
 
     // Texture references
-    if (e.source && (e.type === 'image' || e.type === 'video')) {
+    // key = cache key (used for GPU texture lookup)
+    // path = actual filesystem path (used by CLI export to load from disk)
+    // On web, AssetManager pre-caches using key. On CLI, path points to actual file.
+    if (e.source && e.type === 'image') {
+      const filePath = e.sourcePath ?? e.source;
       flat.textures = [e.source];
-      // Both image and video use LoadImage (video frames are cached as images)
-      texUpdates.push({ LoadImage: { key: e.source, path: e.source } });
+      texUpdates.push({ LoadImage: { key: e.source, path: filePath } });
+    } else if (e.source && e.type === 'video') {
+      const filePath = e.sourcePath ?? e.source;
+      flat.textures = [e.source];
+      const localTime = Math.max(0, time - (e.startTime ?? 0));
+      texUpdates.push({ DecodeVideoFrame: { key: e.source, path: filePath, timestamp_secs: localTime } });
     }
 
     flatEntities.push(flat);

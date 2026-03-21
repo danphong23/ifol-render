@@ -47,6 +47,21 @@
     .prop-row label{font-size:9px;color:#777;width:22px;flex-shrink:0}
     .prop-row input{flex:1;padding:2px 4px;font-size:10px;background:#0a0a1a;border:1px solid #0f3460;color:#e0e0e0;border-radius:2px}
 
+    /* Export Modal */
+    .modal-overlay { display:none; position:fixed; top:0;left:0;right:0;bottom:0; background:rgba(0,0,0,.7); z-index:9999; justify-content:center; align-items:center; }
+    .modal-overlay.active { display:flex; }
+    .modal { background:#16213e; border:1px solid #4ecca3; border-radius:8px; padding:20px; width:420px; max-height:80vh; overflow-y:auto; }
+    .modal h2 { margin:0 0 16px; color:#4ecca3; font-size:16px; }
+    .modal .field { margin-bottom:10px; }
+    .modal .field label { display:block; font-size:10px; color:#888; margin-bottom:3px; text-transform:uppercase; }
+    .modal .field input, .modal .field select { width:100%; background:#0f1a30; border:1px solid #333; color:#ccc; padding:6px 8px; border-radius:4px; font-size:12px; box-sizing:border-box; }
+    .modal .field-row { display:flex; gap:8px; }
+    .modal .field-row .field { flex:1; }
+    .modal .actions { display:flex; gap:8px; margin-top:16px; justify-content:flex-end; }
+    .modal .actions button { padding:6px 16px; border:none; border-radius:4px; cursor:pointer; font-size:12px; }
+    .modal .btn-export { background:#4ecca3; color:#0f0f0f; font-weight:bold; }
+    .modal .btn-cancel { background:#333; color:#ccc; }
+
     .timeline{height:32px;background:#0a0a1a;border-top:1px solid #0f3460;display:flex;align-items:center;padding:0 10px;gap:6px;flex-shrink:0}
     .timeline button{padding:3px 8px;font-size:10px;background:#1a1a2e;border:1px solid #0f3460;color:#e0e0e0;border-radius:3px;cursor:pointer}
     .timeline button:hover{background:#0f3460}
@@ -100,6 +115,79 @@
     <div class="properties">
       <h3>Properties</h3>
       <div id="propsContent"><p style="font-size:9px;color:#444">Select an entity</p></div>
+    </div>
+  </div>
+
+  <!-- Export Settings Modal -->
+  <div class="modal-overlay" id="exportModal">
+    <div class="modal">
+      <h2>📦 Export Settings</h2>
+      <div class="field">
+        <label>Output Filename</label>
+        <input id="expFilename" value="export.mp4" />
+      </div>
+      <div class="field">
+        <label>Output Directory</label>
+        <input id="expDirectory" placeholder="Leave empty for temp dir" />
+      </div>
+      <div class="field">
+        <label>FFmpeg Path (optional)</label>
+        <input id="expFfmpeg" placeholder="ffmpeg (uses system PATH)" />
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Width (px)</label>
+          <input id="expWidth" type="number" value="1920" />
+        </div>
+        <div class="field">
+          <label>Height (px)</label>
+          <input id="expHeight" type="number" value="1080" />
+        </div>
+        <div class="field">
+          <label>FPS</label>
+          <input id="expFps" type="number" value="30" />
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Codec</label>
+          <select id="expCodec">
+            <option value="h264" selected>H.264 (mp4)</option>
+            <option value="h265">H.265 (mp4)</option>
+            <option value="vp9">VP9 (webm)</option>
+            <option value="prores">ProRes (mov)</option>
+            <option value="png">PNG sequence</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Preset</label>
+          <select id="expPreset">
+            <option value="ultrafast">ultrafast</option>
+            <option value="fast">fast</option>
+            <option value="medium" selected>medium</option>
+            <option value="slow">slow</option>
+            <option value="veryslow">veryslow</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>CRF (Quality, 0=best, 51=worst)</label>
+          <input id="expCrf" type="number" value="23" min="0" max="51" />
+        </div>
+        <div class="field">
+          <label>Pixel Format</label>
+          <select id="expPixFmt">
+            <option value="yuv420p" selected>yuv420p</option>
+            <option value="yuv444p">yuv444p</option>
+            <option value="rgb24">rgb24</option>
+          </select>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn-cancel" onclick="document.getElementById('exportModal').classList.remove('active')">Cancel</button>
+        <button class="btn-export" id="btnDoExport">🚀 Start Export</button>
+      </div>
     </div>
   </div>
 
@@ -288,6 +376,7 @@
         opacity: p.opacity ?? 1, rotation: p.rotation ?? 0,
         blendMode: 'normal',
         source: p.source ?? undefined,
+        sourcePath: p.sourcePath ?? undefined,
         layer: p.layer ?? scene.entityCount(),
         startTime: 0, duration: DURATION,
         shader: (type === 'rect' || type === 'circle') ? 'shapes' : 'composite',
@@ -362,16 +451,8 @@
       // Sync camera entity → SDK BoundCamera
       syncCameraFromEntity();
 
-      // Extract video frames for current time (App responsibility)
-      for (const e of scene.allEntities()) {
-        if (e.type === 'video' && e.source) {
-          const va = assets.getVideo(e.source);
-          if (va) {
-            const localTime = Math.max(0, Math.min(time - e.startTime, va.duration));
-            try { await assets.extractVideoFrame(e.source, localTime); } catch (_) {}
-          }
-        }
-      }
+      // SDK handles all video frame extraction automatically
+      await assets.prepareVideoFrames(scene.allEntities(), time);
 
       // SDK: produce Frame JSON
       if (editCore) editCore.render_frame(JSON.stringify(editView.flattenAt(time)));
@@ -390,30 +471,39 @@
 
       const tl = editCamera.worldToCanvas(e.x, e.y);
       const br = editCamera.worldToCanvas(e.x + e.width, e.y + e.height);
-      const px = tl.x, py = tl.y, pw = br.x - tl.x, ph = br.y - tl.y;
+      const pw = br.x - tl.x, ph = br.y - tl.y;
+      // Center of entity in canvas pixels
+      const cx = tl.x + pw / 2, cy = tl.y + ph / 2;
 
       ctx.save();
       const isCam = selectedId === cameraEntityId;
       ctx.strokeStyle = isCam ? '#4ecca3' : '#e94560';
       ctx.lineWidth = 2; ctx.setLineDash([6, 3]);
-      ctx.strokeRect(px, py, pw, ph);
+
+      // Apply entity rotation around its center
+      ctx.translate(cx, cy);
+      if (e.rotation) ctx.rotate(e.rotation);
+
+      // Draw centered rectangle + handles
+      ctx.strokeRect(-pw/2, -ph/2, pw, ph);
       ctx.setLineDash([]); ctx.fillStyle = ctx.strokeStyle;
       const hs = 6;
-      for (const [hx, hy] of [[px,py],[px+pw,py],[px,py+ph],[px+pw,py+ph]])
+      for (const [hx, hy] of [[-pw/2,-ph/2],[pw/2,-ph/2],[-pw/2,ph/2],[pw/2,ph/2]])
         ctx.fillRect(hx-hs/2, hy-hs/2, hs, hs);
 
+      // Label (at top-left corner, rotated with entity)
       const lbl = `${e.label||e.id}  (${Math.round(e.x)}, ${Math.round(e.y)})`;
       ctx.font = '10px Segoe UI, sans-serif';
       const tw = ctx.measureText(lbl).width;
       ctx.fillStyle = isCam ? 'rgba(78,204,163,.85)' : 'rgba(233,69,96,.85)';
-      ctx.fillRect(px, py-15, tw+8, 13);
-      ctx.fillStyle = '#fff'; ctx.fillText(lbl, px+4, py-4);
+      ctx.fillRect(-pw/2, -ph/2-15, tw+8, 13);
+      ctx.fillStyle = '#fff'; ctx.fillText(lbl, -pw/2+4, -ph/2-4);
 
       if (isCam) {
         ctx.strokeStyle = 'rgba(78,204,163,.3)'; ctx.lineWidth = 1; ctx.setLineDash([3,3]);
         for (let i = 1; i < 3; i++) {
-          ctx.beginPath(); ctx.moveTo(px+pw*i/3,py); ctx.lineTo(px+pw*i/3,py+ph); ctx.stroke();
-          ctx.beginPath(); ctx.moveTo(px,py+ph*i/3); ctx.lineTo(px+pw,py+ph*i/3); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(-pw/2+pw*i/3,-ph/2); ctx.lineTo(-pw/2+pw*i/3,ph/2); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(-pw/2,-ph/2+ph*i/3); ctx.lineTo(pw/2,-ph/2+ph*i/3); ctx.stroke();
         }
       }
       ctx.restore();
@@ -451,9 +541,9 @@
         if (!p) return alert('Enter asset path');
         try {
           setStatus('Loading image...');
-          const id = `img_${nextId}`;
-          const asset = await assets.loadImage(id, p);
-          addEntity('image', { source: id, width: asset.unitWidth, height: asset.unitHeight }, `🖼 ${p.split(/[\\/]/).pop()}`);
+          // Use actual file path as key — matches both web cache_image() and CLI filesystem
+          const asset = await assets.loadImage(p, p);
+          addEntity('image', { source: p, width: asset.unitWidth, height: asset.unitHeight }, `🖼 ${p.split(/[\\/]/).pop()}`);
           setStatus(`Loaded: ${asset.pixelWidth}×${asset.pixelHeight}px → ${asset.unitWidth.toFixed(0)}×${asset.unitHeight.toFixed(0)} units`);
         } catch (e) { setStatus(`Error: ${e.message}`); }
       };
@@ -463,9 +553,9 @@
         if (!p) return alert('Enter asset path');
         try {
           setStatus('Loading video...');
-          const id = `vid_${nextId}`;
-          const asset = await assets.loadVideo(id, p);
-          addEntity('video', { source: id, width: asset.unitWidth, height: asset.unitHeight }, `🎬 ${p.split(/[\\/]/).pop()}`);
+          // Use actual file path as key — same path works on web and CLI
+          const asset = await assets.loadVideo(p, p);
+          addEntity('video', { source: p, width: asset.unitWidth, height: asset.unitHeight }, `🎬 ${p.split(/[\\/]/).pop()}`);
           setStatus(`Video: ${asset.pixelWidth}×${asset.pixelHeight}px, ${asset.duration.toFixed(1)}s`);
         } catch (e) { setStatus(`Error: ${e.message}`); }
       };
@@ -504,23 +594,48 @@
         document.getElementById('timeDisplay').textContent = `${timeline.currentTime.toFixed(2)} / ${DURATION.toFixed(2)}`;
       };
 
-      // Export — App sends frames to backend
-      document.getElementById('btnExport').onclick = async () => {
+      // Export — open settings dialog
+      document.getElementById('btnExport').onclick = () => {
+        document.getElementById('exportModal').classList.add('active');
+      };
+      document.getElementById('btnDoExport').onclick = async () => {
+        document.getElementById('exportModal').classList.remove('active');
+        
+        const expW = parseInt(document.getElementById('expWidth').value) || 1920;
+        const expH = parseInt(document.getElementById('expHeight').value) || 1080;
+        const expFps = parseInt(document.getElementById('expFps').value) || 30;
+        const filename = document.getElementById('expFilename').value.trim() || `export_${Date.now()}.mp4`;
+        const directory = document.getElementById('expDirectory').value.trim();
+        const outputPath = directory ? `${directory.replace(/[\\/]$/, '')}/${filename}` : filename;
+        const ffmpegPath = document.getElementById('expFfmpeg').value.trim() || undefined;
+        const codec = document.getElementById('expCodec').value;
+        const preset = document.getElementById('expPreset').value;
+        const crf = parseInt(document.getElementById('expCrf').value);
+        const pixFmt = document.getElementById('expPixFmt').value;
+        
         setStatus('Exporting...');
         try {
           syncCameraFromEntity();
           const frames = [];
-          const total = Math.round(DURATION * EXPORT_FPS);
+          const total = Math.round(DURATION * expFps);
           for (let i = 0; i < total; i++) {
-            const t = i / EXPORT_FPS;
+            const t = i / expFps;
             computeAnimations(t);
-            frames.push(camView.flattenForExport(t, 1920, 1080));
+            frames.push(camView.flattenForExport(t, expW, expH));
             if (i % 30 === 0) setStatus(`Frame ${i}/${total}...`);
           }
-          setStatus(`Sending ${total} frames...`);
+          setStatus(`Sending ${total} frames to backend...`);
+          const payload = {
+            settings: { width: expW, height: expH, fps: expFps, background: [0,0,0,1] },
+            frames,
+            output: outputPath,
+            ffmpeg: ffmpegPath,
+            codec, crf, preset,
+            pixel_format: pixFmt,
+          };
           const res = await fetch('http://localhost:8000/export', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ frames, width: 1920, height: 1080, fps: EXPORT_FPS }),
+            body: JSON.stringify(payload),
           });
           const d = await res.json();
           setStatus(d.status === 'ok' ? `✅ ${d.path}` : `❌ ${d.error}`);
@@ -655,9 +770,13 @@
         <div class="prop-row"><label>W</label><input type="number" value="${e.width.toFixed(0)}" data-p="width"/></div>
         <div class="prop-row"><label>H</label><input type="number" value="${e.height.toFixed(0)}" data-p="height"/></div>
         <div class="prop-row"><label>Rot</label><input type="number" step="0.1" value="${e.rotation.toFixed(2)}" data-p="rotation"/></div>
-        <div class="prop-row"><label>α</label><input type="number" step="0.05" min="0" max="1" value="${e.opacity.toFixed(2)}" data-p="opacity"/></div>`;
+        <div class="prop-row"><label>α</label><input type="number" step="0.05" min="0" max="1" value="${e.opacity.toFixed(2)}" data-p="opacity"/></div>
+        <div class="prop-row"><label>Layer</label><input type="number" step="1" min="0" value="${e.layer}" data-p="layer"/></div>`;
       el.querySelectorAll('input').forEach(inp => {
-        inp.onchange = () => { scene.updateEntity(selectedId, { [inp.dataset.p]: parseFloat(inp.value) }); };
+        inp.onchange = () => {
+          const val = parseFloat(inp.value);
+          scene.updateEntity(selectedId, { [inp.dataset.p]: inp.dataset.p === 'layer' ? Math.round(val) : val });
+        };
       });
     }
 

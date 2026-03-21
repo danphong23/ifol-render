@@ -137,8 +137,10 @@ export class AssetManager {
 
   /**
    * Extract a single video frame as RGBA at the given timestamp.
-   * Seeks the video to the timestamp, draws to canvas, and caches in Core
-   * as an encoded image (JPEG for speed). Uses reduced resolution for performance.
+   * Seeks the video, draws to canvas, extracts raw RGBA pixels,
+   * and pushes through coreVideoCache → Core's cache_video_frame().
+   *
+   * This matches the proven pipeline from web/main.js (DecodeVideoFrame path).
    */
   async extractVideoFrame(key: string, timestamp: number): Promise<void> {
     const asset = this.videos.get(key);
@@ -146,17 +148,13 @@ export class AssetManager {
 
     const video = asset.element;
 
-    // Skip if timestamp hasn't changed significantly
-    const lastTs = this.lastVideoTimestamp.get(key);
-    if (lastTs !== undefined && Math.abs(timestamp - lastTs) < 0.03) return;
-
     // Reduced resolution for performance (max 640px width)
     const maxW = 640;
     const scale = Math.min(1, maxW / asset.pixelWidth);
     const w = Math.round(asset.pixelWidth * scale);
     const h = Math.round(asset.pixelHeight * scale);
 
-    // Seek to timestamp
+    // Only seek if timestamp changed significantly (seeking is the slow part)
     const target = Math.max(0, Math.min(timestamp, asset.duration));
     if (Math.abs(video.currentTime - target) > 0.05) {
       video.currentTime = target;
@@ -170,21 +168,46 @@ export class AssetManager {
     // Reuse canvas for performance
     if (!this.videoCanvas || this.videoCanvas.width !== w || this.videoCanvas.height !== h) {
       this.videoCanvas = new OffscreenCanvas(w, h);
-      this.videoCtx = this.videoCanvas.getContext('2d')!;
+      this.videoCtx = this.videoCanvas.getContext('2d', { willReadFrequently: true })!;
     }
 
     this.videoCtx!.drawImage(video, 0, 0, w, h);
 
-    // Encode as JPEG (much faster than PNG)
-    const blob = await this.videoCanvas!.convertToBlob({ type: 'image/jpeg', quality: 0.7 });
-    const bytes = new Uint8Array(await blob.arrayBuffer());
+    // Extract raw RGBA pixels (same as working main.js approach)
+    const imageData = this.videoCtx!.getImageData(0, 0, w, h);
+    const rgba = new Uint8Array(imageData.data.buffer);
 
-    // Push as regular image cache (overwrites previous frame for this key)
-    this.coreCache?.(key, bytes);
-    this.lastVideoTimestamp.set(key, timestamp);
+    // Push RGBA through coreVideoCache → Core's cache_video_frame(key, t, rgba, w, h)
+    // This lands in backend.video_frames[key@t] which decode_video_frame() reads from.
+    this.coreVideoCache?.(key, timestamp, rgba, w, h);
   }
 
-  private lastVideoTimestamp = new Map<string, number>();
+  /**
+   * Prepare all video frames needed for the current time.
+   * Call this once per render tick — SDK handles all video entities automatically.
+   *
+   * ```ts
+   * // In your render loop:
+   * await assets.prepareVideoFrames(scene.allEntities(), time);
+   * const frame = view.flattenAt(time);
+   * core.render_frame(JSON.stringify(frame));
+   * ```
+   */
+  async prepareVideoFrames(entities: Iterable<{ type: string; source?: string; startTime: number }>, time: number): Promise<void> {
+    // Clear old video frames to prevent memory bloat
+    this.coreClearVideo?.();
+
+    for (const e of entities) {
+      if (e.type === 'video' && e.source) {
+        const va = this.videos.get(e.source);
+        if (va?.element && va.element.readyState >= 2) {
+          const localTime = Math.max(0, Math.min(time - e.startTime, va.duration));
+          try { await this.extractVideoFrame(e.source, localTime); } catch (_) {}
+        }
+      }
+    }
+  }
+
   private videoCanvas: OffscreenCanvas | null = null;
   private videoCtx: OffscreenCanvasRenderingContext2D | null = null;
 

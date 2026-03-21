@@ -72,7 +72,7 @@ export class RenderView {
     const entities = this.scene.visibleAt(time, this.excludeIds);
     const renderW = Math.round(this.displayWidth * this.renderScale);
     const renderH = Math.round(this.displayHeight * this.renderScale);
-    return flatten(entities, region, renderW, renderH);
+    return flatten(entities, region, renderW, renderH, time);
   }
 
   /**
@@ -82,7 +82,7 @@ export class RenderView {
   flattenForExport(time: number, exportW: number, exportH: number): Frame {
     const region = this.camera.getRegion(time);
     const entities = this.scene.visibleAt(time, this.excludeIds);
-    return flatten(entities, region, exportW, exportH);
+    return flatten(entities, region, exportW, exportH, time);
   }
 
   /**
@@ -100,6 +100,42 @@ export class RenderView {
     for (let i = 0; i < totalFrames; i++) {
       yield this.flattenForExport(i / fps, exportW, exportH);
     }
+  }
+
+  /**
+   * Build a complete export scene JSON for the CLI/backend.
+   *
+   * Produces `{ settings, frames, audio_clips? }` — the exact format
+   * that `ifol-render export --scene` expects.
+   *
+   * ```ts
+   * const sceneJson = view.buildExportScene(30, 1920, 1080);
+   * // POST to backend: fetch('/export', { body: JSON.stringify(sceneJson) })
+   * ```
+   */
+  buildExportScene(
+    fps: number,
+    exportW: number,
+    exportH: number,
+    opts?: { audioClips?: Array<{ path: string; start_time: number; duration: number; volume?: number }>; background?: [number, number, number, number] },
+  ): { settings: object; frames: Frame[]; audio_clips?: object[] } {
+    const frames: Frame[] = [];
+    for (const frame of this.exportFrames(fps, exportW, exportH)) {
+      frames.push(frame);
+    }
+    const result: { settings: object; frames: Frame[]; audio_clips?: object[] } = {
+      settings: {
+        width: exportW,
+        height: exportH,
+        fps,
+        background: opts?.background ?? [0, 0, 0, 1],
+      },
+      frames,
+    };
+    if (opts?.audioClips && opts.audioClips.length > 0) {
+      result.audio_clips = opts.audioClips;
+    }
+    return result;
   }
 
   /** Update display size (triggers no recomputation — lazy). */

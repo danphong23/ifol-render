@@ -72,6 +72,11 @@ impl IfolRenderWeb {
         self.backend.video_frames.write().unwrap().clear();
     }
 
+    /// Remove a specific texture from the GPU cache.
+    pub fn evict_texture(&mut self, key: &str) {
+        self.engine.evict_texture(key);
+    }
+
     // ── Setup ────────────────────────────────
 
     /// Setup the pipeline standard builtins (Call this AFTER caching the fonts!)
