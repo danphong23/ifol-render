@@ -251,7 +251,8 @@ impl CoreEngine {
                 self.video_streams.insert(stream_key.clone(), stream);
             }
 
-            let stream = self.video_streams.get_mut(&stream_key).unwrap();
+            let stream = self.video_streams.get_mut(&stream_key)
+                .ok_or_else(|| format!("Video stream not found: {}", stream_key))?;
             let pixels = stream.frame_at(timestamp_secs)?;
             // update_rgba: reuse existing GPU texture, avoid 8MB alloc/dealloc per frame
             self.renderer.update_rgba(key, pixels, w, h);

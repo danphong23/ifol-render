@@ -1920,7 +1920,7 @@ dependencies = [
 
 [[package]]
 name = "ifol-audio"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "log",
  "serde",
@@ -1929,7 +1929,7 @@ dependencies = [
 
 [[package]]
 name = "ifol-render"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "image",
@@ -1942,7 +1942,7 @@ dependencies = [
 
 [[package]]
 name = "ifol-render-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "env_logger",
@@ -1954,7 +1954,7 @@ dependencies = [
 
 [[package]]
 name = "ifol-render-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ab_glyph",
  "bytemuck",
@@ -1970,7 +1970,7 @@ dependencies = [
 
 [[package]]
 name = "ifol-render-studio"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "eframe",
  "egui",
@@ -1986,7 +1986,7 @@ dependencies = [
 
 [[package]]
 name = "ifol-render-wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "console_error_panic_hook",
  "ifol-render-core",
@@ -3452,7 +3452,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "sha1"
