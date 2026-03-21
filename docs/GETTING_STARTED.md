@@ -1,138 +1,132 @@
-# Getting Started
+# Getting Started with ifol-render
 
-## Prerequisites
+## Installation
 
-1. **Rust** 1.85+ — install from [rustup.rs](https://rustup.rs/)
-2. **GPU** with Vulkan (Linux/Windows), DX12 (Windows), or Metal (macOS) support
-3. **FFmpeg** (optional) — required only for video export
-
-### FFmpeg Setup
-
-Download from [ffmpeg.org](https://ffmpeg.org/download.html) and either:
-- Add to your system PATH, or
-- Place in `tools/ffmpeg` in the project directory and configure the path in the studio
-
----
-
-## Running the Studio
-
+### Web (NPM)
 ```bash
-git clone https://github.com/nicengi/ifol-render.git
-cd ifol-render
-cargo run -p ifol-render-studio
+npm install @danphong23/ifol-render-wasm ifol-render-sdk
 ```
 
-### Studio Workflow
+### Desktop (GitHub Releases)
+Download the latest `.zip` from [Releases](https://github.com/danphong23/ifol-render/releases):
+- `ifol-render.exe` — CLI tool for headless rendering and export
+- `ifol-render-studio.exe` — GUI editor with real-time preview
 
-1. **New Scene** — Studio opens with an empty scene
-2. **Add Entities** — Click `+ Add` in the Entity List to add Color Solids or Image Layers
-3. **Edit Properties** — Select an entity to view/edit Transform, Color, Timeline in the Properties panel
-4. **Timeline** — Click/drag the ruler to scrub the playhead; play with `Space` or `▶ Run`
-5. **Save** — `File > Save` or `Ctrl+S` to save as JSON
-6. **Export** — `⋮ > Export Video...` to export via FFmpeg
-
-### Viewport Overlays
-
-- Click **▦** to toggle the rule-of-thirds grid
-- Click **◻** to toggle broadcast safe zones (action 90%, title 80%)
-
-### FFmpeg Path (Studio)
-
-Configure in `⋮ > FFmpeg Path` — type the path or click Browse.
+> **Note:** FFmpeg is required for video export. Install it from [ffmpeg.org](https://ffmpeg.org/download.html) or via `winget install ffmpeg`.
 
 ---
 
-## CLI Usage
+## Quick Start — Web
 
-```bash
-# Build the CLI
-cargo build -p ifol-render-cli
+### 1. Initialize the WASM engine
+```html
+<canvas id="canvas" width="1920" height="1080"></canvas>
+<script type="module">
+  import init, { IfolRenderWeb } from '@danphong23/ifol-render-wasm';
+  import { DrawableEntity, FrameBuilder, TextureUpdates } from 'ifol-render-sdk';
 
-# Scene info
-cargo run -p ifol-render-cli -- info -s examples/test_render.json
-
-# Preview a single frame
-cargo run -p ifol-render-cli -- preview -s examples/test_render.json -t 2.5 -o frame.png
-
-# Export video
-cargo run -p ifol-render-cli -- export -s examples/test_render.json -o output.mp4
-
-# Export with options
-cargo run -p ifol-render-cli -- export \
-  -s examples/test_phase5_9.json \
-  -o output.webm \
-  -c vp9 \
-  --crf 28 \
-  --ffmpeg path/to/ffmpeg
+  await init();
+  const canvas = document.getElementById('canvas');
+  const core = await new IfolRenderWeb(canvas, 1920, 1080, 30);
+  core.setup_builtins();
+</script>
 ```
 
-### CLI Options
+### 2. Draw your first frame
+```javascript
+// Create a blue background
+const bg = new DrawableEntity(0, 0, 0, 1920, 1080)
+  .setShader('shapes')
+  .setColor(0.1, 0.1, 0.3, 1)
+  .setLayer(0);
 
-| Flag | Description |
-|------|-------------|
-| `-s, --scene` | Path to scene JSON file |
-| `-o, --output` | Output file path |
-| `-c, --codec` | Video codec: h264, h265, vp9, prores, png |
-| `--crf` | Quality (0=lossless, 51=worst; default 18) |
-| `--fps` | Override scene FPS |
-| `-w, --width` | Override width |
-| `-h, --height` | Override height |
-| `--ffmpeg` | Path to FFmpeg binary |
+// Create a green circle
+const circle = new DrawableEntity(1, 800, 400, 200, 200)
+  .setShader('shapes')
+  .setParams([1.0])  // 1.0 = circle
+  .setColor(0.2, 0.9, 0.4, 0.9)
+  .setLayer(1);
+
+// Build and render
+const frame = new FrameBuilder()
+  .setClearColor(0, 0, 0, 1)
+  .addEntity(bg)
+  .addEntity(circle)
+  .build();
+
+core.render_frame(JSON.stringify(frame));
+```
+
+### 3. Load images
+```javascript
+import { AssetManager } from 'ifol-render-sdk';
+
+const assets = new AssetManager({
+  ppu: 100,
+  urlResolver: (path) => `/assets/${path}`,
+  coreCache: (key, data) => core.cache_image(key, data),
+});
+
+await assets.loadImage('hero.png');
+
+const img = new DrawableEntity(2, 100, 100, 400, 300)
+  .setShader('composite')
+  .addTexture('hero.png')
+  .setLayer(2);
+```
+
+### 4. Add audio
+```javascript
+import { AudioScene } from 'ifol-render-sdk';
+
+const audio = new AudioScene();
+audio.addClip({
+  source: 'bgm.mp3',
+  startTime: 0,
+  volume: 0.8,
+  fadeIn: 1.0,
+  fadeOut: 2.0,
+}, 'bgm');
+```
+
+### 5. Export
+```javascript
+import { buildExportPayload } from 'ifol-render-sdk';
+
+const frames = []; // collect frames for each timestep
+const payload = buildExportPayload(
+  { output: 'video.mp4', width: 1920, height: 1080, fps: 30 },
+  frames,
+  audio.flattenForExport()
+);
+
+await fetch('/export', {
+  method: 'POST',
+  body: JSON.stringify(payload),
+});
+```
 
 ---
 
-## Creating a Scene File
+## SDK Modules
 
-Scene files are JSON documents following the `SceneDescription` format:
+| Module | Purpose |
+|--------|---------|
+| `DrawableEntity` | Pixel-space drawable element |
+| `FrameBuilder` | Composable frame assembly |
+| `AudioScene` | Audio track & clip management |
+| `AssetManager` | Image/video decode & cache |
+| `Scene` | Optional entity CRUD helper |
+| `Timeline` | Optional playback state |
+| `BoundCamera` / `FreeCamera` | Viewport math |
+| `AnimationManager` | Optional keyframe interpolation |
 
-```json
-{
-  "version": "1.0",
-  "settings": {
-    "width": 1920,
-    "height": 1080,
-    "fps": 30,
-    "duration": 10.0
-  },
-  "entities": [
-    {
-      "id": "unique_name",
-      "components": {
-        "colorSource": { "color": { "r": 1.0, "g": 0.0, "b": 0.0, "a": 1.0 } },
-        "timeline": { "startTime": 0.0, "duration": 10.0, "layer": 0 },
-        "transform": {
-          "position": { "x": 0.0, "y": 0.0 },
-          "scale": { "x": 0.5, "y": 0.5 },
-          "rotation": 0.0
-        },
-        "opacity": 0.8,
-        "parent": "other_entity_id"
-      }
-    }
-  ]
-}
+## Architecture
 ```
-
-### Available Components
-
-| Component | Fields |
-|-----------|--------|
-| `colorSource` | `color: { r, g, b, a }` |
-| `imageSource` | `path: string` |
-| `videoSource` | `path, trimStart, trimEnd, playbackRate` |
-| `textSource` | `content, font, fontSize, color, bold, italic` |
-| `timeline` | `startTime, duration, layer` |
-| `transform` | `position, scale, rotation, anchor` |
-| `opacity` | `float (0.0–1.0)` |
-| `animation` | `keyframes: [{ time, property, value, easing }]` |
-| `parent` | `entity_id (string)` |
-| `color` | `brightness, contrast, saturation, hue, temperature` |
-| `effects` | `[{ type, params: {} }]` |
-
-### Easing Types
-
-- `"linear"` — constant rate
-- `"easeIn"` — accelerate (cubic)
-- `"easeOut"` — decelerate (cubic)
-- `"easeInOut"` — smooth both ends
-- `{ "cubicBezier": [x1, y1, x2, y2] }` — custom bezier curve
+Your App (any framework)
+  ↓ builds DrawableEntity / FrameBuilder
+SDK Toolkit (produces Frame JSON)
+  ↓ Frame JSON string
+Core WASM (GPU rendering)
+  ↓ pixels on canvas
+```

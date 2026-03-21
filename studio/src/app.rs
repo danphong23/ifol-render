@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 // ── Audio playback ──
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
+use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
 
 // ── Theme ──
 const BG_APP: egui::Color32 = egui::Color32::from_rgb(24, 25, 28);
@@ -284,6 +284,7 @@ impl AudioPlayer {
     }
 
     /// Resume audio playback.
+    #[allow(dead_code)]
     fn resume(&mut self) {
         for sink in &self.sinks {
             sink.play();
@@ -296,6 +297,7 @@ impl AudioPlayer {
     }
 
     /// Check if any sink is currently playing.
+    #[allow(dead_code)]
     fn is_playing(&self) -> bool {
         self.sinks.iter().any(|s| !s.is_paused() && !s.empty())
     }

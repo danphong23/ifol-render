@@ -21,7 +21,6 @@ pub struct VideoStream {
     path: String,
     width: u32,
     height: u32,
-    frame_size: usize,
     /// Current decoded frame index (0-based from stream start).
     frames_read: u64,
     /// Timestamp (seconds) where the stream was started.
@@ -57,7 +56,6 @@ impl VideoStream {
             path: path.to_string(),
             width,
             height,
-            frame_size,
             frames_read: 0,
             start_secs,
             fps,
