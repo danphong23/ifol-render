@@ -69,7 +69,7 @@ impl CoreEngine {
     /// Create a web renderer bound to an HTML Canvas
     #[cfg(target_arch = "wasm32")]
     pub async fn new_web(
-        canvas: web_sys::HtmlCanvasElement, 
+        canvas: web_sys::HtmlCanvasElement,
         settings: RenderSettings,
         backend: Box<dyn MediaBackend>,
     ) -> Self {
@@ -149,12 +149,15 @@ impl CoreEngine {
     /// Cached: calling again with same key is a no-op.
     pub fn load_image(&mut self, key: &str, path: &str) -> Result<(), String> {
         if !self.renderer.has_texture(key) {
-            let data = self.backend.read_file_bytes(path)
+            let data = self
+                .backend
+                .read_file_bytes(path)
                 .ok_or_else(|| format!("Failed to read asset '{}'", path))?;
             let img = image::load_from_memory(&data)
                 .map_err(|e| format!("Failed to decode image '{}': {}", path, e))?;
             let rgba = img.into_rgba8();
-            self.renderer.load_rgba(key, &rgba, rgba.width(), rgba.height());
+            self.renderer
+                .load_rgba(key, &rgba, rgba.width(), rgba.height());
         }
         Ok(())
     }
@@ -191,7 +194,9 @@ impl CoreEngine {
     /// Load a font file into the font cache.
     pub fn load_font(&mut self, key: &str, path: &str) -> Result<(), String> {
         if !self.font_cache.contains_key(key) {
-            let data = self.backend.read_file_bytes(path)
+            let data = self
+                .backend
+                .read_file_bytes(path)
                 .ok_or_else(|| format!("Failed to read font '{}'", path))?;
             self.font_cache.insert(key.to_string(), data);
         }
@@ -222,7 +227,8 @@ impl CoreEngine {
         #[cfg(target_arch = "wasm32")]
         {
             // Try raw RGBA path first (from HTML5 Canvas getImageData or similar)
-            if let Some((pixels, fw, fh)) = self.backend.get_video_frame_rgba(path, timestamp_secs) {
+            if let Some((pixels, fw, fh)) = self.backend.get_video_frame_rgba(path, timestamp_secs)
+            {
                 self.renderer.update_rgba(key, &pixels, fw, fh);
                 return Ok([fw, fh]);
             }
@@ -236,7 +242,10 @@ impl CoreEngine {
                     return Ok([actual_w, actual_h]);
                 }
             }
-            return Err(format!("No video frame available for '{}' at {:.2}s — backend did not provide frame data", path, timestamp_secs));
+            return Err(format!(
+                "No video frame available for '{}' at {:.2}s — backend did not provide frame data",
+                path, timestamp_secs
+            ));
         }
 
         // ── Native path: VideoStream for fast sequential FFmpeg pipe decoding ──
@@ -251,7 +260,9 @@ impl CoreEngine {
                 self.video_streams.insert(stream_key.clone(), stream);
             }
 
-            let stream = self.video_streams.get_mut(&stream_key)
+            let stream = self
+                .video_streams
+                .get_mut(&stream_key)
                 .ok_or_else(|| format!("Video stream not found: {}", stream_key))?;
             let pixels = stream.frame_at(timestamp_secs)?;
             // update_rgba: reuse existing GPU texture, avoid 8MB alloc/dealloc per frame
@@ -326,7 +337,9 @@ impl CoreEngine {
                     );
 
                     // ZERO-COPY: Render directly to intermediate target in VRAM
-                    let _ = self.renderer.render_frame_to(&commands, *clear_color, Some(&pass.output));
+                    let _ =
+                        self.renderer
+                            .render_frame_to(&commands, *clear_color, Some(&pass.output));
                 }
 
                 PassType::Effect {
@@ -342,7 +355,11 @@ impl CoreEngine {
                     }];
 
                     // ZERO-COPY: Render directly to intermediate target in VRAM
-                    let _ = self.renderer.render_frame_to(&commands, [0.0, 0.0, 0.0, 0.0], Some(&pass.output));
+                    let _ = self.renderer.render_frame_to(
+                        &commands,
+                        [0.0, 0.0, 0.0, 0.0],
+                        Some(&pass.output),
+                    );
                 }
 
                 PassType::Output { input } => {
@@ -352,7 +369,7 @@ impl CoreEngine {
                         uniforms: vec![0.0], // Padding to fulfill minimal binding size
                         textures: vec![input.clone()],
                     }];
-                    
+
                     // Sending None performs the CPU synchronization and mapped Download
                     last_pixels = self.renderer.render_frame(&commands, [0.0, 0.0, 0.0, 1.0]);
                 }
@@ -378,7 +395,7 @@ impl CoreEngine {
         total_frames: usize,
         config: &ExportConfig,
         mut on_progress: impl FnMut(ExportProgress) -> bool,
-    ) -> Result<String, String> 
+    ) -> Result<String, String>
     where
         I: IntoIterator<Item = Frame>,
     {
@@ -399,7 +416,9 @@ impl CoreEngine {
         log::info!("Export Hardware detected: {:?}", sys_info);
 
         let output_path = config.output_path.clone();
-        let mut encoder = self.backend.start_export(width, height, fps, config, &sys_info)?;
+        let mut encoder = self
+            .backend
+            .start_export(width, height, fps, config, &sys_info)?;
 
         // GPU-CPU pipeline: buffer up to 3 frames.
         // GPU renders -> pushes to this channel.
@@ -426,7 +445,7 @@ impl CoreEngine {
 
         for (i, frame) in frames.into_iter().enumerate() {
             let pixels = self.render_frame(&frame);
-            
+
             // Push pixels to encode thread. Blocks if queue is full.
             // If encode thread hit an error, the queue is closed and `send` fails.
             if tx.send(pixels).is_err() {
@@ -439,7 +458,11 @@ impl CoreEngine {
             } else {
                 0.0
             };
-            let remaining: u64 = if total_frames > i + 1 { (total_frames - i - 1) as u64 } else { 0 };
+            let remaining: u64 = if total_frames > i + 1 {
+                (total_frames - i - 1) as u64
+            } else {
+                0
+            };
             let eta = if export_fps > 0.0 {
                 remaining as f64 / export_fps
             } else {
@@ -461,7 +484,9 @@ impl CoreEngine {
         drop(tx);
 
         // Propagate any FFmpeg IO errors that occurred in the encode thread.
-        encode_thread.join().map_err(|_| "Encode thread panicked".to_string())??;
+        encode_thread
+            .join()
+            .map_err(|_| "Encode thread panicked".to_string())??;
 
         Ok(output_path)
     }
@@ -551,7 +576,9 @@ impl CoreEngine {
                     {
                         log::error!(
                             "⚠ Video decode FAILED for key='{}' path='{}' t={:.2}s ({}×{}): {}",
-                            key, path, timestamp_secs,
+                            key,
+                            path,
+                            timestamp_secs,
                             width.unwrap_or(self.settings.width),
                             height.unwrap_or(self.settings.height),
                             e

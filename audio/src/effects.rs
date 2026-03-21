@@ -86,12 +86,23 @@ impl EffectRegistry {
     }
 
     /// Create an effect instance from type name and parameters.
-    pub fn create(&self, effect_type: &str, params: &HashMap<String, f64>) -> Option<Box<dyn AudioEffect>> {
-        self.factories.get(effect_type).map(|factory| factory(params))
+    pub fn create(
+        &self,
+        effect_type: &str,
+        params: &HashMap<String, f64>,
+    ) -> Option<Box<dyn AudioEffect>> {
+        self.factories
+            .get(effect_type)
+            .map(|factory| factory(params))
     }
 
     /// Apply a chain of effects to samples.
-    pub fn apply_chain(&self, effects: &[EffectInstance], samples: &mut [f32], config: &AudioConfig) {
+    pub fn apply_chain(
+        &self,
+        effects: &[EffectInstance],
+        samples: &mut [f32],
+        config: &AudioConfig,
+    ) {
         for inst in effects {
             if let Some(effect) = self.create(&inst.effect_type, &inst.params) {
                 effect.process(samples, config);

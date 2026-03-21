@@ -1,6 +1,6 @@
 use ifol_render_core::backend::media::{MediaBackend, MediaDecoder, MediaEncoder};
 use ifol_render_core::export::ExportConfig;
-use ifol_render_core::{VideoInfo, SysInfo};
+use ifol_render_core::{SysInfo, VideoInfo};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -41,10 +41,10 @@ impl MediaBackend for WebMediaBackend {
     }
 
     fn decode_video(
-        &self, 
-        _path: &str, 
-        _start_secs: f64, 
-        _width: u32, 
+        &self,
+        _path: &str,
+        _start_secs: f64,
+        _width: u32,
         _height: u32,
         _fps: f64,
     ) -> Result<Box<dyn MediaDecoder>, String> {
@@ -52,11 +52,11 @@ impl MediaBackend for WebMediaBackend {
     }
 
     fn start_export(
-        &self, 
+        &self,
         _width: u32,
         _height: u32,
         _fps: f64,
-        _config: &ExportConfig, 
+        _config: &ExportConfig,
         _sys_info: &SysInfo,
     ) -> Result<Box<dyn MediaEncoder>, String> {
         Err("Not supported in WASM".into())

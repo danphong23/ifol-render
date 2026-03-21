@@ -69,11 +69,7 @@ impl GpuEngine {
 
     /// Create a GPU engine attached to an HTML canvas (Web).
     #[cfg(target_arch = "wasm32")]
-    pub async fn new_web(
-        canvas: web_sys::HtmlCanvasElement,
-        width: u32,
-        height: u32,
-    ) -> Self {
+    pub async fn new_web(canvas: web_sys::HtmlCanvasElement, width: u32, height: u32) -> Self {
         let instance = wgpu::Instance::default();
 
         let surface = instance
@@ -105,8 +101,8 @@ impl GpuEngine {
         let mut surface_config = surface
             .get_default_config(&adapter, width, height)
             .expect("Failed to get default surface configuration");
-        surface_config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT 
-            | wgpu::TextureUsages::COPY_DST 
+        surface_config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_DST
             | wgpu::TextureUsages::COPY_SRC;
         let capabilities = surface.get_capabilities(&adapter);
         let format = capabilities
@@ -117,10 +113,14 @@ impl GpuEngine {
             .unwrap_or(capabilities.formats[0]);
 
         surface_config.format = format;
-        
+
         surface.configure(&device, &surface_config);
 
-        log::info!("WebGPU engine initialized: {:?}, format: {:?}", adapter.get_info().name, format);
+        log::info!(
+            "WebGPU engine initialized: {:?}, format: {:?}",
+            adapter.get_info().name,
+            format
+        );
 
         Self {
             instance,
@@ -135,21 +135,29 @@ impl GpuEngine {
         }
     }
 
-
-
     /// Resize the output texture.
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
         if self.surface.is_none() {
-            self.output_texture = Some(Self::create_output_texture(&self.device, width, height, self.texture_format));
+            self.output_texture = Some(Self::create_output_texture(
+                &self.device,
+                width,
+                height,
+                self.texture_format,
+            ));
         } else {
             // Reconfigure surface
         }
         log::info!("Resized output to {}x{}", width, height);
     }
 
-    fn create_output_texture(device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) -> wgpu::Texture {
+    fn create_output_texture(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> wgpu::Texture {
         device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Output"),
             size: wgpu::Extent3d {

@@ -65,7 +65,7 @@ impl MediaBackend for FfmpegMediaBackend {
     ) -> Result<Box<dyn MediaEncoder>, String> {
         // Use best hardware encoder detected
         let encoder = sys_info.best_h264_encoder();
-        
+
         let mut cmd = Command::new(&self.ffmpeg_bin);
         cmd.arg("-y") // Overwrite output files without asking
             .args(["-f", "rawvideo"])
@@ -86,8 +86,9 @@ impl MediaBackend for FfmpegMediaBackend {
                 cmd.args(["-preset", "fast"]); // fast preset for intel/amd
                 cmd.args(["-crf", &config.crf.to_string()]);
             }
-            _ => { // libx264 fallback
-                cmd.args(["-preset", "ultrafast"]); 
+            _ => {
+                // libx264 fallback
+                cmd.args(["-preset", "ultrafast"]);
                 cmd.args(["-crf", &config.crf.to_string()]);
             }
         }
@@ -107,7 +108,6 @@ impl MediaBackend for FfmpegMediaBackend {
 
         Ok(Box::new(FfmpegVideoEncoder { child: Some(child) }))
     }
-
 }
 
 /// Active FFmpeg Video Decoder Stream
@@ -155,7 +155,9 @@ impl MediaEncoder for FfmpegVideoEncoder {
         if let Some(child) = &mut self.child {
             if let Some(stdin) = &mut child.stdin {
                 use std::io::Write;
-                return stdin.write_all(buffer).map_err(|e| format!("Failed to pipe frame to encoder: {e}"));
+                return stdin
+                    .write_all(buffer)
+                    .map_err(|e| format!("Failed to pipe frame to encoder: {e}"));
             }
         }
         Err("Encoder stdin is closed".to_string())
@@ -165,9 +167,11 @@ impl MediaEncoder for FfmpegVideoEncoder {
         if let Some(mut child) = self.child.take() {
             // Drop stdin to signal EOF so FFmpeg flushes and completes
             drop(child.stdin.take());
-            
-            let output = child.wait_with_output().map_err(|e| format!("Failed waiting for FFmpeg: {e}"))?;
-            
+
+            let output = child
+                .wait_with_output()
+                .map_err(|e| format!("Failed waiting for FFmpeg: {e}"))?;
+
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 return Err(format!("FFmpeg export failed: {}", stderr.trim()));

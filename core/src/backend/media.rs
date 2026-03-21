@@ -18,7 +18,7 @@ pub trait MediaEncoder: Send {
     fn close(&mut self) -> Result<(), String>;
 }
 
-/// A media backend handles all OS-specific or environment-specific (Desktop FFmpeg vs WASM WebCodecs) 
+/// A media backend handles all OS-specific or environment-specific (Desktop FFmpeg vs WASM WebCodecs)
 /// video operations.
 ///
 /// Consumer provides an implementation when creating `CoreEngine`.
@@ -26,43 +26,52 @@ pub trait MediaEncoder: Send {
 ///
 /// Note: Audio is handled by the separate `ifol-audio` crate.
 pub trait MediaBackend {
-    /// Read file bytes from a path. 
+    /// Read file bytes from a path.
     /// On native: default reads from filesystem.
     /// On WASM: must be overridden (e.g. fetch from HTTP cache).
     fn read_file_bytes(&self, _path: &str) -> Option<Vec<u8>> {
         #[cfg(not(target_arch = "wasm32"))]
-        { std::fs::read(_path).ok() }
+        {
+            std::fs::read(_path).ok()
+        }
         #[cfg(target_arch = "wasm32")]
-        { None }
+        {
+            None
+        }
     }
-    
+
     /// Get video metadata (width, height, fps, duration, codec).
-    fn get_video_info(&self, _path: &str) -> Option<VideoInfo> { None }
-    
+    fn get_video_info(&self, _path: &str) -> Option<VideoInfo> {
+        None
+    }
+
     /// Get a video frame as raw uncompressed or JPEG/PNG blob at timestamp.
-    fn get_video_frame(&self, _path: &str, _timestamp: f64) -> Option<Vec<u8>> { None }
-    
+    fn get_video_frame(&self, _path: &str, _timestamp: f64) -> Option<Vec<u8>> {
+        None
+    }
+
     /// Get a video frame as raw RGBA pixels + dimensions at timestamp.
-    fn get_video_frame_rgba(&self, _path: &str, _timestamp: f64) -> Option<(Vec<u8>, u32, u32)> { None }
+    fn get_video_frame_rgba(&self, _path: &str, _timestamp: f64) -> Option<(Vec<u8>, u32, u32)> {
+        None
+    }
 
     /// Spawn a video decoder stream for a specific file at a specific offset.
     fn decode_video(
-        &self, 
-        path: &str, 
-        start_secs: f64, 
-        width: u32, 
-        height: u32, 
+        &self,
+        path: &str,
+        start_secs: f64,
+        width: u32,
+        height: u32,
         fps: f64,
     ) -> Result<Box<dyn MediaDecoder>, String>;
 
     /// Spawn a video encoder that will output the final muxed video.
     fn start_export(
-        &self, 
+        &self,
         width: u32,
         height: u32,
         fps: f64,
-        config: &ExportConfig, 
+        config: &ExportConfig,
         sys_info: &SysInfo,
     ) -> Result<Box<dyn MediaEncoder>, String>;
 }
-

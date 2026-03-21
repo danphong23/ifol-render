@@ -114,19 +114,23 @@ fn main() {
             // Parse settings
             let settings: ifol_render_core::RenderSettings = doc
                 .get("settings")
-                .map(|s| serde_json::from_value(s.clone()).unwrap_or_else(|e| {
-                    eprintln!("Invalid settings: {}", e);
-                    std::process::exit(1);
-                }))
+                .map(|s| {
+                    serde_json::from_value(s.clone()).unwrap_or_else(|e| {
+                        eprintln!("Invalid settings: {}", e);
+                        std::process::exit(1);
+                    })
+                })
                 .unwrap_or_default();
 
             // Parse frames
             let frames: Vec<ifol_render_core::Frame> = doc
                 .get("frames")
-                .map(|f| serde_json::from_value(f.clone()).unwrap_or_else(|e| {
-                    eprintln!("Invalid frames: {}", e);
-                    std::process::exit(1);
-                }))
+                .map(|f| {
+                    serde_json::from_value(f.clone()).unwrap_or_else(|e| {
+                        eprintln!("Invalid frames: {}", e);
+                        std::process::exit(1);
+                    })
+                })
                 .unwrap_or_else(|| {
                     eprintln!("Missing 'frames' array in scene JSON");
                     std::process::exit(1);
@@ -135,16 +139,21 @@ fn main() {
             // Parse audio clips (optional) — from ifol-audio crate
             let audio_clips: Vec<ifol_audio::AudioClip> = doc
                 .get("audio_clips")
-                .map(|a| serde_json::from_value(a.clone()).unwrap_or_else(|e| {
-                    eprintln!("Warning: Invalid audio_clips: {}", e);
-                    Vec::new()
-                }))
+                .map(|a| {
+                    serde_json::from_value(a.clone()).unwrap_or_else(|e| {
+                        eprintln!("Warning: Invalid audio_clips: {}", e);
+                        Vec::new()
+                    })
+                })
                 .unwrap_or_default();
 
             // Parse codec
             let video_codec = ifol_render_core::export::VideoCodec::parse_codec(&codec)
                 .unwrap_or_else(|| {
-                    eprintln!("Unknown codec '{}'. Available: h264, h265, vp9, prores, png", codec);
+                    eprintln!(
+                        "Unknown codec '{}'. Available: h264, h265, vp9, prores, png",
+                        codec
+                    );
                     std::process::exit(1);
                 });
 
@@ -155,11 +164,18 @@ fn main() {
 
             eprintln!(
                 "Scene: {}x{} @ {}fps, {} frames, {} audio clips",
-                out_w, out_h, fps, total, audio_clips.len()
+                out_w,
+                out_h,
+                fps,
+                total,
+                audio_clips.len()
             );
             eprintln!(
                 "Export: codec={}, crf={}, preset={}, pix_fmt={}",
-                video_codec.encoder_name(), crf, preset, pixel_format
+                video_codec.encoder_name(),
+                crf,
+                preset,
+                pixel_format
             );
 
             // Create headless CoreEngine
@@ -182,7 +198,8 @@ fn main() {
             // Build export config — if audio clips exist, render to temp video first
             let has_audio = !audio_clips.is_empty();
             let video_output = if has_audio {
-                output.replace(".mp4", "_temp_video.mp4")
+                output
+                    .replace(".mp4", "_temp_video.mp4")
                     .replace(".mov", "_temp_video.mov")
                     .replace(".webm", "_temp_video.webm")
             } else {
@@ -204,40 +221,54 @@ fn main() {
             let start = std::time::Instant::now();
 
             // Step 1: Render video (Core — GPU only, no audio)
-            match engine.export_video(
-                frames.into_iter(),
-                total,
-                &export_config,
-                |prog| {
-                    eprint!(
-                        "\rFrame {}/{} ({:.1}%) | {:.1} fps | ETA: {:.0}s   ",
-                        prog.current_frame,
-                        prog.total_frames,
-                        prog.percent(),
-                        prog.export_fps,
-                        prog.eta_seconds
-                    );
-                    true // never cancel from CLI
-                },
-            ) {
+            match engine.export_video(frames.into_iter(), total, &export_config, |prog| {
+                eprint!(
+                    "\rFrame {}/{} ({:.1}%) | {:.1} fps | ETA: {:.0}s   ",
+                    prog.current_frame,
+                    prog.total_frames,
+                    prog.percent(),
+                    prog.export_fps,
+                    prog.eta_seconds
+                );
+                true // never cancel from CLI
+            }) {
                 Ok(video_path) => {
                     // Step 2: Mix audio + mux (ifol-audio crate)
                     if has_audio {
                         eprintln!("\nMixing {} audio clips...", audio_clips.len());
                         let duration = total as f64 / fps;
-                        let audio_config = ifol_audio::AudioConfig { sample_rate: 48000, channels: 2 };
+                        let audio_config = ifol_audio::AudioConfig {
+                            sample_rate: 48000,
+                            channels: 2,
+                        };
                         let ffmpeg_bin = ffmpeg.as_deref();
 
-                        match ifol_audio::mix_clips(&audio_clips, duration, &audio_config, ffmpeg_bin) {
+                        match ifol_audio::mix_clips(
+                            &audio_clips,
+                            duration,
+                            &audio_config,
+                            ffmpeg_bin,
+                        ) {
                             Ok(pcm) => {
-                                let audio_path = output.replace(".mp4", "_temp_audio.wav")
+                                let audio_path = output
+                                    .replace(".mp4", "_temp_audio.wav")
                                     .replace(".mov", "_temp_audio.wav")
                                     .replace(".webm", "_temp_audio.wav");
-                                if let Err(e) = ifol_audio::export_wav(&pcm, &audio_config, &audio_path, ffmpeg_bin) {
+                                if let Err(e) = ifol_audio::export_wav(
+                                    &pcm,
+                                    &audio_config,
+                                    &audio_path,
+                                    ffmpeg_bin,
+                                ) {
                                     eprintln!("\nAudio export failed: {}", e);
                                     std::process::exit(1);
                                 }
-                                if let Err(e) = ifol_audio::mux_video_audio(&video_path, &audio_path, &output, ffmpeg_bin) {
+                                if let Err(e) = ifol_audio::mux_video_audio(
+                                    &video_path,
+                                    &audio_path,
+                                    &output,
+                                    ffmpeg_bin,
+                                ) {
                                     eprintln!("\nMux failed: {}", e);
                                     std::process::exit(1);
                                 }

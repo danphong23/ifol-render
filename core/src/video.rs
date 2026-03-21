@@ -6,8 +6,8 @@
 //! Design: stateless per-call (no long-running process). Fast for random access
 //! because FFmpeg uses `-ss` before `-i` for input seeking.
 
-use std::process::{Command, Stdio};
 pub use crate::types::VideoInfo;
+use std::process::{Command, Stdio};
 
 /// Probe video metadata using ffprobe.
 ///

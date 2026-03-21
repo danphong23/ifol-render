@@ -51,10 +51,22 @@ fn pixel_to_clip_matrix(entity: &FlatEntity, out_w: f32, out_h: f32) -> [f32; 16
     if entity.rotation.abs() < 1e-6 {
         // No rotation — axis-aligned scaling
         [
-            half_w * csx, 0.0,          0.0, 0.0, // column 0
-            0.0,          half_h * csy, 0.0, 0.0, // column 1
-            0.0,          0.0,          1.0, 0.0, // column 2
-            px,           py,           0.0, 1.0, // column 3
+            half_w * csx,
+            0.0,
+            0.0,
+            0.0, // column 0
+            0.0,
+            half_h * csy,
+            0.0,
+            0.0, // column 1
+            0.0,
+            0.0,
+            1.0,
+            0.0, // column 2
+            px,
+            py,
+            0.0,
+            1.0, // column 3
         ]
     } else {
         let cos = entity.rotation.cos();
@@ -69,10 +81,22 @@ fn pixel_to_clip_matrix(entity: &FlatEntity, out_w: f32, out_h: f32) -> [f32; 16
         //   col0 = [halfW·cos·csx,  -halfW·sin·csy,  0, 0]
         //   col1 = [halfH·sin·csx,   halfH·cos·csy,  0, 0]
         [
-            half_w *  cos * csx,   -half_w * sin * csy,    0.0, 0.0, // column 0
-            half_h *  sin * csx,    half_h * cos * csy,    0.0, 0.0, // column 1
-            0.0,                    0.0,                   1.0, 0.0, // column 2
-            px,                     py,                    0.0, 1.0, // column 3
+            half_w * cos * csx,
+            -half_w * sin * csy,
+            0.0,
+            0.0, // column 0
+            half_h * sin * csx,
+            half_h * cos * csy,
+            0.0,
+            0.0, // column 1
+            0.0,
+            0.0,
+            1.0,
+            0.0, // column 2
+            px,
+            py,
+            0.0,
+            1.0, // column 3
         ]
     }
 }

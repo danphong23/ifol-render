@@ -21,8 +21,8 @@ use effects::context::EffectContext;
 use vertex::{QUAD_INDICES, QUAD_VERTICES, Vertex};
 
 // Re-export
-pub use engine::gpu::GpuCapabilities;
 use engine::GpuEngine;
+pub use engine::gpu::GpuCapabilities;
 
 // ══════════════════════════════════════
 // Public API Types
@@ -378,7 +378,9 @@ impl Renderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: self.engine.texture_format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
 
@@ -721,7 +723,12 @@ impl Renderer {
 
     // ── Draw (Optimized) ─────────────────
 
-    fn get_or_create_render_target(&mut self, key: &str, width: u32, height: u32) -> wgpu::TextureView {
+    fn get_or_create_render_target(
+        &mut self,
+        key: &str,
+        width: u32,
+        height: u32,
+    ) -> wgpu::TextureView {
         let expected_size = (width as u64) * (height as u64) * 4;
         let needs_create = match self.texture_cache.get(key) {
             Some(entry) => entry.size_bytes != expected_size,
@@ -730,7 +737,12 @@ impl Renderer {
         if needs_create {
             self.load_rgba(key, &vec![0; expected_size as usize], width, height);
         }
-        let view = self.texture_cache.get(key).unwrap().texture.create_view(&Default::default());
+        let view = self
+            .texture_cache
+            .get(key)
+            .unwrap()
+            .texture
+            .create_view(&Default::default());
         self.texture_cache.get_mut(key).unwrap().last_used_frame = self.frame_number;
         view
     }
@@ -746,7 +758,7 @@ impl Renderer {
     }
 
     /// If `output_key` is Some(key), the result is rendered ONLY into the `texture_cache` map.
-    /// If `output_key` is None, the result is rendered to the final engine output (WebGPU Surface or Native texture) 
+    /// If `output_key` is None, the result is rendered to the final engine output (WebGPU Surface or Native texture)
     /// and `engine.readback_output()` can be called.
     pub fn render_frame_to(
         &mut self,
@@ -766,7 +778,8 @@ impl Renderer {
         let mut surface_frame = None;
 
         if let Some(key) = output_key {
-            output_view = self.get_or_create_render_target(key, self.engine.width, self.engine.height);
+            output_view =
+                self.get_or_create_render_target(key, self.engine.width, self.engine.height);
         } else if let Some(ref surface) = self.engine.surface {
             // WebGPU canvas rendering!
             let frame = surface
@@ -994,10 +1007,10 @@ impl Renderer {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("effect copy"),
                 });
-        self.effect_ctx
-            .as_ref()
-            .unwrap()
-            .load_from(&mut encoder, &self.texture_cache.get("effect_input_temp").unwrap().texture);
+        self.effect_ctx.as_ref().unwrap().load_from(
+            &mut encoder,
+            &self.texture_cache.get("effect_input_temp").unwrap().texture,
+        );
         self.engine.queue.submit(std::iter::once(encoder.finish()));
 
         // Run each effect

@@ -218,12 +218,7 @@ impl AudioPlayer {
     }
 
     /// Load audio from clips (metadata only, no decoding).
-    fn load_clips(
-        &mut self,
-        clips: &[AudioClip],
-        total_duration: f64,
-        ffmpeg_bin: Option<&str>,
-    ) {
+    fn load_clips(&mut self, clips: &[AudioClip], total_duration: f64, ffmpeg_bin: Option<&str>) {
         self.stop();
         self.clips = clips.to_vec();
         self.ffmpeg_bin = ffmpeg_bin.map(|s| s.to_string());
@@ -250,13 +245,13 @@ impl AudioPlayer {
             if time_secs >= clip.start_time && time_secs < end_time {
                 // Determine offset into the source clip
                 let play_offset = clip.offset + (time_secs - clip.start_time);
-                
+
                 // Spawn streaming audio
                 if let Ok(stream) = ifol_render_core::StreamingAudio::new(
-                    &clip.path, 
-                    play_offset, 
-                    &self.config, 
-                    self.ffmpeg_bin.as_deref()
+                    &clip.path,
+                    play_offset,
+                    &self.config,
+                    self.ffmpeg_bin.as_deref(),
                 ) {
                     let source = StreamingAudioSource {
                         sample_rate: stream.sample_rate,
@@ -265,7 +260,7 @@ impl AudioPlayer {
                         buffer: Vec::new(),
                         pos: 0,
                     };
-                    
+
                     if let Ok(sink) = Sink::try_new(&self.stream_handle) {
                         sink.set_volume(clip.volume);
                         sink.append(source);
@@ -440,7 +435,7 @@ impl StudioApp {
         let (tx, rx) = std::sync::mpsc::channel();
         self.loading_scene_rx = Some(rx);
         self.status = "Loading and parsing Scene JSON...".into();
-        
+
         std::thread::spawn(move || {
             let json = match std::fs::read_to_string(&p) {
                 Ok(s) => s,
@@ -548,8 +543,6 @@ impl StudioApp {
         }
     }
 
-
-
     fn total_frames(&self) -> usize {
         self.scene.as_ref().map(|s| s.frames.len()).unwrap_or(0)
     }
@@ -635,8 +628,11 @@ impl StudioApp {
             }
 
             let export_config = ifol_render_core::export::ExportConfig {
-                output_path: if audio_clips.is_empty() { out_path.clone() } else {
-                    out_path.replace(".mp4", "_temp_video.mp4")
+                output_path: if audio_clips.is_empty() {
+                    out_path.clone()
+                } else {
+                    out_path
+                        .replace(".mp4", "_temp_video.mp4")
                         .replace(".mov", "_temp_video.mov")
                         .replace(".webm", "_temp_video.webm")
                 },
@@ -650,31 +646,42 @@ impl StudioApp {
                 ffmpeg_path: export_ffmpeg.clone(),
             };
 
-            match engine.export_video(
-                frames.into_iter(),
-                total,
-                &export_config,
-                |prog| {
-                    if c.load(Ordering::Relaxed) {
-                        return false; 
-                    }
-                    p.store(prog.current_frame as usize + 1, Ordering::Release);
-                    true
+            match engine.export_video(frames.into_iter(), total, &export_config, |prog| {
+                if c.load(Ordering::Relaxed) {
+                    return false;
                 }
-            ) {
+                p.store(prog.current_frame as usize + 1, Ordering::Release);
+                true
+            }) {
                 Ok(video_path) => {
                     // Audio mixing + muxing via ifol-audio
                     if !audio_clips.is_empty() {
                         let duration = total as f64 / fps;
-                        let audio_config = ifol_audio::AudioConfig { sample_rate: 48000, channels: 2 };
+                        let audio_config = ifol_audio::AudioConfig {
+                            sample_rate: 48000,
+                            channels: 2,
+                        };
                         let ffmpeg_bin = export_ffmpeg.as_deref();
-                        
-                        if let Ok(pcm) = ifol_audio::mix_clips(&audio_clips, duration, &audio_config, ffmpeg_bin) {
-                            let audio_path = out_path.replace(".mp4", "_temp_audio.wav")
+
+                        if let Ok(pcm) =
+                            ifol_audio::mix_clips(&audio_clips, duration, &audio_config, ffmpeg_bin)
+                        {
+                            let audio_path = out_path
+                                .replace(".mp4", "_temp_audio.wav")
                                 .replace(".mov", "_temp_audio.wav")
                                 .replace(".webm", "_temp_audio.wav");
-                            let _ = ifol_audio::export_wav(&pcm, &audio_config, &audio_path, ffmpeg_bin);
-                            let _ = ifol_audio::mux_video_audio(&video_path, &audio_path, &out_path, ffmpeg_bin);
+                            let _ = ifol_audio::export_wav(
+                                &pcm,
+                                &audio_config,
+                                &audio_path,
+                                ffmpeg_bin,
+                            );
+                            let _ = ifol_audio::mux_video_audio(
+                                &video_path,
+                                &audio_path,
+                                &out_path,
+                                ffmpeg_bin,
+                            );
                             let _ = std::fs::remove_file(&video_path);
                             let _ = std::fs::remove_file(&audio_path);
                         }
@@ -721,7 +728,7 @@ impl eframe::App for StudioApp {
                             let total = parsed.frames.len();
                             let mut engine = CoreEngine::new(parsed.settings.clone());
                             engine.setup_builtins();
-                            
+
                             let fpath = self.export_settings.ffmpeg_path.trim();
                             if !fpath.is_empty() {
                                 engine.set_ffmpeg_path(fpath);
@@ -729,7 +736,10 @@ impl eframe::App for StudioApp {
 
                             let duration = total as f64 / parsed.settings.fps;
 
-                            self.scene = Some(SceneData { settings: parsed.settings, frames: parsed.frames });
+                            self.scene = Some(SceneData {
+                                settings: parsed.settings,
+                                frames: parsed.frames,
+                            });
                             self.engine = Some(engine);
                             self.current_frame = 0;
                             self.playing = false;

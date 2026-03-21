@@ -1,5 +1,5 @@
-use std::process::Command;
 pub use crate::types::SysInfo;
+use std::process::Command;
 
 /// Helper function: attempt a 1-frame dummy encode using the specified encoder.
 /// Prevents crash (OS Error 232) if the binary claims support but physical hw is missing.
@@ -36,27 +36,29 @@ impl SysInfo {
         if let Ok(output) = Command::new(ffmpeg_bin).arg("-encoders").output() {
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
-                
+
                 // h264_nvenc (NVIDIA)
                 if stdout.contains("h264_nvenc") && test_encoder(ffmpeg_bin, "h264_nvenc") {
                     has_nvidia = true;
                     ffmpeg_hw_encoders.push("h264_nvenc".to_string());
                 }
-                
+
                 // h264_qsv (Intel QuickSync)
                 if stdout.contains("h264_qsv") && test_encoder(ffmpeg_bin, "h264_qsv") {
                     has_intel = true;
                     ffmpeg_hw_encoders.push("h264_qsv".to_string());
                 }
-                
+
                 // h264_amf (AMD)
                 if stdout.contains("h264_amf") && test_encoder(ffmpeg_bin, "h264_amf") {
                     has_amd = true;
                     ffmpeg_hw_encoders.push("h264_amf".to_string());
                 }
-                
+
                 // hevc_videotoolbox (Mac)
-                if stdout.contains("h264_videotoolbox") && test_encoder(ffmpeg_bin, "h264_videotoolbox") {
+                if stdout.contains("h264_videotoolbox")
+                    && test_encoder(ffmpeg_bin, "h264_videotoolbox")
+                {
                     has_mac_hw = true;
                     ffmpeg_hw_encoders.push("h264_videotoolbox".to_string());
                 }
@@ -73,9 +75,15 @@ impl SysInfo {
             "Apple (VideoToolbox)"
         } else {
             "Software/CPU"
-        }.to_string();
+        }
+        .to_string();
 
-        log::info!("SysInfo Probe: OS={}, Hardware={}, FFmpeg Encoders={:?}", os, vendor_name, ffmpeg_hw_encoders);
+        log::info!(
+            "SysInfo Probe: OS={}, Hardware={}, FFmpeg Encoders={:?}",
+            os,
+            vendor_name,
+            ffmpeg_hw_encoders
+        );
 
         Self {
             os,

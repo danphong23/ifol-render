@@ -33,18 +33,18 @@
 pub mod clip;
 pub mod decoder;
 pub mod effects;
-pub mod mixer;
 pub mod encoder;
+pub mod mixer;
 
 // ── Public re-exports ──
 pub use clip::{AudioClip, AudioConfig, AudioScene};
+#[cfg(not(target_arch = "wasm32"))]
+pub use decoder::{StreamingAudio, decode_audio};
 pub use effects::{AudioEffect, EffectInstance, EffectRegistry};
 #[cfg(not(target_arch = "wasm32"))]
-pub use decoder::{decode_audio, StreamingAudio};
+pub use encoder::export_wav;
 #[cfg(not(target_arch = "wasm32"))]
 pub use mixer::mix_clips;
-#[cfg(not(target_arch = "wasm32"))]
-pub use encoder::export_wav;
 
 /// Process an AudioScene JSON string → mixed PCM f32 samples.
 ///
@@ -65,7 +65,12 @@ pub fn process_audio(
     scene: &AudioScene,
     ffmpeg_bin: Option<&str>,
 ) -> Result<(Vec<f32>, AudioConfig), String> {
-    let pcm = mix_clips(&scene.clips, scene.total_duration, &scene.config, ffmpeg_bin)?;
+    let pcm = mix_clips(
+        &scene.clips,
+        scene.total_duration,
+        &scene.config,
+        ffmpeg_bin,
+    )?;
     Ok((pcm, scene.config.clone()))
 }
 

@@ -99,7 +99,10 @@ impl VideoStream {
             stdout.read_exact(&mut self.discard_buf).map_err(|e| {
                 format!(
                     "Failed to skip frame {} (skip {}/{}): {}",
-                    self.frames_read, i + 1, count, e
+                    self.frames_read,
+                    i + 1,
+                    count,
+                    e
                 )
             })?;
             self.frames_read += 1;

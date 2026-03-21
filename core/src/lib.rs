@@ -48,9 +48,9 @@ pub mod video;
 pub mod video_stream;
 
 // ── Public re-exports ──
-pub use audio::{AudioClip, AudioConfig, AudioScene};
 #[cfg(not(target_arch = "wasm32"))]
 pub use audio::StreamingAudio;
+pub use audio::{AudioClip, AudioConfig, AudioScene};
 pub use engine::CoreEngine;
 pub use export::{ExportConfig, ExportProgress, VideoCodec};
 pub use frame::{FlatEntity, Frame, PassType, RenderPass, RenderSettings, TextureUpdate};
