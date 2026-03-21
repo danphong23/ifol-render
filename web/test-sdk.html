@@ -86,6 +86,9 @@
     <input id="particleCount" type="number" value="100" />
     <button id="btnAnimEntity">🔄 Anim</button>
     <div class="sep"></div>
+    <button id="btnAddAudio">🎵 Audio</button>
+    <input id="audioUrl" style="width:180px" placeholder="C:/path/to/audio.mp3" />
+    <div class="sep"></div>
     <button id="btnClearAll" style="color:#e94560">✕ Clear</button>
     <button id="btnExport" style="margin-left:auto;background:#0f3460">📦 Export</button>
   </div>
@@ -218,6 +221,9 @@
     <button id="btnStop">⏹ Stop</button>
     <span class="time-display" id="timeDisplay">0.00 / 10.00</span>
     <input type="range" id="scrubber" min="0" max="1000" value="0" />
+    <span style="font-size:9px;color:#888;margin-left:4px">🔊</span>
+    <input type="range" id="volumeSlider" min="0" max="100" value="80" style="width:60px;accent-color:#4ecca3" />
+    <button id="btnMute" style="font-size:10px;padding:2px 5px;background:transparent;border:none;color:#e0e0e0;cursor:pointer">🔊</button>
   </div>
 
   <div class="bottom-bar">
@@ -226,6 +232,7 @@
     <div class="metric">Entities:<span class="v" id="mEntities">0</span></div>
     <div class="metric">Anims:<span class="v" id="mAnimated">0</span></div>
     <div class="metric">Zoom:<span class="v" id="mZoom">100%</span></div>
+    <div class="metric">🔊<span class="v" id="mAudio">0</span></div>
     <div class="metric" style="margin-left:auto">Quality:<input type="range" id="renderScaleSlider" min="25" max="100" value="100" style="width:60px;accent-color:#4ecca3;vertical-align:middle"><span class="v" id="mScale">100%</span></div>
     <div class="metric">Status:<span class="v" id="mStatus">Init</span></div>
   </div>
@@ -274,9 +281,185 @@
     // Animation (App-specific, NOT in SDK)
     const anims = new Map();
 
+    // Audio preview state
+    let audioPreview = null; // AudioPreview instance
+
     // Interaction
     let drag = null, splitterDrag = false, vpDrag = null;
     let fpsCount = 0, lastFpsTick = 0, lastRenderMs = 0;
+
+    // ═══ Web Audio Preview ═══
+    // Uses Web Audio API + HTML5 <video> elements for real-time audio playback.
+    // Syncs to the SDK Timeline state (play/pause/seek/stop).
+    class AudioPreview {
+      constructor() {
+        this.ctx = null; // AudioContext (created on user gesture)
+        this.masterGain = null;
+        this.volume = 0.8;
+        this.muted = false;
+        this.sources = []; // {type:'video'|'audio', el, gain, path, startTime, endTime, offset}
+        this.audioClips = []; // extra audio clips {path, startTime, volume, buffer}
+        this.activeNodes = []; // currently playing AudioBufferSourceNode
+      }
+
+      _ensureCtx() {
+        if (!this.ctx) {
+          this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+          this.masterGain = this.ctx.createGain();
+          this.masterGain.gain.value = this.volume;
+          this.masterGain.connect(this.ctx.destination);
+        }
+        if (this.ctx.state === 'suspended') this.ctx.resume();
+        return this.ctx;
+      }
+
+      setVolume(v) {
+        this.volume = Math.max(0, Math.min(1, v));
+        if (this.masterGain) this.masterGain.gain.value = this.muted ? 0 : this.volume;
+        // Update video element volumes
+        for (const src of this.sources) {
+          if (src.el && src.type === 'video') src.el.volume = this.muted ? 0 : this.volume * (src.clipVolume || 1);
+        }
+      }
+
+      toggleMute() {
+        this.muted = !this.muted;
+        this.setVolume(this.volume);
+        return this.muted;
+      }
+
+      // Scan scene for video entities and register their audio
+      syncVideoSources(scene) {
+        // Remove stale entries
+        this.sources = this.sources.filter(s => s.type !== 'video');
+        for (const e of scene.allEntities()) {
+          if (e.type === 'video' && e.source) {
+            // Get video element from SDK AssetManager
+            const va = assets?.getVideo(e.source);
+            const video = va?.element;
+            if (video) {
+              // Track this video as audio source
+              this.sources.push({
+                type: 'video',
+                el: video,
+                path: e.source,
+                startTime: e.startTime ?? 0,
+                endTime: (e.startTime ?? 0) + (e.duration ?? DURATION),
+                offset: 0,
+                clipVolume: 1.0,
+              });
+            }
+          }
+        }
+        this._updateMetric();
+      }
+
+      // Add an external audio clip (e.g. background music)
+      async addAudioClip(path, startTime = 0, volume = 1.0) {
+        const ctx = this._ensureCtx();
+        try {
+          setStatus(`Loading audio: ${path.split(/[\\/]/).pop()}...`);
+          const res = await fetch(`${ASSET_SERVER}${encodeURIComponent(path)}`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const arrayBuf = await res.arrayBuffer();
+          const audioBuffer = await ctx.decodeAudioData(arrayBuf);
+          const clip = { path, startTime, volume, buffer: audioBuffer, duration: audioBuffer.duration };
+          this.audioClips.push(clip);
+          // Also add as source for tracking
+          this.sources.push({
+            type: 'audio',
+            path, startTime, endTime: startTime + audioBuffer.duration,
+            offset: 0, clipVolume: volume, buffer: audioBuffer,
+          });
+          this._updateMetric();
+          setStatus(`🎵 Audio loaded: ${path.split(/[\\/]/).pop()} (${audioBuffer.duration.toFixed(1)}s)`);
+          return clip;
+        } catch (e) {
+          setStatus(`Audio error: ${e.message}`);
+          return null;
+        }
+      }
+
+      // Play from a specific time position
+      playFrom(timeSeconds) {
+        const ctx = this._ensureCtx();
+        this.stopAll();
+
+        // 1. Video elements: unmute + seek + play
+        for (const src of this.sources) {
+          if (src.type === 'video' && src.el) {
+            if (timeSeconds >= src.startTime && timeSeconds < src.endTime) {
+              const videoTime = (timeSeconds - src.startTime) + src.offset;
+              src.el.muted = false;
+              src.el.volume = this.muted ? 0 : this.volume * (src.clipVolume || 1);
+              src.el.currentTime = videoTime;
+              src.el.play().catch(() => {});
+            } else {
+              src.el.muted = true;
+              src.el.pause();
+            }
+          }
+        }
+
+        // 2. AudioBuffer clips: schedule via Web Audio API
+        for (const src of this.sources) {
+          if (src.type === 'audio' && src.buffer) {
+            if (timeSeconds < src.endTime) {
+              const source = ctx.createBufferSource();
+              source.buffer = src.buffer;
+              const gain = ctx.createGain();
+              gain.gain.value = src.clipVolume || 1;
+              source.connect(gain);
+              gain.connect(this.masterGain);
+
+              const clipOffset = Math.max(0, timeSeconds - src.startTime);
+              const delay = Math.max(0, src.startTime - timeSeconds);
+              source.start(ctx.currentTime + delay, clipOffset);
+              this.activeNodes.push({ source, gain });
+            }
+          }
+        }
+      }
+
+      pause() {
+        // Pause video elements
+        for (const src of this.sources) {
+          if (src.type === 'video' && src.el) {
+            src.el.pause();
+          }
+        }
+        // Disconnect AudioBuffer nodes (cannot resume — will restart on play)
+        this.stopAudioNodes();
+      }
+
+      stopAll() {
+        for (const src of this.sources) {
+          if (src.type === 'video' && src.el) {
+            src.el.muted = true;
+            src.el.pause();
+          }
+        }
+        this.stopAudioNodes();
+      }
+
+      stopAudioNodes() {
+        for (const n of this.activeNodes) {
+          try { n.source.stop(); } catch (_) {}
+          try { n.source.disconnect(); } catch (_) {}
+          try { n.gain.disconnect(); } catch (_) {}
+        }
+        this.activeNodes = [];
+      }
+
+      totalSources() {
+        return this.sources.length;
+      }
+
+      _updateMetric() {
+        const el = document.getElementById('mAudio');
+        if (el) el.textContent = this.sources.length;
+      }
+    }
 
     // ═══ Init ═══
     async function start() {
@@ -333,6 +516,10 @@
       camView.excludeIds.add(cameraEntityId);
 
       setStatus('Ready — scroll=zoom, middle-click=pan');
+
+      // App: audio preview
+      audioPreview = new AudioPreview();
+
       setupEvents();
       requestAnimationFrame(loop);
     }
@@ -599,21 +786,55 @@
       };
       document.getElementById('btnDelete').onclick = () => { if (selectedId) removeEntity(selectedId); };
 
-      // Playback — SDK Timeline
+      // Playback — SDK Timeline + Audio Sync
       document.getElementById('btnPlay').onclick = () => {
-        if (timeline.playing) { timeline.pause(); document.getElementById('btnPlay').textContent = '▶ Play'; }
-        else { timeline.play(); document.getElementById('btnPlay').textContent = '⏸ Pause'; }
+        if (timeline.playing) {
+          timeline.pause();
+          if (audioPreview) audioPreview.pause();
+          document.getElementById('btnPlay').textContent = '▶ Play';
+        } else {
+          // Sync audio sources from scene before playing
+          if (audioPreview) {
+            audioPreview.syncVideoSources(scene);
+            audioPreview.playFrom(timeline.currentTime);
+          }
+          timeline.play();
+          document.getElementById('btnPlay').textContent = '⏸ Pause';
+        }
       };
       document.getElementById('btnStop').onclick = () => {
         timeline.stop();
+        if (audioPreview) audioPreview.stopAll();
         document.getElementById('btnPlay').textContent = '▶ Play';
         document.getElementById('scrubber').value = 0;
         document.getElementById('timeDisplay').textContent = `0.00 / ${DURATION.toFixed(2)}`;
       };
       document.getElementById('scrubber').oninput = (ev) => {
-        if (timeline.playing) { timeline.pause(); document.getElementById('btnPlay').textContent = '▶ Play'; }
+        if (timeline.playing) {
+          timeline.pause();
+          if (audioPreview) audioPreview.pause();
+          document.getElementById('btnPlay').textContent = '▶ Play';
+        }
         timeline.seekTo((ev.target.value / 1000) * DURATION);
         document.getElementById('timeDisplay').textContent = `${timeline.currentTime.toFixed(2)} / ${DURATION.toFixed(2)}`;
+      };
+
+      // Volume control
+      document.getElementById('volumeSlider').oninput = (ev) => {
+        if (audioPreview) audioPreview.setVolume(parseInt(ev.target.value) / 100);
+      };
+      document.getElementById('btnMute').onclick = () => {
+        if (audioPreview) {
+          const muted = audioPreview.toggleMute();
+          document.getElementById('btnMute').textContent = muted ? '🔇' : '🔊';
+        }
+      };
+
+      // Add audio clip
+      document.getElementById('btnAddAudio').onclick = async () => {
+        const p = document.getElementById('audioUrl').value.trim();
+        if (!p) return alert('Enter audio file path');
+        if (audioPreview) await audioPreview.addAudioClip(p, 0, 1.0);
       };
 
       // Export — open settings dialog
@@ -672,6 +893,18 @@
               duration: ve.duration ?? DURATION,
               volume: 1.0,
             });
+          }
+          // Include audio clips added via AudioPreview (🎵 button)
+          if (audioPreview) {
+            for (const clip of audioPreview.audioClips) {
+              // Avoid duplicating if already added from dialog
+              if (audioClips.some(c => c.path === clip.path)) continue;
+              audioClips.push({
+                path: clip.path,
+                start_time: clip.startTime || 0,
+                volume: clip.volume || 1.0,
+              });
+            }
           }
           const payload = {
             settings: { width: expW, height: expH, fps: expFps, background: [0,0,0,1] },
