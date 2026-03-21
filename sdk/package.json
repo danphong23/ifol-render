@@ -1,6 +1,7 @@
 {
   "name": "ifol-render-sdk",
   "version": "0.3.0",
+  "author": "danphong23",
   "description": "GPU-accelerated 2D rendering SDK for web. Unit coordinate system, multi-viewport, resolution scaling.",
   "type": "module",
   "main": "dist/index.js",
