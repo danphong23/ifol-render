@@ -16,11 +16,13 @@ export {
   DrawableEntity,
   FrameBuilder,
   TextureUpdates,
-  AudioClipBuilder,
   buildExportPayload,
-  autoExtractVideoAudio,
 } from './builders.js';
 export type { ExportConfig, TextureUpdateData } from './builders.js';
+
+// Audio system
+export { AudioScene, AudioTrack } from './audio.js';
+export type { FlatAudioClip } from './audio.js';
 
 // flatten() — convenience: Entity[] → Frame JSON (handles camera, world→pixel)
 export { flatten } from './flatten.js';

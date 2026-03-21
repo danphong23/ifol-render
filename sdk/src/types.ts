@@ -151,3 +151,32 @@ export interface Frame {
   passes: RenderPass[];
   texture_updates: TextureUpdate[];
 }
+
+// ── Audio ──
+
+export interface AudioEntity {
+  id: string;
+  /** Label for UI */
+  label?: string;
+  /** Actual filesystem path — used for CLI export and web proxy */
+  source: string;
+  
+  // Timeline
+  /** When this audio clip starts playing in the scene (seconds) */
+  startTime: number;
+  /** Duration to play (seconds). If undefined, plays to end of media. */
+  duration?: number;
+  /** Start playing the media from this specific offset (seconds) */
+  offset: number;
+  
+  // Properties
+  /** Volume multiplier (0.0 to 1.0+) */
+  volume: number;
+  /** Fade in duration (seconds) */
+  fadeIn: number;
+  /** Fade out duration (seconds) */
+  fadeOut: number;
+  
+  /** Tracks help group related audio clips together (e.g. 'bgm', 'sfx', 'video-1') */
+  trackId: string;
+}

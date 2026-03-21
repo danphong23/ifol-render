@@ -77,24 +77,41 @@ const frame = flatten(myEntities, cam.getRegion(time), 1920, 1080, time);
 core.render_frame(JSON.stringify(frame));
 ```
 
-## Export
+## Export and Audio
+
+The SDK provides a comprehensive `AudioScene` to track and mix audio clips alongside the timeline.
 
 ```ts
-import { buildExportPayload, FrameBuilder } from 'ifol-render-sdk';
+import { buildExportPayload, FrameBuilder, AudioScene } from 'ifol-render-sdk';
 
-// Build frames for each time step
+// 1. Setup audio
+const audio = new AudioScene();
+
+// Auto-extract audio tracks from any Video entities in your visual scene
+audio.autoExtractVideoAudio(myVisualScene);
+
+// Add custom background music
+audio.addClip({
+  source: 'music.mp3',
+  startTime: 0,
+  volume: 0.8,
+  fadeIn: 1.0, 
+  fadeOut: 2.0
+}, 'bgm');
+
+// 2. Build frames for each time step
 const frames = [];
 for (let t = 0; t < duration; t += 1/fps) {
   frames.push(new FrameBuilder().addEntities(getEntitiesAt(t)).build());
 }
 
-// Build export payload with all settings
+// 3. Build export payload with all settings and audio
 const payload = buildExportPayload({
   output: 'my_video.mp4',
   width: 1920, height: 1080, fps: 30,
   codec: 'h264', crf: 23, preset: 'medium',
   ffmpeg: '/usr/bin/ffmpeg',  // optional
-}, frames);
+}, frames, audio.flattenForExport());
 
 await fetch('/export', { body: JSON.stringify(payload) });
 ```

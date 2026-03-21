@@ -253,6 +253,7 @@
     import { RenderView } from '../sdk/src/render-view.ts';
     import { AssetManager } from '../sdk/src/assets.ts';
     import { Timeline } from '../sdk/src/timeline.ts';
+    import { AudioScene } from '../sdk/src/audio.ts';
 
     // ═══ Config ═══
     const SCENE_W = 1920, SCENE_H = 1080;
@@ -261,7 +262,8 @@
     const EXPORT_FPS = 30;
 
     // ═══ SDK instances (shared) ═══
-    let scene = null;        // Scene — entity model
+    let scene = null;        // Scene — visual entity model
+    let audioScene = null;   // AudioScene — audio entity model
     let editCamera = null;   // FreeCamera — edit viewport
     let boundCamera = null;  // BoundCamera — camera preview
     let editView = null;     // RenderView — edit viewport
@@ -289,17 +291,21 @@
     let fpsCount = 0, lastFpsTick = 0, lastRenderMs = 0;
 
     // ═══ Web Audio Preview ═══
-    // Uses Web Audio API + HTML5 <video> elements for real-time audio playback.
-    // Syncs to the SDK Timeline state (play/pause/seek/stop).
+    // Uses Web Audio API + HTML5 <audio> clones for real-time playback.
+    // Consumes the SDK AudioScene to know what to play.
     class AudioPreview {
       constructor() {
-        this.ctx = null; // AudioContext (created on user gesture)
+        this.ctx = null;
         this.masterGain = null;
         this.volume = 0.8;
         this.muted = false;
-        this.sources = []; // {type:'video'|'audio', el, gain, path, startTime, endTime, offset}
-        this.audioClips = []; // extra audio clips {path, startTime, volume, buffer}
-        this.activeNodes = []; // currently playing AudioBufferSourceNode
+        
+        // Cache external audio buffers
+        this.buffers = new Map(); // path -> AudioBuffer
+        // Cache cloned audio elements for video tracks
+        this.videoAudioElements = new Map(); // path -> HTMLAudioElement
+        // Track actively playing Web Audio nodes so we can stop them
+        this.activeNodes = [];
       }
 
       _ensureCtx() {
@@ -316,10 +322,7 @@
       setVolume(v) {
         this.volume = Math.max(0, Math.min(1, v));
         if (this.masterGain) this.masterGain.gain.value = this.muted ? 0 : this.volume;
-        // Update video element volumes
-        for (const src of this.sources) {
-          if (src.el && src.type === 'video') src.el.volume = this.muted ? 0 : this.volume * (src.clipVolume || 1);
-        }
+        this._updateVideoVolumes();
       }
 
       toggleMute() {
@@ -328,92 +331,112 @@
         return this.muted;
       }
 
-      // Scan scene for video entities and register their audio
-      syncVideoSources(scene) {
-        // Remove stale entries
-        this.sources = this.sources.filter(s => s.type !== 'video');
-        for (const e of scene.allEntities()) {
-          if (e.type === 'video' && e.source) {
-            // Get video element from SDK AssetManager
-            const va = assets?.getVideo(e.source);
-            const video = va?.element;
-            if (video) {
-              // Track this video as audio source
-              this.sources.push({
-                type: 'video',
-                el: video,
-                path: e.source,
-                startTime: e.startTime ?? 0,
-                endTime: (e.startTime ?? 0) + (e.duration ?? DURATION),
-                offset: 0,
-                clipVolume: 1.0,
-              });
-            }
+      _updateVideoVolumes() {
+        if (!audioScene) return;
+        const videoClips = audioScene.getTrack('video_audio')?.clips || [];
+        for (const clip of videoClips) {
+          const el = this.videoAudioElements.get(clip.source);
+          if (el) el.volume = this.muted ? 0 : this.volume * clip.volume;
+        }
+      }
+
+      // Syncs state with AudioScene. Pre-loads any new files or video audio clones.
+      async syncWithScene() {
+        if (!audioScene) return;
+        
+        // 1. Ensure all video audio has a dedicated <audio> element
+        // We clone the source so AssetManager's seeking doesn't interrupt playback!
+        const videoClips = audioScene.getTrack('video_audio')?.clips || [];
+        for (const clip of videoClips) {
+          if (!this.videoAudioElements.has(clip.source)) {
+            const el = document.createElement('audio');
+            el.src = assets.urlResolver(clip.source);
+            el.crossOrigin = 'anonymous';
+            el.preload = 'auto';
+            this.videoAudioElements.set(clip.source, el);
           }
         }
+
+        // Clean up stale video elements
+        for (const path of this.videoAudioElements.keys()) {
+          if (!videoClips.some(c => c.source === path)) {
+            const el = this.videoAudioElements.get(path);
+            el.pause(); el.src = ''; el.remove();
+            this.videoAudioElements.delete(path);
+          }
+        }
+
+        this._updateVideoVolumes();
         this._updateMetric();
       }
 
-      // Add an external audio clip (e.g. background music)
-      async addAudioClip(path, startTime = 0, volume = 1.0) {
+      // Load an external audio file into an AudioBuffer
+      async loadExternalAudio(path) {
         const ctx = this._ensureCtx();
+        if (this.buffers.has(path)) return this.buffers.get(path);
+        
         try {
           setStatus(`Loading audio: ${path.split(/[\\/]/).pop()}...`);
           const res = await fetch(`${ASSET_SERVER}${encodeURIComponent(path)}`);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const arrayBuf = await res.arrayBuffer();
           const audioBuffer = await ctx.decodeAudioData(arrayBuf);
-          const clip = { path, startTime, volume, buffer: audioBuffer, duration: audioBuffer.duration };
-          this.audioClips.push(clip);
-          // Also add as source for tracking
-          this.sources.push({
-            type: 'audio',
-            path, startTime, endTime: startTime + audioBuffer.duration,
-            offset: 0, clipVolume: volume, buffer: audioBuffer,
-          });
+          this.buffers.set(path, audioBuffer);
+          
+          setStatus(`🎵 Audio loaded (${audioBuffer.duration.toFixed(1)}s)`);
           this._updateMetric();
-          setStatus(`🎵 Audio loaded: ${path.split(/[\\/]/).pop()} (${audioBuffer.duration.toFixed(1)}s)`);
-          return clip;
+          return audioBuffer;
         } catch (e) {
           setStatus(`Audio error: ${e.message}`);
           return null;
         }
       }
 
-      // Play from a specific time position
+      // Play from a specific time position based on AudioScene
       playFrom(timeSeconds) {
+        if (!audioScene) return;
         const ctx = this._ensureCtx();
         this.stopAll();
 
-        // 1. Video elements: unmute + seek + play
-        for (const src of this.sources) {
-          if (src.type === 'video' && src.el) {
-            if (timeSeconds >= src.startTime && timeSeconds < src.endTime) {
-              const videoTime = (timeSeconds - src.startTime) + src.offset;
-              src.el.muted = false;
-              src.el.volume = this.muted ? 0 : this.volume * (src.clipVolume || 1);
-              src.el.currentTime = videoTime;
-              src.el.play().catch(() => {});
-            } else {
-              src.el.muted = true;
-              src.el.pause();
-            }
+        // Play video audio elements
+        const videoClips = audioScene.getTrack('video_audio')?.clips || [];
+        for (const clip of videoClips) {
+          const el = this.videoAudioElements.get(clip.source);
+          if (!el) continue;
+          
+          const end = clip.duration ? clip.startTime + clip.duration : Infinity;
+          if (timeSeconds >= clip.startTime && timeSeconds < end) {
+            const videoTime = (timeSeconds - clip.startTime) + clip.offset;
+            el.currentTime = videoTime;
+            el.play().catch(() => {});
+          } else {
+            el.pause();
           }
         }
 
-        // 2. AudioBuffer clips: schedule via Web Audio API
-        for (const src of this.sources) {
-          if (src.type === 'audio' && src.buffer) {
-            if (timeSeconds < src.endTime) {
+        // Schedule Web Audio API buffers (custom tracks)
+        for (const track of audioScene.tracks.values()) {
+          if (track.id === 'video_audio' || track.muted) continue;
+          
+          for (const clip of track.clips) {
+            const buffer = this.buffers.get(clip.source);
+            if (!buffer) continue;
+            
+            const finalVolume = clip.volume * track.volume;
+            if (finalVolume <= 0) continue;
+
+            const end = clip.duration ? clip.startTime + clip.duration : (clip.startTime + buffer.duration);
+            if (timeSeconds < end) {
               const source = ctx.createBufferSource();
-              source.buffer = src.buffer;
+              source.buffer = buffer;
               const gain = ctx.createGain();
-              gain.gain.value = src.clipVolume || 1;
+              gain.gain.value = finalVolume;
+              
               source.connect(gain);
               gain.connect(this.masterGain);
 
-              const clipOffset = Math.max(0, timeSeconds - src.startTime);
-              const delay = Math.max(0, src.startTime - timeSeconds);
+              const clipOffset = Math.max(0, timeSeconds - clip.startTime) + clip.offset;
+              const delay = Math.max(0, clip.startTime - timeSeconds);
               source.start(ctx.currentTime + delay, clipOffset);
               this.activeNodes.push({ source, gain });
             }
@@ -422,24 +445,14 @@
       }
 
       pause() {
-        // Pause video elements
-        for (const src of this.sources) {
-          if (src.type === 'video' && src.el) {
-            src.el.pause();
-          }
+        for (const el of this.videoAudioElements.values()) {
+           el.pause();
         }
-        // Disconnect AudioBuffer nodes (cannot resume — will restart on play)
         this.stopAudioNodes();
       }
 
       stopAll() {
-        for (const src of this.sources) {
-          if (src.type === 'video' && src.el) {
-            src.el.muted = true;
-            src.el.pause();
-          }
-        }
-        this.stopAudioNodes();
+        this.pause();
       }
 
       stopAudioNodes() {
@@ -468,6 +481,7 @@
 
       // SDK: create shared instances
       scene = new Scene({ ppu: PPU, duration: DURATION });
+      audioScene = new AudioScene();
       timeline = new Timeline(DURATION);
 
       // SDK: cameras
@@ -591,15 +605,28 @@
         shader: (type === 'rect' || type === 'circle') ? 'shapes' : 'composite',
         params: type === 'circle' ? [1.0] : [],
       });
+      
+      if (audioScene && type === 'video') {
+        audioScene.autoExtractVideoAudio(scene);
+        if (audioPreview) audioPreview.syncWithScene();
+      }
+      
       refreshList();
       return id;
     }
     function removeEntity(id) {
+      const e = scene.getEntity(id);
       scene.removeEntity(id);
       anims.delete(id);
       camView?.excludeIds.delete(id);
       if (selectedId === id) { selectedId = null; refreshProps(); }
       if (cameraEntityId === id) cameraEntityId = null;
+      
+      if (audioScene && e?.type === 'video') {
+        audioScene.autoExtractVideoAudio(scene);
+        if (audioPreview) audioPreview.syncWithScene();
+      }
+      
       refreshList();
     }
 
@@ -795,7 +822,7 @@
         } else {
           // Sync audio sources from scene before playing
           if (audioPreview) {
-            audioPreview.syncVideoSources(scene);
+            audioPreview.syncWithScene();
             audioPreview.playFrom(timeline.currentTime);
           }
           timeline.play();
@@ -834,7 +861,11 @@
       document.getElementById('btnAddAudio').onclick = async () => {
         const p = document.getElementById('audioUrl').value.trim();
         if (!p) return alert('Enter audio file path');
-        if (audioPreview) await audioPreview.addAudioClip(p, 0, 1.0);
+        audioScene.addClip({ source: p, volume: 1.0 });
+        if (audioPreview) {
+          await audioPreview.loadExternalAudio(p);
+          audioPreview.syncWithScene();
+        }
       };
 
       // Export — open settings dialog
@@ -868,8 +899,11 @@
             if (i % 30 === 0) setStatus(`Frame ${i}/${total}...`);
           }
           setStatus(`Sending ${total} frames to backend...`);
-          // Collect user-specified audio clips from dialog
-          const audioClips = [];
+          
+          // SDK: Gather all registered audio from the AudioScene correctly
+          const audioClips = audioScene.flattenForExport();
+          
+          // Legacy/Manual UI additions from export modal:
           const audioPath = document.getElementById('expAudioPath').value.trim();
           if (audioPath) {
             audioClips.push({
@@ -878,34 +912,10 @@
               volume: parseFloat(document.getElementById('expAudioVol').value) || 1.0,
               fade_in: parseFloat(document.getElementById('expAudioFadeIn').value) || 0,
               fade_out: parseFloat(document.getElementById('expAudioFadeOut').value) || 0,
+              offset: 0,
             });
           }
-          // Auto-extract audio from video entities (FFmpeg decodes audio track)
-          const videoEntities = [...scene.allEntities()].filter(e => e.type === 'video' && e.source);
-          const seenVideos = new Set();
-          for (const ve of videoEntities) {
-            const vpath = ve.source;
-            if (!vpath || seenVideos.has(vpath)) continue;
-            seenVideos.add(vpath);
-            audioClips.push({
-              path: vpath,
-              start_time: ve.startTime ?? 0,
-              duration: ve.duration ?? DURATION,
-              volume: 1.0,
-            });
-          }
-          // Include audio clips added via AudioPreview (🎵 button)
-          if (audioPreview) {
-            for (const clip of audioPreview.audioClips) {
-              // Avoid duplicating if already added from dialog
-              if (audioClips.some(c => c.path === clip.path)) continue;
-              audioClips.push({
-                path: clip.path,
-                start_time: clip.startTime || 0,
-                volume: clip.volume || 1.0,
-              });
-            }
-          }
+
           const payload = {
             settings: { width: expW, height: expH, fps: expFps, background: [0,0,0,1] },
             frames,

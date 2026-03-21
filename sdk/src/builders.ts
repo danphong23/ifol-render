@@ -366,10 +366,12 @@ export interface ExportConfig {
  * await fetch('/export', { body: JSON.stringify(payload) });
  * ```
  */
+import type { FlatAudioClip } from './audio.js';
+
 export function buildExportPayload(
   config: ExportConfig,
   frames: object[],
-  audioClips?: AudioClipBuilder[],
+  audioClips?: FlatAudioClip[],
 ): object {
   return {
     settings: {
@@ -385,52 +387,6 @@ export function buildExportPayload(
     crf: config.crf,
     preset: config.preset,
     pixel_format: config.pixelFormat,
-    audio_clips: audioClips?.map(c => c.toJSON()),
+    audio_clips: audioClips,
   };
-}
-
-// ══════════════════════════════════════════════════
-// Auto Audio Extraction
-// ══════════════════════════════════════════════════
-
-/** Minimal entity interface for audio extraction (no SDK Entity dependency) */
-interface AudioExtractableEntity {
-  type: string;
-  source?: string;
-  sourcePath?: string;
-  startTime?: number;
-  duration?: number;
-}
-
-/**
- * Auto-extract audio from video entities.
- *
- * Scans entities for video types and creates AudioClipBuilder instances
- * from their file paths. FFmpeg will extract the audio track during export.
- *
- * ```ts
- * // Automatic — includes audio from all video entities
- * const videoAudio = autoExtractVideoAudio(myEntities);
- * const allAudio = [...myMusicClips, ...videoAudio];
- * const payload = buildExportPayload(config, frames, allAudio);
- * ```
- */
-export function autoExtractVideoAudio(entities: AudioExtractableEntity[]): AudioClipBuilder[] {
-  const seen = new Set<string>();
-  const clips: AudioClipBuilder[] = [];
-
-  for (const e of entities) {
-    if (e.type !== 'video') continue;
-    const path = e.sourcePath ?? e.source;
-    if (!path || seen.has(path)) continue;
-    seen.add(path);
-
-    clips.push(
-      new AudioClipBuilder(path)
-        .setStartTime(e.startTime ?? 0)
-        .setDuration(e.duration ?? 0)
-    );
-  }
-
-  return clips;
 }
