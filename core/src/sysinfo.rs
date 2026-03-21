@@ -33,35 +33,34 @@ impl SysInfo {
 
         // Try querying FFmpeg encoders
         let mut ffmpeg_hw_encoders = Vec::new();
-        if let Ok(output) = Command::new(ffmpeg_bin).arg("-encoders").output() {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
+        if let Ok(output) = Command::new(ffmpeg_bin).arg("-encoders").output()
+            && output.status.success()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
 
-                // h264_nvenc (NVIDIA)
-                if stdout.contains("h264_nvenc") && test_encoder(ffmpeg_bin, "h264_nvenc") {
-                    has_nvidia = true;
-                    ffmpeg_hw_encoders.push("h264_nvenc".to_string());
-                }
+            // h264_nvenc (NVIDIA)
+            if stdout.contains("h264_nvenc") && test_encoder(ffmpeg_bin, "h264_nvenc") {
+                has_nvidia = true;
+                ffmpeg_hw_encoders.push("h264_nvenc".to_string());
+            }
 
-                // h264_qsv (Intel QuickSync)
-                if stdout.contains("h264_qsv") && test_encoder(ffmpeg_bin, "h264_qsv") {
-                    has_intel = true;
-                    ffmpeg_hw_encoders.push("h264_qsv".to_string());
-                }
+            // h264_qsv (Intel QuickSync)
+            if stdout.contains("h264_qsv") && test_encoder(ffmpeg_bin, "h264_qsv") {
+                has_intel = true;
+                ffmpeg_hw_encoders.push("h264_qsv".to_string());
+            }
 
-                // h264_amf (AMD)
-                if stdout.contains("h264_amf") && test_encoder(ffmpeg_bin, "h264_amf") {
-                    has_amd = true;
-                    ffmpeg_hw_encoders.push("h264_amf".to_string());
-                }
+            // h264_amf (AMD)
+            if stdout.contains("h264_amf") && test_encoder(ffmpeg_bin, "h264_amf") {
+                has_amd = true;
+                ffmpeg_hw_encoders.push("h264_amf".to_string());
+            }
 
-                // hevc_videotoolbox (Mac)
-                if stdout.contains("h264_videotoolbox")
-                    && test_encoder(ffmpeg_bin, "h264_videotoolbox")
-                {
-                    has_mac_hw = true;
-                    ffmpeg_hw_encoders.push("h264_videotoolbox".to_string());
-                }
+            // hevc_videotoolbox (Mac)
+            if stdout.contains("h264_videotoolbox") && test_encoder(ffmpeg_bin, "h264_videotoolbox")
+            {
+                has_mac_hw = true;
+                ffmpeg_hw_encoders.push("h264_videotoolbox".to_string());
             }
         }
 

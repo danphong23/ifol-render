@@ -968,10 +968,10 @@ impl Renderer {
         }
 
         // If intermediate pass, mark the texture as written and update LRU
-        if let Some(key) = output_key {
-            if let Some(entry) = self.texture_cache.get_mut(key) {
-                entry.last_used_frame = self.frame_number;
-            }
+        if let Some(key) = output_key
+            && let Some(entry) = self.texture_cache.get_mut(key)
+        {
+            entry.last_used_frame = self.frame_number;
         }
     }
 

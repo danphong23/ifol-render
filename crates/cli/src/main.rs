@@ -221,7 +221,7 @@ fn main() {
             let start = std::time::Instant::now();
 
             // Step 1: Render video (Core — GPU only, no audio)
-            match engine.export_video(frames.into_iter(), total, &export_config, |prog| {
+            match engine.export_video(frames, total, &export_config, |prog| {
                 eprint!(
                     "\rFrame {}/{} ({:.1}%) | {:.1} fps | ETA: {:.0}s   ",
                     prog.current_frame,

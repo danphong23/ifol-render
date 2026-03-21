@@ -152,13 +152,13 @@ struct FfmpegVideoEncoder {
 
 impl MediaEncoder for FfmpegVideoEncoder {
     fn write_rgba_frame(&mut self, buffer: &[u8]) -> Result<(), String> {
-        if let Some(child) = &mut self.child {
-            if let Some(stdin) = &mut child.stdin {
-                use std::io::Write;
-                return stdin
-                    .write_all(buffer)
-                    .map_err(|e| format!("Failed to pipe frame to encoder: {e}"));
-            }
+        if let Some(child) = &mut self.child
+            && let Some(stdin) = &mut child.stdin
+        {
+            use std::io::Write;
+            return stdin
+                .write_all(buffer)
+                .map_err(|e| format!("Failed to pipe frame to encoder: {e}"));
         }
         Err("Encoder stdin is closed".to_string())
     }

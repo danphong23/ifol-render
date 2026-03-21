@@ -77,6 +77,7 @@ impl CoreEngine {
         Self::build(renderer, settings, backend)
     }
 
+    #[allow(clippy::arc_with_non_send_sync)] // MediaBackend is intentionally not Send+Sync
     fn build(renderer: Renderer, settings: RenderSettings, backend: Box<dyn MediaBackend>) -> Self {
         Self {
             renderer,
@@ -89,7 +90,7 @@ impl CoreEngine {
             #[cfg(not(target_arch = "wasm32"))]
             ffmpeg_path: None,
             text_cache: HashMap::new(),
-            backend: Arc::new(backend),
+            backend: Arc::new(backend), // MediaBackend is not Send+Sync, acceptable for single-threaded use
         }
     }
 
@@ -97,7 +98,11 @@ impl CoreEngine {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_ffmpeg_path(&mut self, path: &str) {
         self.ffmpeg_path = Some(path.to_string());
-        self.backend = Arc::new(Box::new(FfmpegMediaBackend::new(path)) as Box<dyn MediaBackend>);
+        #[allow(clippy::arc_with_non_send_sync)]
+        {
+            self.backend =
+                Arc::new(Box::new(FfmpegMediaBackend::new(path)) as Box<dyn MediaBackend>);
+        }
     }
 
     /// Get the configured FFmpeg binary path. Native only.
@@ -267,7 +272,7 @@ impl CoreEngine {
             let pixels = stream.frame_at(timestamp_secs)?;
             // update_rgba: reuse existing GPU texture, avoid 8MB alloc/dealloc per frame
             self.renderer.update_rgba(key, pixels, w, h);
-            return Ok([w, h]);
+            Ok([w, h])
         }
     }
 
@@ -337,9 +342,8 @@ impl CoreEngine {
                     );
 
                     // ZERO-COPY: Render directly to intermediate target in VRAM
-                    let _ =
-                        self.renderer
-                            .render_frame_to(&commands, *clear_color, Some(&pass.output));
+                    self.renderer
+                        .render_frame_to(&commands, *clear_color, Some(&pass.output));
                 }
 
                 PassType::Effect {
@@ -355,7 +359,7 @@ impl CoreEngine {
                     }];
 
                     // ZERO-COPY: Render directly to intermediate target in VRAM
-                    let _ = self.renderer.render_frame_to(
+                    self.renderer.render_frame_to(
                         &commands,
                         [0.0, 0.0, 0.0, 0.0],
                         Some(&pass.output),
@@ -433,10 +437,10 @@ impl CoreEngine {
                     break;
                 }
             }
-            if result.is_ok() {
-                if let Err(e) = encoder.close() {
-                    result = Err(e);
-                }
+            if result.is_ok()
+                && let Err(e) = encoder.close()
+            {
+                result = Err(e);
             }
             result
         });
@@ -545,10 +549,11 @@ impl CoreEngine {
                         (*font_size * 100.0) as u32, // quantize font_size
                         *alignment,
                     );
-                    if let Some(cached) = self.text_cache.get(key.as_str()) {
-                        if *cached == cache_sig && self.renderer.has_texture(key) {
-                            continue;
-                        }
+                    if let Some(cached) = self.text_cache.get(key.as_str())
+                        && *cached == cache_sig
+                        && self.renderer.has_texture(key)
+                    {
+                        continue;
                     }
 
                     let opts = TextOptions {
