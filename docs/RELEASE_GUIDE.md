@@ -1,51 +1,84 @@
 # Publishing Releases
 
-This project consists of two different types of distributables:
-1. **Rust Binaries** (`ifol-render-cli.exe` and `ifol-render-studio.exe`) -> Shipped via **GitHub Releases**.
-2. **Typescript SDK** (`ifol-render-sdk`) -> Shipped via **NPM** (Node Package Manager).
+## Release Artifacts
 
-## 1. Automated Build Script
-To make releasing easy, run the included PowerShell script:
+This project produces **3 separate distributables**:
+
+| Artifact | Type | Target | Install Method |
+|----------|------|--------|----------------|
+| `ifol-render-windows-x64.zip` | Binaries | Backend devs | GitHub Releases download |
+| `@danphong23/ifol-render-wasm` | NPM package | Web devs | `npm install @danphong23/ifol-render-wasm` |
+| `@danphong23/ifol-render-sdk` | NPM package | Web devs | `npm install @danphong23/ifol-render-sdk` |
+
+> [!IMPORTANT]
+> The CLI binary does **NOT** bundle FFmpeg. Users must have FFmpeg installed on their system or pass its path via `--ffmpeg "C:/path/to/ffmpeg.exe"`.
+
+## Automated Build
+
+Run the PowerShell script from the project root:
 ```powershell
 .\scripts\build_release.ps1
 ```
-This script will:
-- Build the Rust binaries in `--release` mode (max optimization).
-- Zip the binaries into `release_builds/ifol-render-windows-x64.zip`.
-- Build the WebAssembly core (`crates/wasm/pkg`).
-- Build the Typescript SDK (`sdk/dist`).
-- Pack the SDK into an NPM tarball `release_builds/ifol-render-sdk-0.3.0.tgz`.
+This will:
+1. Compile CLI + Studio in `--release` mode → zip into `release_builds/`
+2. Build WASM via `wasm-pack` → patch scoped name → pack `.tgz`
+3. Build SDK TypeScript → pack `.tgz`
 
-## 2. Publishing to GitHub
-When developers want to download your CLI or Studio, they usually go to the `Releases` tab on GitHub.
-1. Go to your repository on GitHub.
-2. Click **Releases** on the right side.
-3. Click **Draft a new release**.
-4. Choose a tag (e.g., `v0.2.0`).
-5. Write the release notes (e.g., "Added new AudioScene architecture and stutter-free web preview").
-6. **Drag and drop** the `ifol-render-windows-x64.zip` file from your `release_builds` folder into the attached binaries section.
-7. Click **Publish release**.
+## Publishing Workflow
 
-## 3. Publishing the SDK to NPM
-Developers building web apps want to install your SDK using `npm install ifol-render-sdk`.
-1. Make sure you have an account on [npmjs.com](https://www.npmjs.com/).
-2. Open your terminal and log in:
-   ```bash
-   npm login
-   ```
-3. Navigate to the `sdk` folder:
-   ```bash
-   cd sdk
-   ```
-4. Publish the package:
-   ```bash
-   npm publish
-   ```
-*(Note: If the package name `ifol-render-sdk` is already taken globally on NPM by someone else, you may need to scope it like `@danphong23/ifol-render-sdk` in `package.json`).*
-
-## Local Testing (Without Publishing)
-If another developer wants to use your SDK *without* you publishing it to NPM, they can install the `.tgz` file directly!
-Just send them the `ifol-render-sdk-0.3.0.tgz` file, and they can run:
+### Step 1: Publish WASM to NPM (first!)
 ```bash
-npm install /path/to/ifol-render-sdk-0.3.0.tgz
+cd crates/wasm/pkg
+npm publish --access public
 ```
+*(The SDK depends on WASM, so WASM must be published first.)*
+
+### Step 2: Publish SDK to NPM
+```bash
+cd sdk
+npm publish --access public
+```
+
+### Step 3: Upload Binaries to GitHub Releases
+1. Go to your [GitHub repository](https://github.com/nicengi/ifol-render) → **Releases** → **Draft a new release**
+2. Tag: `v0.2.0`
+3. Attach `release_builds/ifol-render-windows-x64.zip`
+4. Publish
+
+## Versioning Strategy
+
+| Component | Version File | Current |
+|-----------|-------------|---------|
+| Rust workspace (CLI, Studio, Core, Audio) | `Cargo.toml` `workspace.package.version` | `0.2.0` |
+| WASM NPM package | `scripts/patch_wasm_pkg.ps1` | `0.2.0` |
+| SDK NPM package | `sdk/package.json` | `0.3.0` |
+
+> [!TIP]
+> WASM and Rust versions should stay in sync (both are compiled from the same Rust source). The SDK version can differ because it's a TypeScript layer that may evolve independently.
+
+## Local Development (Without Publishing)
+
+For local testing, developers can install the `.tgz` files directly:
+```bash
+npm install ./release_builds/danphong23-ifol-render-wasm-0.2.0.tgz
+npm install ./release_builds/danphong23-ifol-render-sdk-0.3.0.tgz
+```
+
+Or for SDK development, use the `file:` protocol temporarily:
+```bash
+# In sdk/package.json, temporarily change:
+"@danphong23/ifol-render-wasm": "file:../crates/wasm/pkg"
+```
+
+## NPM Login
+Before publishing for the first time:
+```bash
+npm login
+# Enter your npmjs.com credentials
+```
+
+## Setting Author
+Author metadata is defined in:
+- `Cargo.toml` → `workspace.package.authors = ["danphong23"]`
+- `sdk/package.json` → `"author": "danphong23"`
+- `scripts/patch_wasm_pkg.ps1` → patches author into WASM package

@@ -16,7 +16,7 @@
     "test": "node --test dist/tests/"
   },
   "dependencies": {
-    "ifol-render-wasm": "file:../crates/wasm/pkg"
+    "@danphong23/ifol-render-wasm": "^0.2.0"
   },
   "devDependencies": {
     "typescript": "^5.4.0"
