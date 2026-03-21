@@ -18,6 +18,7 @@ export {
   TextureUpdates,
   AudioClipBuilder,
   buildExportPayload,
+  autoExtractVideoAudio,
 } from './builders.js';
 export type { ExportConfig, TextureUpdateData } from './builders.js';
 

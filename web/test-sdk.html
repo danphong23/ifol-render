@@ -647,7 +647,7 @@
             if (i % 30 === 0) setStatus(`Frame ${i}/${total}...`);
           }
           setStatus(`Sending ${total} frames to backend...`);
-          // Collect audio clips from dialog
+          // Collect user-specified audio clips from dialog
           const audioClips = [];
           const audioPath = document.getElementById('expAudioPath').value.trim();
           if (audioPath) {
@@ -657,6 +657,20 @@
               volume: parseFloat(document.getElementById('expAudioVol').value) || 1.0,
               fade_in: parseFloat(document.getElementById('expAudioFadeIn').value) || 0,
               fade_out: parseFloat(document.getElementById('expAudioFadeOut').value) || 0,
+            });
+          }
+          // Auto-extract audio from video entities (FFmpeg decodes audio track)
+          const videoEntities = [...scene.allEntities()].filter(e => e.type === 'video' && e.source);
+          const seenVideos = new Set();
+          for (const ve of videoEntities) {
+            const vpath = ve.source;
+            if (!vpath || seenVideos.has(vpath)) continue;
+            seenVideos.add(vpath);
+            audioClips.push({
+              path: vpath,
+              start_time: ve.startTime ?? 0,
+              duration: ve.duration ?? DURATION,
+              volume: 1.0,
             });
           }
           const payload = {
