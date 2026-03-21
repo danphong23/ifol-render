@@ -1,6 +1,5 @@
 use ifol_render_core::backend::media::{MediaBackend, MediaDecoder, MediaEncoder};
 use ifol_render_core::export::ExportConfig;
-use ifol_render_core::audio::AudioClip;
 use ifol_render_core::{VideoInfo, SysInfo};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -60,26 +59,6 @@ impl MediaBackend for WebMediaBackend {
         _config: &ExportConfig, 
         _sys_info: &SysInfo,
     ) -> Result<Box<dyn MediaEncoder>, String> {
-        Err("Not supported in WASM".into())
-    }
-    
-    fn export_mixed_audio(
-        &self,
-        _clips: &[AudioClip],
-        _duration: f64,
-        _sample_rate: u32,
-        _channels: u32,
-        _out_path: &str,
-    ) -> Result<(), String> {
-        Err("Not supported in WASM".into())
-    }
-
-    fn mux_video_audio(
-        &self,
-        _video_path: &str,
-        _audio_path: &str,
-        _final_path: &str,
-    ) -> Result<(), String> {
         Err("Not supported in WASM".into())
     }
 }

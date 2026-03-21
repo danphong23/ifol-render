@@ -364,17 +364,20 @@ impl CoreEngine {
     // ── Export (Native only) ──
 
     /// Export a sequence of frames to video via FFmpeg.
-    /// If `audio_clips` is provided, it will statically mix them and mux the final audio into the output video.
+    ///
+    /// Returns the video output path on success.
+    /// Audio is NOT handled here — use `ifol-audio` crate for mixing,
+    /// then `ifol_audio::mux_video_audio()` to combine.
+    ///
     /// `frames` is an Iterator, allowing infinite-length batch generation to save memory.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn export_video<I>(
         &mut self,
         frames: I,
         total_frames: usize,
-        audio_clips: &[crate::audio::AudioClip],
         config: &ExportConfig,
         mut on_progress: impl FnMut(ExportProgress) -> bool,
-    ) -> Result<(), String> 
+    ) -> Result<String, String> 
     where
         I: IntoIterator<Item = Frame>,
     {
@@ -394,17 +397,8 @@ impl CoreEngine {
         let sys_info = SysInfo::probe(self.ffmpeg_bin());
         log::info!("Export Hardware detected: {:?}", sys_info);
 
-        let final_path = config.output_path.clone();
-        let video_path = if audio_clips.is_empty() {
-            final_path.clone()
-        } else {
-            final_path.replace(".mp4", "_temp_video.mp4").replace(".mov", "_temp_video.mov").replace(".webm", "_temp.webm")
-        };
-
-        let mut temp_config = config.clone();
-        temp_config.output_path = video_path.clone();
-
-        let mut encoder = self.backend.start_export(width, height, fps, &temp_config, &sys_info)?;
+        let output_path = config.output_path.clone();
+        let mut encoder = self.backend.start_export(width, height, fps, config, &sys_info)?;
 
         // GPU-CPU pipeline: buffer up to 3 frames.
         // GPU renders -> pushes to this channel.
@@ -468,20 +462,7 @@ impl CoreEngine {
         // Propagate any FFmpeg IO errors that occurred in the encode thread.
         encode_thread.join().map_err(|_| "Encode thread panicked".to_string())??;
 
-        if !audio_clips.is_empty() {
-            log::info!("Mixing audio for export...");
-            let audio_path = final_path.replace(".mp4", "_temp_audio.wav").replace(".mov", "_temp_audio.wav").replace(".webm", "_temp_audio.wav");
-            let duration = total_frames as f64 / fps;
-            
-            self.backend.export_mixed_audio(audio_clips, duration, 48000, 2, &audio_path)?;
-            self.backend.mux_video_audio(&video_path, &audio_path, &final_path)?;
-            
-            // Clean up temps
-            let _ = std::fs::remove_file(video_path);
-            let _ = std::fs::remove_file(audio_path);
-        }
-
-        Ok(())
+        Ok(output_path)
     }
 
     /// Export a single frame as PNG.

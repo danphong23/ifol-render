@@ -1,7 +1,6 @@
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
 
-use crate::audio::{AudioClip, AudioConfig};
 use crate::export::ExportConfig;
 use crate::sysinfo::SysInfo;
 
@@ -109,52 +108,6 @@ impl MediaBackend for FfmpegMediaBackend {
         Ok(Box::new(FfmpegVideoEncoder { child: Some(child) }))
     }
 
-    fn export_mixed_audio(
-        &self,
-        clips: &[AudioClip],
-        duration: f64,
-        sample_rate: u32,
-        channels: u32,
-        out_path: &str,
-    ) -> Result<(), String> {
-        let config = AudioConfig {
-            sample_rate,
-            channels,
-        };
-        // Mix all audio clips together
-        let pcm = crate::audio::mix_clips(clips, duration, &config, Some(&self.ffmpeg_bin))?;
-        
-        // Export to WAV
-        crate::audio::export_wav(&pcm, &config, out_path, Some(&self.ffmpeg_bin))?;
-        Ok(())
-    }
-
-    fn mux_video_audio(
-        &self,
-        video_path: &str,
-        audio_path: &str,
-        final_path: &str,
-    ) -> Result<(), String> {
-        log::info!("Muxing audio and video into '{}'", final_path);
-        
-        let output = Command::new(&self.ffmpeg_bin)
-            .arg("-y")
-            .args(["-i", video_path])
-            .args(["-i", audio_path])
-            .args(["-c:v", "copy"]) // No re-encoding video
-            .args(["-c:a", "aac"]) // Compress audio to AAC
-            .args(["-b:a", "192k"])
-            .arg(final_path)
-            .output()
-            .map_err(|e| format!("Failed to run FFmpeg muxer: {e}"))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("FFmpeg mux failed: {}", stderr.trim()));
-        }
-
-        Ok(())
-    }
 }
 
 /// Active FFmpeg Video Decoder Stream

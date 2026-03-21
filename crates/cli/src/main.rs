@@ -132,8 +132,8 @@ fn main() {
                     std::process::exit(1);
                 });
 
-            // Parse audio clips (optional)
-            let audio_clips: Vec<ifol_render_core::AudioClip> = doc
+            // Parse audio clips (optional) — from ifol-audio crate
+            let audio_clips: Vec<ifol_audio::AudioClip> = doc
                 .get("audio_clips")
                 .map(|a| serde_json::from_value(a.clone()).unwrap_or_else(|e| {
                     eprintln!("Warning: Invalid audio_clips: {}", e);
@@ -179,9 +179,18 @@ fn main() {
             let caps = engine.capabilities();
             eprintln!("GPU: {} ({})", caps.gpu_name, caps.backend);
 
-            // Build export config
+            // Build export config — if audio clips exist, render to temp video first
+            let has_audio = !audio_clips.is_empty();
+            let video_output = if has_audio {
+                output.replace(".mp4", "_temp_video.mp4")
+                    .replace(".mov", "_temp_video.mov")
+                    .replace(".webm", "_temp_video.webm")
+            } else {
+                output.clone()
+            };
+
             let export_config = ifol_render_core::export::ExportConfig {
-                output_path: output.clone(),
+                output_path: video_output.clone(),
                 codec: video_codec,
                 pixel_format,
                 crf,
@@ -189,16 +198,15 @@ fn main() {
                 fps: Some(fps),
                 width: Some(out_w),
                 height: Some(out_h),
-                ffmpeg_path: ffmpeg,
+                ffmpeg_path: ffmpeg.clone(),
             };
 
             let start = std::time::Instant::now();
 
-            // Run export
+            // Step 1: Render video (Core — GPU only, no audio)
             match engine.export_video(
                 frames.into_iter(),
                 total,
-                &audio_clips,
                 &export_config,
                 |prog| {
                     eprint!(
@@ -212,10 +220,41 @@ fn main() {
                     true // never cancel from CLI
                 },
             ) {
-                Ok(()) => {
+                Ok(video_path) => {
+                    // Step 2: Mix audio + mux (ifol-audio crate)
+                    if has_audio {
+                        eprintln!("\nMixing {} audio clips...", audio_clips.len());
+                        let duration = total as f64 / fps;
+                        let audio_config = ifol_audio::AudioConfig { sample_rate: 48000, channels: 2 };
+                        let ffmpeg_bin = ffmpeg.as_deref();
+
+                        match ifol_audio::mix_clips(&audio_clips, duration, &audio_config, ffmpeg_bin) {
+                            Ok(pcm) => {
+                                let audio_path = output.replace(".mp4", "_temp_audio.wav")
+                                    .replace(".mov", "_temp_audio.wav")
+                                    .replace(".webm", "_temp_audio.wav");
+                                if let Err(e) = ifol_audio::export_wav(&pcm, &audio_config, &audio_path, ffmpeg_bin) {
+                                    eprintln!("\nAudio export failed: {}", e);
+                                    std::process::exit(1);
+                                }
+                                if let Err(e) = ifol_audio::mux_video_audio(&video_path, &audio_path, &output, ffmpeg_bin) {
+                                    eprintln!("\nMux failed: {}", e);
+                                    std::process::exit(1);
+                                }
+                                // Clean up temp files
+                                let _ = std::fs::remove_file(&video_path);
+                                let _ = std::fs::remove_file(&audio_path);
+                            }
+                            Err(e) => {
+                                eprintln!("\nAudio mix failed: {}", e);
+                                // Keep video-only output
+                                let _ = std::fs::rename(&video_path, &output);
+                            }
+                        }
+                    }
+
                     let elapsed = start.elapsed().as_secs_f64();
                     eprintln!("\nExport complete: {} ({:.1}s)", output, elapsed);
-                    // Print success to stdout for machine parsing
                     println!("{}", output);
                 }
                 Err(err) => {

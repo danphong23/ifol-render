@@ -1919,6 +1919,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ifol-audio"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ifol-render"
 version = "0.1.0"
 dependencies = [
@@ -1937,6 +1946,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "env_logger",
+ "ifol-audio",
  "ifol-render-core",
  "log",
  "serde_json",
@@ -1948,6 +1958,7 @@ version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "bytemuck",
+ "ifol-audio",
  "ifol-render",
  "image",
  "log",
@@ -1964,6 +1975,7 @@ dependencies = [
  "eframe",
  "egui",
  "env_logger",
+ "ifol-audio",
  "ifol-render-core",
  "log",
  "rfd",

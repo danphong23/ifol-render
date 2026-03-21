@@ -1,4 +1,3 @@
-use crate::audio::AudioClip;
 use crate::export::ExportConfig;
 use crate::types::{SysInfo, VideoInfo};
 
@@ -20,10 +19,12 @@ pub trait MediaEncoder: Send {
 }
 
 /// A media backend handles all OS-specific or environment-specific (Desktop FFmpeg vs WASM WebCodecs) 
-/// video and audio operations.
+/// video operations.
 ///
 /// Consumer provides an implementation when creating `CoreEngine`.
 /// Core never does I/O directly — it always goes through this trait.
+///
+/// Note: Audio is handled by the separate `ifol-audio` crate.
 pub trait MediaBackend {
     /// Read file bytes from a path. 
     /// On native: default reads from filesystem.
@@ -63,22 +64,5 @@ pub trait MediaBackend {
         config: &ExportConfig, 
         sys_info: &SysInfo,
     ) -> Result<Box<dyn MediaEncoder>, String>;
-    
-    /// Statically mix audio clips and output to a WAV file before video muxing.
-    fn export_mixed_audio(
-        &self,
-        clips: &[AudioClip],
-        duration: f64,
-        sample_rate: u32,
-        channels: u32,
-        out_path: &str,
-    ) -> Result<(), String>;
-
-    /// Mux a fast video track and an audio track into a single final file.
-    fn mux_video_audio(
-        &self,
-        video_path: &str,
-        audio_path: &str,
-        final_path: &str,
-    ) -> Result<(), String>;
 }
+

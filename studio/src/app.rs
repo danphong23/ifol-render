@@ -633,7 +633,11 @@ impl StudioApp {
             }
 
             let export_config = ifol_render_core::export::ExportConfig {
-                output_path: out_path,
+                output_path: if audio_clips.is_empty() { out_path.clone() } else {
+                    out_path.replace(".mp4", "_temp_video.mp4")
+                        .replace(".mov", "_temp_video.mov")
+                        .replace(".webm", "_temp_video.webm")
+                },
                 codec,
                 pixel_format,
                 crf,
@@ -641,13 +645,12 @@ impl StudioApp {
                 fps: Some(fps),
                 width: Some(out_w),
                 height: Some(out_h),
-                ffmpeg_path: export_ffmpeg,
+                ffmpeg_path: export_ffmpeg.clone(),
             };
 
-            if let Err(err) = engine.export_video(
+            match engine.export_video(
                 frames.into_iter(),
                 total,
-                &audio_clips,
                 &export_config,
                 |prog| {
                     if c.load(Ordering::Relaxed) {
@@ -657,7 +660,27 @@ impl StudioApp {
                     true
                 }
             ) {
-                *e.lock().unwrap() = Some(err);
+                Ok(video_path) => {
+                    // Audio mixing + muxing via ifol-audio
+                    if !audio_clips.is_empty() {
+                        let duration = total as f64 / fps;
+                        let audio_config = ifol_audio::AudioConfig { sample_rate: 48000, channels: 2 };
+                        let ffmpeg_bin = export_ffmpeg.as_deref();
+                        
+                        if let Ok(pcm) = ifol_audio::mix_clips(&audio_clips, duration, &audio_config, ffmpeg_bin) {
+                            let audio_path = out_path.replace(".mp4", "_temp_audio.wav")
+                                .replace(".mov", "_temp_audio.wav")
+                                .replace(".webm", "_temp_audio.wav");
+                            let _ = ifol_audio::export_wav(&pcm, &audio_config, &audio_path, ffmpeg_bin);
+                            let _ = ifol_audio::mux_video_audio(&video_path, &audio_path, &out_path, ffmpeg_bin);
+                            let _ = std::fs::remove_file(&video_path);
+                            let _ = std::fs::remove_file(&audio_path);
+                        }
+                    }
+                }
+                Err(err) => {
+                    *e.lock().unwrap() = Some(err);
+                }
             }
 
             d.store(true, Ordering::Release);

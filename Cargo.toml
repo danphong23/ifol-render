@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "render",
     "core",
+    "audio",
     "studio",
     "crates/wasm",
     "crates/cli", "crates/server",

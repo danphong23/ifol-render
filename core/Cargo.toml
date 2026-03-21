@@ -7,6 +7,7 @@ description = "Core ECS, components, systems, commands, and pipeline orchestrati
 
 [dependencies]
 ifol-render = { path = "../render" }
+ifol-audio = { path = "../audio" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
