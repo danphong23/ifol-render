@@ -1,0 +1,64 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.gemini/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# WASM build
+crates/wasm/pkg/
+
+# Logs
+*.log
+
+# Binaries
+*.exe
+
+# Bundled tools (ffmpeg/ffprobe binaries — user provides)
+/tool/
+
+# Media files (too large for git)
+*.mp4
+*.wav
+*.mp3
+*.aac
+*.flac
+
+# Generated test output
+/test_output/
+/tests/output/*.png
+
+# Build output / temp
+/output.png
+/preview.png
+test_save.json
+
+# Web tooling
+web/node_modules/
+web/dist/
+
+# SDK tooling
+sdk/node_modules/
+sdk/dist/
+sdk/lib/
+
+# Node
+node_modules/
+
+# Large generated example files (generate via scripts/)
+examples/full_movie_test.json
+examples/comprehensive_test.json
+
+# Duplicate font (canonical copy in assets/fonts/)
+examples/NotoSans-Regular.ttf
+
+# Release build output
+release_builds/

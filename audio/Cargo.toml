@@ -1,0 +1,11 @@
+[package]
+name = "ifol-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Standalone audio processing crate — decode, mix, and export audio clips via FFmpeg."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }

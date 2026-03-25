@@ -1,0 +1,27 @@
+[package]
+name = "ifol-render-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WASM target for ifol-render — browser preview via WebGPU."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ifol-render-core = { path = "../../core" }
+ifol-render-ecs = { path = "../core" }
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = [
+    "HtmlCanvasElement", "Window", "Document", "HtmlVideoElement", "HtmlImageElement",
+    "OffscreenCanvas", "OffscreenCanvasRenderingContext2d", "ImageData", "Event", "EventTarget",
+    "CanvasRenderingContext2d"
+] }
+js-sys = "0.3"
+serde-wasm-bindgen = "0.6"
+serde_json = { workspace = true }
+console_error_panic_hook = "0.1"
+wasm-logger = "0.2"
+wasm-bindgen-futures = "0.4"
+log = { workspace = true }
+wgpu = { workspace = true }

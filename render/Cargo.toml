@@ -1,0 +1,17 @@
+[package]
+name = "ifol-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GPU rendering backend — passive render tool. Receives DrawCommands, outputs pixels."
+
+[dependencies]
+wgpu = { workspace = true }
+pollster = { workspace = true }
+bytemuck = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Window"] }
