@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 
 #[derive(Clone)]
 pub struct WebMediaBackend {
-    pub images: Arc<RwLock<HashMap<String, Vec<u8>>>>,
+    pub images: Arc<RwLock<HashMap<String, (Vec<u8>, u32, u32)>>>,  // (RGBA, w, h)
     pub video_frames: Arc<RwLock<HashMap<String, (Vec<u8>, u32, u32)>>>,
     pub video_infos: Arc<RwLock<HashMap<String, VideoInfo>>>,
 }
@@ -23,7 +23,7 @@ impl WebMediaBackend {
 
 impl MediaBackend for WebMediaBackend {
     fn read_file_bytes(&self, path: &str) -> Option<Vec<u8>> {
-        self.images.read().unwrap().get(path).cloned()
+        self.images.read().unwrap().get(path).map(|(rgba, _, _)| rgba.clone())
     }
 
     fn get_video_info(&self, path: &str) -> Option<VideoInfo> {

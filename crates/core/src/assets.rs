@@ -39,21 +39,25 @@ impl AssetManager {
 
         // 1. Identify which assets are needed right now or in the immediate future
         for entity in &scene.entities {
-            // Collect asset_id from source components (pure ECS — check by presence)
-            let asset_id = entity.video_source.as_ref().map(|v| &v.asset_id)
-                .or_else(|| entity.image_source.as_ref().map(|i| &i.asset_id))
-                .or_else(|| entity.audio_source.as_ref().map(|a| &a.asset_id));
+            let asset_id = entity.components.get("videoSource").and_then(|v| v.get("assetId")).and_then(|v| v.as_str())
+                .or_else(|| entity.components.get("imageSource").and_then(|v| v.get("assetId")).and_then(|v| v.as_str()))
+                .or_else(|| entity.components.get("audioSource").and_then(|v| v.get("assetId")).and_then(|v| v.as_str()));
 
             if let Some(aid) = asset_id {
-                if let Some(ls) = &entity.lifespan {
-                    let active_start = ls.start - self.preload_margin;
-                    let active_end = ls.end;
-                    if time >= active_start && time < active_end {
-                        needed.insert(aid.clone());
-                    }
+                let mut is_needed = false;
+                if let Some(ls) = entity.components.get("lifespan") {
+                    if let Ok(lifespan) = serde_json::from_value::<crate::scene::Lifespan>(ls.clone()) {
+                        let active_start = lifespan.start - self.preload_margin;
+                        if time >= active_start && time < lifespan.end {
+                            is_needed = true;
+                        }
+                    } else { is_needed = true; } // play it safe
                 } else {
-                    // No lifespan = always active
-                    needed.insert(aid.clone());
+                    is_needed = true; // no lifespan = always active
+                }
+
+                if is_needed {
+                    needed.insert(aid.to_string());
                 }
             }
         }

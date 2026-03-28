@@ -26,6 +26,7 @@ pub fn compile_world_to_frame(
     custom_cam_h: Option<f32>,
     selected_entity_ids: &[&str],
 ) -> Frame {
+    let storages = &world.storages;
     let mut passes = Vec::new();
     let mut texture_updates = Vec::new();
 
@@ -44,8 +45,8 @@ pub fn compile_world_to_frame(
     let sorted = world.sorted_by_layer();
     for entity in &sorted {
         // Skip cameras
-        if entity.components.camera.is_some() { continue; }
-        if let Some(pid) = &entity.components.parent_id {
+        if storages.get_component::<ifol_render_ecs::ecs::components::CameraComponent>(&entity.id).is_some() { continue; }
+        if let Some(pid) = storages.get_component::<ifol_render_ecs::ecs::components::meta::ParentId>(&entity.id).map(|id| &id.0) {
             children_map.entry(pid.clone()).or_default().push(*entity);
         } else {
             top_level.push(*entity);
@@ -55,13 +56,13 @@ pub fn compile_world_to_frame(
     // ═══════════════════════════════════════════
     // Helper: Check if entity is an adjustment layer (has materials, no source)
     // ═══════════════════════════════════════════
-    fn is_adjustment(entity: &ifol_render_ecs::ecs::Entity) -> bool {
-        !entity.components.materials.is_empty()
-            && entity.components.video_source.is_none()
-            && entity.components.image_source.is_none()
-            && entity.components.text_source.is_none()
-            && entity.components.color_source.is_none()
-            && entity.components.camera.is_none()
+    fn is_adjustment(entity: &ifol_render_ecs::ecs::Entity, storages: &ifol_render_ecs::ecs::typemap::TypeMap) -> bool {
+        storages.get_component::<ifol_render_ecs::ecs::components::meta::Materials>(&entity.id).map_or(false, |m| !m.0.is_empty())
+            && storages.get_component::<ifol_render_ecs::ecs::components::VideoSource>(&entity.id).is_none()
+            && storages.get_component::<ifol_render_ecs::ecs::components::ImageSource>(&entity.id).is_none()
+            && storages.get_component::<ifol_render_ecs::ecs::components::TextSource>(&entity.id).is_none()
+            && storages.get_component::<ifol_render_ecs::ecs::components::ColorSource>(&entity.id).is_none()
+            && storages.get_component::<ifol_render_ecs::ecs::components::CameraComponent>(&entity.id).is_none()
     }
 
     // ═══════════════════════════════════════════
@@ -107,8 +108,9 @@ pub fn compile_world_to_frame(
         screen_width: u32, screen_height: u32,
         collected: &mut Vec<FlatEntity>,
     ) {
+        let storages = &world.storages;
         if !entity.resolved.visible { return; }
-        if is_adjustment(entity) { return; }
+        if is_adjustment(entity, storages) { return; }
 
         let local_time = entity.resolved.time.local_time;
         let r = &entity.resolved;
@@ -130,33 +132,9 @@ pub fn compile_world_to_frame(
         // ── Fit mode UV parameters ──
         let iw = r.intrinsic_width;
         let ih = r.intrinsic_height;
-        let (uv_offset, uv_scale) = if iw > 0.0 && ih > 0.0 && r.fit_mode != ifol_render_ecs::ecs::components::FitMode::Stretch {
-            let display_aspect = r.width / r.height.max(0.001);
-            let source_aspect = iw / ih.max(0.001);
-            match r.fit_mode {
-                ifol_render_ecs::ecs::components::FitMode::Contain => {
-                    if source_aspect > display_aspect {
-                        let scale_y = display_aspect / source_aspect;
-                        ([0.0, (1.0 - scale_y) * 0.5], [1.0, scale_y])
-                    } else {
-                        let scale_x = source_aspect / display_aspect;
-                        ([(1.0 - scale_x) * 0.5, 0.0], [scale_x, 1.0])
-                    }
-                }
-                ifol_render_ecs::ecs::components::FitMode::Cover => {
-                    if source_aspect > display_aspect {
-                        let uv_w = display_aspect / source_aspect;
-                        ([(1.0 - uv_w) * 0.5, 0.0], [uv_w, 1.0])
-                    } else {
-                        let uv_h = source_aspect / display_aspect;
-                        ([0.0, (1.0 - uv_h) * 0.5], [1.0, uv_h])
-                    }
-                }
-                _ => ([0.0, 0.0], [1.0, 1.0]),
-            }
-        } else {
-            ([0.0, 0.0], [1.0, 1.0])
-        };
+        let ax = storages.get_component::<ifol_render_ecs::ecs::components::Rect>(&entity.id).map(|rc| rc.align_x).unwrap_or(0.5);
+        let ay = storages.get_component::<ifol_render_ecs::ecs::components::Rect>(&entity.id).map(|rc| rc.align_y).unwrap_or(0.5);
+        let (uv_offset, uv_scale) = r.fit_mode.calculate_uv(r.width, r.height, iw, ih, ax, ay);
 
         let mut flat = FlatEntity {
             id: 0,
@@ -178,15 +156,15 @@ pub fn compile_world_to_frame(
 
         // ── Content sources (detected by component presence) ──
         let mut has_content = false;
-        if let Some(cs) = &entity.components.color_source {
+        if let Some(cs) = storages.get_component::<ifol_render_ecs::ecs::components::ColorSource>(&entity.id) {
             flat.color = [
-                entity.components.float_uniforms.get("color_r").map(|t| t.evaluate(local_time, cs.color.r)).unwrap_or(cs.color.r) as f32,
-                entity.components.float_uniforms.get("color_g").map(|t| t.evaluate(local_time, cs.color.g)).unwrap_or(cs.color.g) as f32,
-                entity.components.float_uniforms.get("color_b").map(|t| t.evaluate(local_time, cs.color.b)).unwrap_or(cs.color.b) as f32,
-                entity.components.float_uniforms.get("color_a").map(|t| t.evaluate(local_time, cs.color.a)).unwrap_or(cs.color.a) as f32,
+                storages.get_component::<ifol_render_ecs::ecs::components::meta::FloatUniforms>(&entity.id).map(|m| m.0.clone()).unwrap_or_default().get("color_r").map(|t: &ifol_render_ecs::scene::FloatTrack| t.evaluate(local_time, cs.color.r)).unwrap_or(cs.color.r) as f32,
+                storages.get_component::<ifol_render_ecs::ecs::components::meta::FloatUniforms>(&entity.id).map(|m| m.0.clone()).unwrap_or_default().get("color_g").map(|t: &ifol_render_ecs::scene::FloatTrack| t.evaluate(local_time, cs.color.g)).unwrap_or(cs.color.g) as f32,
+                storages.get_component::<ifol_render_ecs::ecs::components::meta::FloatUniforms>(&entity.id).map(|m| m.0.clone()).unwrap_or_default().get("color_b").map(|t: &ifol_render_ecs::scene::FloatTrack| t.evaluate(local_time, cs.color.b)).unwrap_or(cs.color.b) as f32,
+                storages.get_component::<ifol_render_ecs::ecs::components::meta::FloatUniforms>(&entity.id).map(|m| m.0.clone()).unwrap_or_default().get("color_a").map(|t: &ifol_render_ecs::scene::FloatTrack| t.evaluate(local_time, cs.color.a)).unwrap_or(cs.color.a) as f32,
             ];
             has_content = true;
-        } else if let Some(video) = &entity.components.video_source {
+        } else if let Some(video) = storages.get_component::<ifol_render_ecs::ecs::components::VideoSource>(&entity.id) {
             // Resolve asset_id → URL from world registry
             let url = world.resolve_asset_url(&video.asset_id)
                 .unwrap_or(&video.asset_id).to_string();
@@ -197,12 +175,12 @@ pub fn compile_world_to_frame(
                 timestamp_secs: entity.resolved.playback_time,
                 width: None, height: None,
             });
-        } else if let Some(image) = &entity.components.image_source {
+        } else if let Some(image) = storages.get_component::<ifol_render_ecs::ecs::components::ImageSource>(&entity.id) {
             let url = world.resolve_asset_url(&image.asset_id)
                 .unwrap_or(&image.asset_id).to_string();
             flat.textures.push(url);
             has_content = true;
-        } else if let Some(text) = &entity.components.text_source {
+        } else if let Some(text) = storages.get_component::<ifol_render_ecs::ecs::components::TextSource>(&entity.id) {
             flat.textures.push(text.content.clone());
             flat.color = text.color.into();
             has_content = true;
@@ -210,7 +188,7 @@ pub fn compile_world_to_frame(
 
         // ── Level 4: Group Materials ──
         let has_children = children_map.get(&entity.id).map(|k| !k.is_empty()).unwrap_or(false);
-        let has_materials = !entity.components.materials.is_empty();
+        let has_materials = storages.get_component::<ifol_render_ecs::ecs::components::meta::Materials>(&entity.id).map_or(false, |m| !m.0.is_empty());
 
         if has_children && has_materials {
             let group_rt = format!("{}_group", entity.id);
@@ -233,7 +211,7 @@ pub fn compile_world_to_frame(
                     pass_type: PassType::Entities { entities: group_ents, clear_color: [0.0,0.0,0.0,0.0] },
                     target_width: tw, target_height: th,
                 });
-                let final_rt = apply_material_chain(passes, &group_rt, &entity.components.materials, &entity.id, local_time, tw, th);
+                let final_rt = apply_material_chain(passes, &group_rt, &storages.get_component::<ifol_render_ecs::ecs::components::meta::Materials>(&entity.id).map(|m| m.0.clone()).unwrap_or_default(), &entity.id, local_time, tw, th);
                 let mut out = flat.clone();
                 out.shader = "composite".into();
                 out.textures = vec![final_rt];
@@ -255,7 +233,7 @@ pub fn compile_world_to_frame(
                 pass_type: PassType::Entities { entities: vec![leaf], clear_color: [0.0,0.0,0.0,0.0] },
                 target_width: tw, target_height: th,
             });
-            let final_rt = apply_material_chain(passes, &base, &entity.components.materials, &entity.id, local_time, tw, th);
+            let final_rt = apply_material_chain(passes, &base, &storages.get_component::<ifol_render_ecs::ecs::components::meta::Materials>(&entity.id).map(|m| m.0.clone()).unwrap_or_default(), &entity.id, local_time, tw, th);
             let mut out = flat.clone();
             out.shader = "composite".into();
             out.textures = vec![final_rt];
@@ -293,7 +271,7 @@ pub fn compile_world_to_frame(
     let mut floor_rt: Option<String> = None;
 
     for entity in &top_level {
-        if is_adjustment(entity) && !entity.components.materials.is_empty() {
+        if is_adjustment(entity, storages) && storages.get_component::<ifol_render_ecs::ecs::components::meta::Materials>(&entity.id).map_or(false, |m| !m.0.is_empty()) {
             if !current_batch.is_empty() || floor_rt.is_some() {
                 let batch_rt = format!("_adj_batch_{}", adj_counter);
                 if let Some(ref floor) = floor_rt {
@@ -307,7 +285,7 @@ pub fn compile_world_to_frame(
                     target_width: None, target_height: None,
                 });
                 let local_time = entity.resolved.time.local_time;
-                let result_rt = apply_material_chain(&mut passes, &batch_rt, &entity.components.materials, &entity.id, local_time, None, None);
+                let result_rt = apply_material_chain(&mut passes, &batch_rt, &storages.get_component::<ifol_render_ecs::ecs::components::meta::Materials>(&entity.id).map(|m| m.0.clone()).unwrap_or_default(), &entity.id, local_time, None, None);
                 floor_rt = Some(result_rt);
                 current_batch = Vec::new();
                 adj_counter += 1;
@@ -334,7 +312,7 @@ pub fn compile_world_to_frame(
     // ── Camera Post-Effects ──
     let mut output_input = main_rt;
     if let Some(cam_ent) = cam {
-        if let Some(cam_comp) = &cam_ent.components.camera {
+        if let Some(cam_comp) = storages.get_component::<ifol_render_ecs::ecs::components::CameraComponent>(&cam_ent.id) {
             if !cam_comp.post_effects.is_empty() {
                 let local_time = cam_ent.resolved.time.local_time;
                 output_input = apply_material_chain(&mut passes, &output_input, &cam_comp.post_effects, "cam_post", local_time, None, None);

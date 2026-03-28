@@ -35,6 +35,8 @@ pub struct PipelineConfig {
     pub fragment_entry: String,
     pub uses_vertex_buffer: bool,
     pub alpha_blend: bool,
+    /// Explicit target format. If None, uses engine.working_format.
+    pub target_format: Option<wgpu::TextureFormat>,
 }
 
 impl PipelineConfig {
@@ -45,6 +47,7 @@ impl PipelineConfig {
             fragment_entry: "fs_main".into(),
             uses_vertex_buffer: true,
             alpha_blend: true,
+            target_format: None,
         }
     }
 
@@ -55,6 +58,7 @@ impl PipelineConfig {
             fragment_entry: "fs_main".into(),
             uses_vertex_buffer: false,
             alpha_blend: false,
+            target_format: None,
         }
     }
 }
@@ -214,6 +218,8 @@ pub struct Renderer {
     max_cache_bytes: u64,
     /// 1x1 white fallback texture for solid color rendering.
     white_texture_view: wgpu::TextureView,
+    /// 1x1 transparent fallback texture.
+    transparent_texture_view: wgpu::TextureView,
     /// Shared quad vertex/index buffers.
     quad_vertex_buffer: wgpu::Buffer,
     quad_index_buffer: wgpu::Buffer,
@@ -230,21 +236,21 @@ pub struct Renderer {
 impl Renderer {
     /// Create a headless renderer (Native only).
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn new(width: u32, height: u32) -> Self {
-        let engine = pollster::block_on(GpuEngine::new_headless(width, height));
+    pub fn new(width: u32, height: u32, hdr_enabled: bool) -> Self {
+        let engine = pollster::block_on(GpuEngine::new_headless(width, height, hdr_enabled));
         Self::from_engine(engine)
     }
 
     /// Create an asynchronous headless renderer (for environments where block_on is not allowed).
-    pub async fn new_async(width: u32, height: u32) -> Self {
-        let engine = GpuEngine::new_headless(width, height).await;
+    pub async fn new_async(width: u32, height: u32, hdr_enabled: bool) -> Self {
+        let engine = GpuEngine::new_headless(width, height, hdr_enabled).await;
         Self::from_engine(engine)
     }
 
     /// Create a web renderer attached to an HTML canvas.
     #[cfg(target_arch = "wasm32")]
-    pub async fn new_web(canvas: web_sys::HtmlCanvasElement, width: u32, height: u32) -> Self {
-        let engine = GpuEngine::new_web(canvas, width, height).await;
+    pub async fn new_web(canvas: web_sys::HtmlCanvasElement, width: u32, height: u32, hdr_enabled: bool) -> Self {
+        let engine = GpuEngine::new_web(canvas, width, height, hdr_enabled).await;
         Self::from_engine(engine)
     }
 
@@ -312,6 +318,34 @@ impl Renderer {
         // (256 bytes aligned × 8000 = 2MB)
         let uniform_ring = UniformRingBuffer::new(&engine.device, 2 * 1024 * 1024);
 
+        // 1x1 transparent fallback texture
+        let transparent_texture = engine.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("transparent 1x1"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: engine.texture_format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        engine.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &transparent_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[0, 0, 0, 0], // RGBA transparent
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+        let transparent_texture_view = transparent_texture.create_view(&Default::default());
+
         Self {
             engine,
             pipelines: HashMap::new(),
@@ -320,6 +354,7 @@ impl Renderer {
             texture_cache_bytes: 0,
             max_cache_bytes: 0, // unlimited by default
             white_texture_view,
+            transparent_texture_view,
             quad_vertex_buffer,
             quad_index_buffer,
             uniform_ring,
@@ -343,6 +378,16 @@ impl Renderer {
     /// Query GPU capabilities.
     pub fn capabilities(&self) -> GpuCapabilities {
         GpuCapabilities::from_adapter(&self.engine.adapter)
+    }
+
+    /// Get the engine's surface/output texture format.
+    pub fn texture_format(&self) -> wgpu::TextureFormat {
+        self.engine.texture_format
+    }
+
+    /// Get the engine's intermediate working format.
+    pub fn working_format(&self) -> wgpu::TextureFormat {
+        self.engine.working_format
     }
 
     // ── Texture Cache ──────────────────
@@ -493,6 +538,81 @@ impl Renderer {
         }
         // Dimensions changed or texture doesn't exist — full recreation
         self.load_rgba(key, data, width, height);
+    }
+
+    /// Upload a video frame directly using wgpu copy_external_image_to_texture. WASM only.
+    /// This Bypasses the CPU Canvas getImageData completely!
+    #[cfg(target_arch = "wasm32")]
+    pub fn load_video_texture_web(
+        &mut self,
+        key: &str,
+        video: &web_sys::HtmlVideoElement,
+        width: u32,
+        height: u32,
+    ) {
+        let size_bytes = (width as u64) * (height as u64) * 4;
+
+        self.evict_if_needed(size_bytes);
+
+        let needs_create = match self.texture_cache.get(key) {
+            Some(entry) => entry.width != width || entry.height != height,
+            None => true,
+        };
+
+        if needs_create {
+            let texture = self.engine.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(key),
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.engine.texture_format, // Ensure texture mapping matches swapchain
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+
+            if let Some(old) = self.texture_cache.remove(key) {
+                self.texture_cache_bytes -= old.size_bytes;
+            }
+
+            self.texture_cache.insert(
+                key.to_string(),
+                CachedTexture {
+                    texture,
+                    view,
+                    width,
+                    height,
+                    size_bytes,
+                    last_used_frame: self.frame_number,
+                },
+            );
+            self.texture_cache_bytes += size_bytes;
+        }
+
+        let entry = self.texture_cache.get_mut(key).unwrap();
+        entry.last_used_frame = self.frame_number;
+
+        let source = wgpu::CopyExternalImageSourceInfo {
+            source: wgpu::ExternalImageSource::HTMLVideoElement(video.clone()),
+            origin: wgpu::Origin2d::ZERO,
+            flip_y: false,
+        };
+
+        let dest = wgpu::CopyExternalImageDestInfo {
+            texture: &entry.texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+            color_space: wgpu::PredefinedColorSpace::Srgb,
+            premultiplied_alpha: false,
+        };
+
+        let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+
+        self.engine.queue.copy_external_image_to_texture(&source, dest, size);
     }
 
     /// Check if a texture is cached.
@@ -651,7 +771,7 @@ impl Renderer {
                 module: &shader,
                 entry_point: Some(&config.fragment_entry),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: self.engine.texture_format,
+                    format: config.target_format.unwrap_or(self.engine.working_format),
                     blend,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -741,7 +861,42 @@ impl Renderer {
             None => true,
         };
         if needs_create {
-            self.load_rgba(key, &vec![0; expected_size as usize], width, height);
+            self.evict_if_needed(expected_size);
+            
+            let texture = self.engine.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(key),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.engine.working_format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+
+            if let Some(old) = self.texture_cache.remove(key) {
+                self.texture_cache_bytes -= old.size_bytes;
+            }
+
+            self.texture_cache.insert(
+                key.to_string(),
+                CachedTexture {
+                    texture,
+                    view,
+                    width,
+                    height,
+                    size_bytes: expected_size,
+                    last_used_frame: self.frame_number,
+                },
+            );
+            self.texture_cache_bytes += expected_size;
         }
         let view = self
             .texture_cache
@@ -895,9 +1050,9 @@ impl Renderer {
             let tex_view = match &prep.texture_view_key {
                 Some(key) => match self.texture_cache.get(key) {
                     Some(entry) => &entry.view,
-                    None => &self.white_texture_view,
+                    None => &self.transparent_texture_view, // Missing asset -> transparent
                 },
-                None => &self.white_texture_view,
+                None => &self.white_texture_view, // No texture requested -> use white for solid colors
             };
 
             // Bind group with the ENTIRE ring buffer + dynamic offset

@@ -10,6 +10,7 @@
 pub mod assets;
 pub mod color;
 pub mod ecs;
+pub mod frame;
 pub mod scene;
 pub mod time;
 pub mod types;

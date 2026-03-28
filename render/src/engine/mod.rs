@@ -14,8 +14,9 @@ pub struct GpuEngine {
     pub queue: wgpu::Queue,
     pub width: u32,
     pub height: u32,
-    /// Preferred format for the surface/display (pipelines must match this).
     pub texture_format: wgpu::TextureFormat,
+    /// Working format for intermediate render targets in the pipeline.
+    pub working_format: wgpu::TextureFormat,
     /// Output texture for headless rendering.
     pub output_texture: Option<wgpu::Texture>,
     /// WebGPU canvas surface (for target_arch = "wasm32").
@@ -24,7 +25,7 @@ pub struct GpuEngine {
 
 impl GpuEngine {
     /// Create a headless GPU engine (no window surface).
-    pub async fn new_headless(width: u32, height: u32) -> Self {
+    pub async fn new_headless(width: u32, height: u32, hdr_enabled: bool) -> Self {
         let instance = wgpu::Instance::default();
 
         let adapter = instance
@@ -50,6 +51,11 @@ impl GpuEngine {
             .expect("Failed to create GPU device");
 
         let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let working_format = if hdr_enabled {
+            wgpu::TextureFormat::Rgba16Float
+        } else {
+            format
+        };
         let output_texture = Some(Self::create_output_texture(&device, width, height, format));
 
         log::info!("GPU engine initialized: {:?}", adapter.get_info().name);
@@ -62,6 +68,7 @@ impl GpuEngine {
             width,
             height,
             texture_format: format,
+            working_format,
             output_texture,
             surface: None,
         }
@@ -69,7 +76,7 @@ impl GpuEngine {
 
     /// Create a GPU engine attached to an HTML canvas (Web).
     #[cfg(target_arch = "wasm32")]
-    pub async fn new_web(canvas: web_sys::HtmlCanvasElement, width: u32, height: u32) -> Self {
+    pub async fn new_web(canvas: web_sys::HtmlCanvasElement, width: u32, height: u32, hdr_enabled: bool) -> Self {
         let instance = wgpu::Instance::default();
 
         let surface = instance
@@ -129,6 +136,12 @@ impl GpuEngine {
 
         surface.configure(&device, &surface_config);
 
+        let working_format = if hdr_enabled {
+            wgpu::TextureFormat::Rgba16Float
+        } else {
+            format
+        };
+
         log::info!(
             "WebGPU engine initialized: {:?}, format: {:?}",
             adapter.get_info().name,
@@ -143,6 +156,7 @@ impl GpuEngine {
             width,
             height,
             texture_format: format,
+            working_format,
             output_texture: None,
             surface: Some(surface),
         }
@@ -152,15 +166,25 @@ impl GpuEngine {
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
-        if self.surface.is_none() {
+        if let Some(surface) = &self.surface {
+            let capabilities = surface.get_capabilities(&self.adapter);
+            let mut surface_config = surface
+                .get_default_config(&self.adapter, width, height)
+                .expect("Failed to get default surface configuration");
+            surface_config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC;
+            let base_format = capabilities.formats[0];
+            surface_config.format = base_format;
+            surface_config.view_formats = vec![self.texture_format];
+            surface.configure(&self.device, &surface_config);
+        } else {
             self.output_texture = Some(Self::create_output_texture(
                 &self.device,
                 width,
                 height,
                 self.texture_format,
             ));
-        } else {
-            // Reconfigure surface
         }
         log::info!("Resized output to {}x{}", width, height);
     }

@@ -53,7 +53,7 @@ impl CoreEngine {
     /// Create a new CoreEngine with the given output settings (Native only).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(settings: RenderSettings) -> Self {
-        let renderer = Renderer::new(settings.width, settings.height);
+        let renderer = Renderer::new(settings.width, settings.height, settings.hdr_enabled);
         let default_backend = Box::new(FfmpegMediaBackend::new("ffmpeg")) as Box<dyn MediaBackend>;
         Self::build(renderer, settings, default_backend)
     }
@@ -62,7 +62,7 @@ impl CoreEngine {
     ///
     /// On native, pass `FfmpegMediaBackend`. On WASM, pass `WebMediaBackend`.
     pub async fn new_async(settings: RenderSettings, backend: Box<dyn MediaBackend>) -> Self {
-        let renderer = Renderer::new_async(settings.width, settings.height).await;
+        let renderer = Renderer::new_async(settings.width, settings.height, settings.hdr_enabled).await;
         Self::build(renderer, settings, backend)
     }
 
@@ -73,7 +73,7 @@ impl CoreEngine {
         settings: RenderSettings,
         backend: Box<dyn MediaBackend>,
     ) -> Self {
-        let renderer = Renderer::new_web(canvas, settings.width, settings.height).await;
+        let renderer = Renderer::new_web(canvas, settings.width, settings.height, settings.hdr_enabled).await;
         Self::build(renderer, settings, backend)
     }
 
@@ -133,6 +133,11 @@ impl CoreEngine {
     /// Get GPU capabilities (device name, max texture size, etc.).
     pub fn capabilities(&self) -> GpuCapabilities {
         self.renderer.capabilities()
+    }
+
+    /// Access the underlying Renderer directly (useful for bypassing CPU-side queues on Web)
+    pub fn renderer_mut(&mut self) -> &mut Renderer {
+        &mut self.renderer
     }
 
     // ── Shaders ──
@@ -218,6 +223,25 @@ impl CoreEngine {
             self.font_cache.insert(key.to_string(), data);
         }
         Ok(())
+    }
+
+    /// Load font data directly from a byte array (used by WASM to bypass filesystem).
+    pub fn load_font_bytes(&mut self, key: &str, data: Vec<u8>) {
+        if !self.font_cache.contains_key(key) {
+            self.font_cache.insert(key.to_string(), data);
+        }
+    }
+
+    /// Load video frame via wgpu's Zero-Copy GPU bypass
+    #[cfg(target_arch = "wasm32")]
+    pub fn load_video_texture_web(
+        &mut self,
+        key: &str,
+        video: &web_sys::HtmlVideoElement,
+        width: u32,
+        height: u32,
+    ) {
+        self.renderer.load_video_texture_web(key, video, width, height);
     }
 
     /// Decode a video frame and upload as texture.
@@ -400,7 +424,7 @@ impl CoreEngine {
                 PassType::Output { input } => {
                     // Output pass: Draws VRAM `input` texture back into the CPU mapped Buffer!
                     let commands = vec![DrawCommand {
-                        pipeline: "copy".to_string(),
+                        pipeline: "output_copy".to_string(),
                         uniforms: vec![0.0], // Padding to fulfill minimal binding size
                         textures: vec![input.clone()],
                     }];

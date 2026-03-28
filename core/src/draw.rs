@@ -95,28 +95,31 @@ fn compute_uv_rect(fit_mode: u32, entity_w: f32, entity_h: f32, tex_w: f32, tex_
 
     if fit_mode == 1 {
         // Contain: scale uniformly to fit inside, letterbox
+        // In UV coordinates, scale > 1.0 pushes edges outside [0..1], 
+        // triggering ClampToEdge transparent padding.
         if tex_aspect > entity_aspect {
-            // Texture is wider → fit width, letterbox height
-            let scale_y = entity_aspect / tex_aspect;
-            let offset_y = (1.0 - scale_y) * 0.5;
+            // Texture is wider → fit width exactly, pad height (letterbox)
+            let scale_y = tex_aspect / entity_aspect; // > 1.0
+            let offset_y = (1.0 - scale_y) * 0.5; // negative offset
             [0.0, offset_y, 1.0, scale_y]
         } else {
-            // Texture is taller → fit height, pillarbox width
-            let scale_x = tex_aspect / entity_aspect;
-            let offset_x = (1.0 - scale_x) * 0.5;
+            // Texture is taller → fit height exactly, pad width (pillarbox)
+            let scale_x = entity_aspect / tex_aspect; // > 1.0
+            let offset_x = (1.0 - scale_x) * 0.5; // negative offset
             [offset_x, 0.0, scale_x, 1.0]
         }
     } else {
         // Cover: scale uniformly to fill, crop excess
+        // In UV coordinates, scale < 1.0 squishes UV sampling to interior, cropping edges.
         if tex_aspect > entity_aspect {
-            // Texture is wider → crop width
-            let uv_scale_x = entity_aspect / tex_aspect;
-            let uv_offset_x = (1.0 - uv_scale_x) * 0.5;
+            // Texture is wider → fill height exactly, crop width
+            let uv_scale_x = entity_aspect / tex_aspect; // < 1.0
+            let uv_offset_x = (1.0 - uv_scale_x) * 0.5; // positive offset
             [uv_offset_x, 0.0, uv_scale_x, 1.0]
         } else {
-            // Texture is taller → crop height
-            let uv_scale_y = tex_aspect / entity_aspect;
-            let uv_offset_y = (1.0 - uv_scale_y) * 0.5;
+            // Texture is taller → fill width exactly, crop height
+            let uv_scale_y = tex_aspect / entity_aspect; // < 1.0
+            let uv_offset_y = (1.0 - uv_scale_y) * 0.5; // positive offset
             [0.0, uv_offset_y, 1.0, uv_scale_y]
         }
     }
@@ -151,15 +154,22 @@ pub fn build_draw_commands(
             [0.0, 0.0, 1.0, 1.0]
         };
 
-        let mut uniforms = Vec::with_capacity(COMPOSITE_UNIFORM_FLOATS);
+        let mut uniforms = Vec::with_capacity(32);
         uniforms.extend_from_slice(&transform);      // 16
         uniforms.extend_from_slice(&entity.color);    // 4
         uniforms.push(entity.opacity);                // 1
-        uniforms.push(use_texture);                   // 1
-        uniforms.push(entity.blend_mode as f32);      // 1
-        uniforms.push(entity.fit_mode as f32);        // 1
-        uniforms.push(uv_rect[0]); uniforms.push(uv_rect[1]); // uv_offset: 2
-        uniforms.push(uv_rect[2]); uniforms.push(uv_rect[3]); // uv_scale: 2
+        
+        if !entity.params.is_empty() {
+            // Specialized shape/effect shaders with custom uniform layout
+            uniforms.extend_from_slice(&entity.params);
+        } else {
+            // Builtin composite shader layout
+            uniforms.push(use_texture);                   // 1
+            uniforms.push(entity.blend_mode as f32);      // 1
+            uniforms.push(entity.fit_mode as f32);        // 1
+            uniforms.push(uv_rect[0]); uniforms.push(uv_rect[1]); // uv_offset: 2
+            uniforms.push(uv_rect[2]); uniforms.push(uv_rect[3]); // uv_scale: 2
+        }
 
         commands.push(DrawCommand {
             pipeline: entity.shader.clone(),

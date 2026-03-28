@@ -1,12 +1,11 @@
-# Getting Started with ifol-render (V2)
+# Getting Started with ifol-render
 
 ## Prerequisites
 
 - **Rust 1.85+** with `wasm32-unknown-unknown` target
 - **wasm-pack** (`cargo install wasm-pack`)
-- **Node.js 18+** (for Vite dev server)
-- **FFmpeg** (for video export only)
 - **Browser with WebGPU** (Chrome/Edge 113+)
+- **FFmpeg** (for video export via CLI only)
 
 ---
 
@@ -15,31 +14,26 @@
 ### 1. Build WASM
 ```bash
 cd crates/wasm
-wasm-pack build --target web --out-dir pkg
+wasm-pack build --target web
 ```
 
-### 2. Copy to web directory
-```bash
-cp -r crates/wasm/pkg web/ifol-render-wasm
-```
-
-### 3. Start dev server
+### 2. Start dev server
 ```bash
 cd web
 npx vite --port 5174
 ```
 
-### 4. Open in browser
-Navigate to `http://localhost:5174` — the test editor loads automatically.
+### 3. Open in browser
+Navigate to `http://localhost:5174/v4-test.html` — test editor w/ timeline loads automatically.
 
 ---
 
-## V2 API — Scene JSON
+## V4 API — Scene JSON (ECS)
 
-ifol-render V2 uses **ECS architecture**. You define entities with components in JSON:
+ifol-render V4 uses **pure ECS architecture**. Entities have components; systems process them.
 
 ```javascript
-import init, { IfolRenderWeb } from './ifol-render-wasm/ifol_render_wasm.js';
+import init, { IfolRenderWeb } from '../crates/wasm/pkg/ifol_render_wasm.js';
 
 // Initialize
 await init();
@@ -49,37 +43,51 @@ engine.setup_builtins();
 
 // Define scene
 const scene = {
-  assets: {},
+  assets: {
+    "photo": { image: { url: "./hero.png" } }
+  },
   entities: [
     {
-      id: "cam",
-      lifespan: { start: 0, end: 99999 },
+      id: "main_cam",
       camera: { resolutionWidth: 1280, resolutionHeight: 720 },
-      transform: { x: { keyframes: [{ time: 0, value: 0 }] }, y: { keyframes: [{ time: 0, value: 0 }] } }
+      rect: { width: 1280, height: 720 },
+      transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, anchorX: 0, anchorY: 0 },
+      lifespan: { start: 0, end: 100 }
     },
     {
       id: "red_box",
+      shapeSource: { kind: "rectangle", fillColor: [0.8, 0.1, 0.1, 1.0] },
+      rect: { width: 200, height: 150 },
+      transform: { x: 100, y: 50, rotation: 0, scaleX: 1, scaleY: 1, anchorX: 0.5, anchorY: 0.5 },
       lifespan: { start: 0, end: 10 },
-      transform: {
-        x: { keyframes: [{ time: 0, value: -200 }, { time: 5, value: 200 }] },
-        y: { keyframes: [{ time: 0, value: 0 }] },
-        rotation: { keyframes: [{ time: 0, value: 0 }, { time: 10, value: 360 }] },
-        anchor_x: { keyframes: [{ time: 0, value: 0.5 }] },
-        anchor_y: { keyframes: [{ time: 0, value: 0.5 }] },
-        scale_x: { keyframes: [{ time: 0, value: 1 }] },
-        scale_y: { keyframes: [{ time: 0, value: 1 }] }
-      },
-      rect: { width: { keyframes: [{ time: 0, value: 200 }] }, height: { keyframes: [{ time: 0, value: 150 }] }, fitMode: "stretch" },
-      colorSource: { color: { r: 0.8, g: 0.1, b: 0.1, a: 1 } },
-      opacity: { keyframes: [{ time: 0, value: 1 }] },
-      layer: 1
+      layer: 1,
+      animation: { floatTracks: [
+        { target: "transformX", track: { keyframes: [
+          { time: 0, value: -200 },
+          { time: 5, value: 200, interpolation: { type: "cubic_bezier", x1: 0.42, y1: 0, x2: 0.58, y2: 1 } }
+        ]}}
+      ]}
     }
   ]
 };
 
-// Load and render
-engine.load_scene_v2(JSON.stringify(scene));
-engine.render_frame_v2(0.0, "cam");  // Render at time=0
+// Load assets, then scene
+async function loadAndRender() {
+  // Fetch + decode image → RGBA → cache
+  const resp = await fetch("./hero.png");
+  const blob = await resp.blob();
+  const bitmap = await createImageBitmap(blob);
+  const c = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const ctx = c.getContext('2d');
+  ctx.drawImage(bitmap, 0, 0);
+  const rgba = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+  engine.cache_image("./hero.png", rgba.data, bitmap.width, bitmap.height);
+  bitmap.close();
+
+  // Load scene + render
+  engine.load_scene_v2(JSON.stringify(scene));
+  engine.render_frame_v2(0.0, "main_cam", true, 0, 0, 1280, 720);
+}
 ```
 
 ---
@@ -88,76 +96,57 @@ engine.render_frame_v2(0.0, "cam");  // Render at time=0
 
 ### Entity = ID + Components
 An entity is a blank container. **Components define what it is**:
-- `colorSource` → renders a solid color quad
+- `shapeSource` → renders a rectangle or ellipse
+- `imageSource` → renders an image texture (requires asset loading)
 - `videoSource` → renders video frames
 - `camera` → defines a viewpoint
-- `composition` → groups children into a nested timeline
+- `composition` → groups children into a nested sub-timeline
 
-### All Properties are Keyframe Tracks
-Transform, opacity, rect size — everything is animatable:
+### Animation = Keyframe Tracks
+Properties are animated via `floatTracks` in an `animation` component:
 ```json
-{ "keyframes": [
-  { "time": 0, "value": 0, "interpolation": { "type": "linear" } },
+{ "target": "transformX", "track": { "keyframes": [
+  { "time": 0, "value": 0 },
   { "time": 5, "value": 400, "interpolation": { "type": "cubic_bezier", "x1": 0.42, "y1": 0, "x2": 0.58, "y2": 1 } }
-]}
+]}}
 ```
 
-### Scene per Change
-Every time you change an entity, rebuild and send the scene:
-```javascript
-scene.entities[1].transform.x.keyframes[0].value = newX;
-engine.load_scene_v2(JSON.stringify(scene));
-engine.render_frame_v2(currentTime, "cam");
+### Asset Pipeline (App Decodes, Core Renders)
+```
+Scene JSON → assets: { "id": { image: { url: "..." } } }
+App layer:   fetch(url) → decode → RGBA → engine.cache_image(url, rgba, w, h)
+Core:        GPU upload once → reuse every frame. Zero per-frame cost.
 ```
 
----
-
-## Render Modes
-
+### Render Modes
 ```javascript
+// Editor mode: custom viewport (pan/zoom)
+engine.render_frame_v2(time, "cam", true, panX, panY, viewW, viewH);
+
 // Camera mode: render at camera's native resolution
-engine.render_frame_v2(time, "cam");
-
-// Editor mode: render custom viewport region (pan/zoom)
-engine.render_frame_v2(time, "cam", panX, panY, viewWidth, viewHeight);
+engine.render_frame_v2(time, "cam", false);
 ```
 
 ---
 
-## Loading Assets
+## FitMode
 
-### Images
-```javascript
-// Register in scene
-scene.assets["my_image"] = { type: "image", url: "http://server/photo.png" };
-entity.imageSource = { assetId: "my_image", intrinsicWidth: 1920, intrinsicHeight: 1080 };
+When an image/video is inside a Rect, FitMode controls scaling:
 
-// Fetch and inject
-const resp = await fetch("http://server/photo.png");
-const blob = await resp.blob();
-const bitmap = await createImageBitmap(blob);
-// ... extract RGBA and cache
-engine.cache_image("http://server/photo.png", rgbaData);
-```
+| Mode | Behavior |
+|------|----------|
+| `stretch` (default) | Fill Rect exactly, may distort |
+| `contain` | Fit proportionally, transparent surplus |
+| `cover` | Fill Rect, crop edges |
 
-### Video Frames
-```javascript
-scene.assets["my_video"] = { type: "video", url: "http://server/video.mp4" };
-
-// Create hidden video element
-const video = document.createElement("video");
-video.src = "http://server/video.mp4";
-
-// Each frame: seek, extract, inject
-video.currentTime = playbackTime;
-// ... draw to canvas, getImageData
-engine.cache_video_frame("http://server/video.mp4", rgbaData, width, height);
+```json
+{ "rect": { "width": 400, "height": 300, "fitMode": "contain" } }
 ```
 
 ---
 
 ## Further Reading
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — Full system architecture, ECS pipeline, components
-- [ROADMAP.md](ROADMAP.md) — Bottom-up build roadmap
+- [ARCHITECTURE.md](ARCHITECTURE.md) — Full ECS pipeline, 6 systems, components, asset pipeline
+- [ROADMAP.md](ROADMAP.md) — Bottom-up rebuild roadmap with completion status
 - [CLI_GUIDE.md](CLI_GUIDE.md) — Server-side export commands

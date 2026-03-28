@@ -42,9 +42,11 @@ pub struct RenderSettings {
     /// Working color space (default: LinearSrgb).
     #[serde(default)]
     pub color_space: ColorSpace,
-    /// Output color space (default: Srgb).
     #[serde(default)]
     pub output_color_space: ColorSpace,
+    /// Whether HDR (Rgba16Float) rendering is enabled for the pipeline
+    #[serde(default)]
+    pub hdr_enabled: bool,
 }
 
 fn default_fps() -> f64 {
@@ -137,69 +139,9 @@ pub struct MaterialV2 {
 pub struct EntityV2 {
     pub id: String,
 
-    // ── Sources ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub video_source: Option<crate::ecs::components::VideoSource>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub image_source: Option<crate::ecs::components::ImageSource>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text_source: Option<crate::ecs::components::TextSource>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub color_source: Option<crate::ecs::components::ColorSource>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub audio_source: Option<crate::ecs::components::AudioSource>,
-
-    // ── Camera ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub camera: Option<crate::ecs::components::CameraComponent>,
-
-    // ── Spatial ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub transform: Option<TransformTrack>,
-
-    // ── Display Rect ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rect: Option<crate::ecs::components::Rect>,
-
-    // ── Composition (nested timeline group) ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub composition: Option<crate::ecs::components::Composition>,
-
-    // ── Time ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lifespan: Option<Lifespan>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub layer: Option<i32>,
-
-    // ── Rendering ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub opacity: Option<FloatTrack>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub blend_mode: Option<StringTrack>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fit_mode: Option<StringTrack>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub materials: Option<Vec<MaterialV2>>,
-
-    // ── Playback ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub playback_time: Option<FloatTrack>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub speed: Option<FloatTrack>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub volume: Option<FloatTrack>,
-
-    // ── Relations ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mask_id: Option<String>,
-
-    // ── Extensible ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub float_uniforms: Option<std::collections::HashMap<String, FloatTrack>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub string_uniforms: Option<std::collections::HashMap<String, StringTrack>>,
+    /// All components attached to this entity, captured dynamically from JSON properties.
+    #[serde(flatten)]
+    pub components: std::collections::HashMap<String, serde_json::Value>,
 }
 
 /// Defines the absolute start and end time (in seconds).
@@ -229,6 +171,11 @@ impl Lifespan {
 // ══════════════════════════════════════
 
 /// Interpolation mode between keyframes.
+///
+/// Core provides only 4 fundamental primitives. Any custom easing
+/// (ease-in, ease-out, steps, spring, etc.) should be defined at the
+/// app/frontend level by mapping to CubicBezier control points or
+/// by generating additional keyframes.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum Interpolation {
@@ -238,6 +185,10 @@ pub enum Interpolation {
     Linear,
     /// CSS-style cubic bezier timing curve.
     /// x1,y1,x2,y2 define the two control points of the timing function.
+    /// This is the universal easing primitive — covers all standard curves:
+    ///   ease-in:     (0.42, 0.0,  1.0,  1.0)
+    ///   ease-out:    (0.0,  0.0,  0.58, 1.0)
+    ///   ease-in-out: (0.42, 0.0,  0.58, 1.0)
     CubicBezier {
         #[serde(default = "default_cb_x1")] x1: f32,
         #[serde(default)] y1: f32,

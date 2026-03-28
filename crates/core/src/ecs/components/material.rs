@@ -45,3 +45,19 @@ pub struct Effect {
     #[serde(default)]
     pub params: std::collections::HashMap<String, serde_json::Value>,
 }
+
+/// Runtime ECS Material Component used by RenderGraph.
+/// Derived from Scene definition combined with effect registry defaults.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MaterialComponent {
+    pub shader_id: String,
+    /// Flat list of evaluated uniforms ready for WGPU
+    #[serde(default)]
+    pub uniforms: Vec<f32>,
+    /// How much extra padding (in pixels) this effect requires
+    #[serde(default)]
+    pub padding: f32,
+    /// Explicit texture input keys/names
+    #[serde(default)]
+    pub inputs: Vec<String>,
+}

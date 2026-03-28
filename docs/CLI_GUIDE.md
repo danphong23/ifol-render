@@ -66,46 +66,35 @@ Available tests: `basic`, `blend`, `shapes`, `gradients`, `resize`, `masking`, `
 
 ## Scene JSON Format
 
-The scene JSON file contains everything needed for export:
+The CLI uses the same **V4 ECS scene JSON** format as the web:
 
 ```json
 {
-  "settings": {
-    "width": 1920,
-    "height": 1080,
-    "fps": 30
+  "assets": {
+    "bg_img": { "image": { "url": "/data/images/hero.png" } },
+    "music":  { "audio": { "url": "/data/audio/bg.mp3" } }
   },
-  "frames": [
+  "entities": [
     {
-      "clear_color": [0, 0, 0, 1],
-      "passes": [
-        {
-          "type": "entities",
-          "entities": [
-            {
-              "pipeline": "composite",
-              "uniforms": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0],
-              "textures": []
-            }
-          ]
-        }
-      ]
-    }
-  ],
-  "audio_clips": [
+      "id": "main_cam",
+      "camera": { "resolutionWidth": 1920, "resolutionHeight": 1080 },
+      "rect": { "width": 1920, "height": 1080 },
+      "transform": { "x": 0, "y": 0, "rotation": 0, "scaleX": 1, "scaleY": 1, "anchorX": 0, "anchorY": 0 },
+      "lifespan": { "start": 0, "end": 30 }
+    },
     {
-      "path": "music.mp3",
-      "start_time": 0.0,
-      "volume": 0.8,
-      "fade_in": 1.0,
-      "fade_out": 2.0,
-      "offset": 0.0
+      "id": "photo",
+      "imageSource": { "assetId": "bg_img", "intrinsicWidth": 800, "intrinsicHeight": 600 },
+      "rect": { "width": 1920, "height": 1080, "fitMode": "cover" },
+      "transform": { "x": 960, "y": 540, "rotation": 0, "scaleX": 1, "scaleY": 1, "anchorX": 0.5, "anchorY": 0.5 },
+      "lifespan": { "start": 0, "end": 10 },
+      "layer": 1
     }
   ]
 }
 ```
 
-> **Tip:** Use the SDK's `buildExportPayload()` function to generate this JSON programmatically instead of writing it by hand.
+> **Note:** On server/CLI, the asset resolver reads files from the filesystem using the `url` paths directly. The `image` crate handles decoding (PNG, JPEG, etc.).
 
 ---
 

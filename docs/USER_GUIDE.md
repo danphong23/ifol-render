@@ -1,6 +1,9 @@
 # ifol-render User Guide
 
-Welcome to the `ifol-render` engine! This guide covers everything from environment setup to using the graphical Studio app and headless CLI.
+> **⚠️ Note:** The current primary development target is the **Web** platform via WASM + WebGPU.
+> Use `web/v4-test.html` as the test editor. The Studio GUI app described below is **legacy** and may not reflect the latest ECS architecture.
+
+Welcome to the `ifol-render` engine! This guide covers environment setup, the web test editor, and headless CLI export.
 
 ## 1. Prerequisites (CRITICAL)
 

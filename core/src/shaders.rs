@@ -27,6 +27,14 @@ pub fn setup_builtins(renderer: &mut Renderer) {
         );
     }
 
+    if !renderer.has_pipeline("dashed_rect") {
+        renderer.register_pipeline(
+            "dashed_rect",
+            include_str!("../../shaders/dashed_rect.wgsl"),
+            PipelineConfig::quad(),
+        );
+    }
+
     if !renderer.has_pipeline("gradient") {
         renderer.register_pipeline(
             "gradient",
@@ -43,10 +51,7 @@ pub fn setup_builtins(renderer: &mut Renderer) {
         );
     }
 
-    if !renderer.has_pipeline("copy") {
-        renderer.register_effect(
-            "copy",
-            "
+    let copy_shader_src = "
             struct VertexOutput {
                 @builtin(position) clip_position: vec4f,
                 @location(0) uv: vec2f,
@@ -69,9 +74,24 @@ pub fn setup_builtins(renderer: &mut Renderer) {
             fn fs_main(in: VertexOutput) -> @location(0) vec4f {
                 return textureSample(t_color, s_color, in.uv);
             }
-            ",
+            ";
+
+    if !renderer.has_pipeline("copy") {
+        renderer.register_effect(
+            "copy",
+            copy_shader_src,
             vec![("_pad".into(), 0.0)],
             1,
+        );
+    }
+
+    if !renderer.has_pipeline("output_copy") {
+        let mut config = PipelineConfig::fullscreen();
+        config.target_format = Some(renderer.texture_format()); // Force output to surface format
+        renderer.register_pipeline(
+            "output_copy",
+            copy_shader_src,
+            config,
         );
     }
 

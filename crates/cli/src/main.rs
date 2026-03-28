@@ -140,13 +140,13 @@ fn main() {
                 
                 let mut camera_id = "cam".to_string();
                 let mut max_end: f64 = 10.0;
+                let storages = &world.storages;
                 for ent in &world.entities {
-                    if ent.id.starts_with("cam") && ent.components.transform.is_some() {
+                    if ent.id.starts_with("cam") && storages.get_component::<ifol_render_ecs::ecs::components::Transform>(&ent.id).is_some() {
                         camera_id = ent.id.clone();
                     }
-                    if let Some(tl) = &ent.components.timeline {
-                        let end = tl.start_time + tl.duration;
-                        if end > max_end { max_end = end; }
+                    if let Some(tl) = storages.get_component::<ifol_render_ecs::scene::Lifespan>(&ent.id) {
+                        if tl.end > max_end && tl.end < 1_000_000.0 { max_end = tl.end; }
                     }
                 }
                 
@@ -232,11 +232,14 @@ fn main() {
 
             // V2: Pre-load images into engine GPU texture cache
             if let Some((ref world, _, _, _)) = v2_data {
+                let storages = &world.storages;
                 for ent in &world.entities {
-                    if let Some(img) = &ent.components.image_source {
-                        match engine.load_image(&img.path, &img.path) {
-                            Ok(_) => eprintln!("  Loaded image: {}", img.path),
-                            Err(e) => eprintln!("  Image load error '{}': {}", img.path, e),
+                    if let Some(img) = storages.get_component::<ifol_render_ecs::ecs::components::ImageSource>(&ent.id) {
+                        let url = world.resolve_asset_url(&img.asset_id).unwrap_or(&img.asset_id);
+                        let path = if url.starts_with("./") { &url[2..] } else { url };
+                        match engine.load_image(url, path) {
+                            Ok(_) => eprintln!("  Loaded image: {}", path),
+                            Err(e) => eprintln!("  Image load error '{}': {}", path, e),
                         }
                     }
                 }
@@ -282,7 +285,7 @@ fn main() {
                         frame_index: fi as u64,
                         fps: fps_val,
                     };
-                    ifol_render_ecs::ecs::pipeline::run(&mut world, &time_state);
+                    ifol_render_ecs::ecs::pipeline::run(&mut world, &time_state, None, None);
                     let frame = ifol_render_core::compiler::compile_world_to_frame(
                         &world, &camera_id, out_w, out_h, t,
                         None, None, None, None, &[], // no custom cam, no selection
@@ -453,7 +456,7 @@ fn main() {
                 test, output, width, height
             );
 
-            let mut renderer = ifol_render_core::Renderer::new(width, height);
+            let mut renderer = ifol_render_core::Renderer::new(width, height, false);
 
             // Register built-in shaders from core
             ifol_render_core::shaders::setup_builtins(&mut renderer);

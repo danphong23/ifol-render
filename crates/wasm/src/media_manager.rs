@@ -1,83 +1,48 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use web_sys::{HtmlCanvasElement, HtmlVideoElement, CanvasRenderingContext2d};
+use web_sys::{HtmlVideoElement};
 use ifol_render_ecs::ecs::World;
-use ifol_render_core::backend::media::MediaBackend;
 
-const MAX_CACHE: usize = 60;
+// ── Configuration Constants ──
+const SYNC_TOLERANCE_PLAY: f64 = 0.3; // 300ms drift tolerance when playing (avoids stutter but keeps sync)
+const SYNC_TOLERANCE_SCRUB: f64 = 0.02; // 20ms frame-perfect snap when scrubbing
 
-#[derive(Clone)]
-pub struct FrameData {
-    pub rgba: Vec<u8>,
-    pub width: u32,
-    pub height: u32,
+pub struct VideoEntry {
+    pub el: HtmlVideoElement,
+    ready: bool,
+    playing: bool,
+    last_ecs_time: f64,
+    // Store closures so they are safely dropped when VideoEntry is dropped (no more memory leaks)
+    _on_ready: Option<Closure<dyn FnMut(web_sys::Event)>>,
+    _on_seeked: Option<Closure<dyn FnMut(web_sys::Event)>>,
 }
 
-struct VideoEntry {
-    el: HtmlVideoElement,
-    ready: bool,
-    seeking: bool,
-    playing: bool,
-    pending_seek: Option<f64>,
-    // Keep closures alive
-    _on_seeked: Option<Closure<dyn FnMut(web_sys::Event)>>,
-    _on_error: Option<Closure<dyn FnMut(web_sys::Event)>>,
+impl Drop for VideoEntry {
+    fn drop(&mut self) {
+        let _ = self.el.pause();
+        self.el.set_src("");
+        self.el.load();
+        self.el.remove(); // Removes from the DOM tree entirely
+    }
 }
 
 pub struct WasmMediaManager {
+    // Key is now the Entity ID, NOT the URL, so entities can share URLs freely.
     videos: HashMap<String, Rc<RefCell<VideoEntry>>>,
-    cache: HashMap<String, FrameData>,
-    lru: VecDeque<String>,
-    last_good_frames: HashMap<String, FrameData>,
-    canvas: Option<HtmlCanvasElement>,
-    ctx: Option<CanvasRenderingContext2d>,
 }
 
 impl WasmMediaManager {
     pub fn new() -> Self {
         Self {
             videos: HashMap::new(),
-            cache: HashMap::new(),
-            lru: VecDeque::new(),
-            last_good_frames: HashMap::new(),
-            canvas: None,
-            ctx: None,
         }
     }
 
-    /// Update required video elements for the given world at the specified time.
-    /// Injects successfully extracted frames into the backend.
-    pub fn update_scene_videos(
-        &mut self,
-        world: &World,
-        _time_sec: f64,
-        backend: &crate::web_backend::WebMediaBackend,
-    ) {
-        // Clear backend's frame map for the new frame
-        backend.video_frames.write().unwrap().clear();
-
-        for entity in world.entities.iter() {
-            if let Some(video_source) = &entity.components.video_source {
-                let asset_id = &video_source.asset_id;
-                // Resolve url
-                let url = world.resolve_asset_url(asset_id).unwrap_or(asset_id);
-
-                if !entity.resolved.visible {
-                    continue;
-                }
-
-                let seek_time = entity.resolved.playback_time;
-
-                self.request_frame(url, seek_time, backend);
-            }
-        }
-    }
-
-    fn get_video(&mut self, url: &str) -> Rc<RefCell<VideoEntry>> {
-        if let Some(entry) = self.videos.get(url) {
+    fn get_video(&mut self, entity_id: &str, url: &str) -> Rc<RefCell<VideoEntry>> {
+        if let Some(entry) = self.videos.get(entity_id) {
             return entry.clone();
         }
 
@@ -94,18 +59,23 @@ impl WasmMediaManager {
         el.set_preload("auto");
         el.set_muted(true);
         let _ = el.set_attribute("playsInline", "true");
+        let _ = el.set_attribute("style", "position: absolute; opacity: 0; pointer-events: none; width: 1px; height: 1px;");
         el.set_src(url);
+
+        if let Some(body) = web_sys::window().unwrap().document().unwrap().body() {
+            let _ = body.append_child(&el);
+        }
 
         let entry = Rc::new(RefCell::new(VideoEntry {
             el: el.clone(),
             ready: false,
-            seeking: false,
             playing: false,
-            pending_seek: None,
+            last_ecs_time: -1.0,
+            _on_ready: None,
             _on_seeked: None,
-            _on_error: None,
         }));
 
+        // Ready Callback
         let entry_clone = entry.clone();
         let ready_closure = Closure::wrap(Box::new(move |_e: web_sys::Event| {
             if let Ok(mut lock) = entry_clone.try_borrow_mut() {
@@ -113,146 +83,125 @@ impl WasmMediaManager {
             }
         }) as Box<dyn FnMut(web_sys::Event)>);
         let _ = el.add_event_listener_with_callback("loadedmetadata", ready_closure.as_ref().unchecked_ref());
-        ready_closure.forget(); // leak it since video lives forever mostly
+        entry.borrow_mut()._on_ready = Some(ready_closure);
 
-        self.videos.insert(url.to_string(), entry.clone());
+        // Seeked Callback (For pushing Dirty frame updates during scrubbing)
+        let seeked_closure = Closure::wrap(Box::new(move |_e: web_sys::Event| {
+            if let Some(window) = web_sys::window() {
+                if let Ok(event) = web_sys::Event::new("ifol_video_seeked") {
+                    let _ = window.dispatch_event(&event);
+                }
+            }
+        }) as Box<dyn FnMut(web_sys::Event)>);
+        let _ = el.add_event_listener_with_callback("seeked", seeked_closure.as_ref().unchecked_ref());
+        entry.borrow_mut()._on_seeked = Some(seeked_closure);
+
+        self.videos.insert(entity_id.to_string(), entry.clone());
         entry
     }
 
-    fn request_frame(
+    /// Requests a video frame for the given Entity.
+    /// Returns the active HtmlVideoElement, its width, and height.
+    /// WebGPU will copy directly from the HtmlVideoElement to VRAM.
+    pub fn get_video_frame(
         &mut self,
+        entity_id: &str,
         url: &str,
         time: f64,
-        backend: &crate::web_backend::WebMediaBackend,
-    ) {
-        // Round to nearest 30fps to match frontend cache behavior
+        is_engine_playing: bool,
+    ) -> Option<(HtmlVideoElement, u32, u32)> {
+        // Round to nearest 30fps to match timeline expectation
         let rounded_time = (time * 30.0).round() / 30.0;
-        let cache_key = format!("{}@{:.3}", url, rounded_time);
 
-        // 1. Check cache
-        if let Some(frame) = self.cache.get(&cache_key) {
-            backend.video_frames.write().unwrap().insert(
-                cache_key.clone(),
-                (frame.rgba.clone(), frame.width, frame.height),
-            );
-            return;
-        }
-
-        // 2. Fetch video element
-        let entry_rc = self.get_video(url);
+        let entry_rc = self.get_video(entity_id, url);
         let mut entry = entry_rc.borrow_mut();
 
-        // If not ready, use last good frame
         if !entry.ready {
-            if let Some(frame) = self.last_good_frames.get(url) {
-                backend.video_frames.write().unwrap().insert(
-                    cache_key.clone(),
-                    (frame.rgba.clone(), frame.width, frame.height),
-                );
-            }
-            return;
+            return None;
         }
 
         let el = entry.el.clone();
+        
+        let time_delta = time - entry.last_ecs_time;
+        entry.last_ecs_time = time;
+        let entity_is_playing = is_engine_playing && time_delta > 0.0;
         let diff = (el.current_time() - rounded_time).abs();
 
-        if diff > 0.05 && !entry.seeking && !entry.playing {
-            // Need to seek
-            entry.seeking = true;
-            entry.pending_seek = Some(rounded_time);
-            
-            let _url_clone = url.to_string();
-            let entry_clone = entry_rc.clone();
-            
-            let on_seeked = Closure::wrap(Box::new(move |_e: web_sys::Event| {
-                if let Ok(mut lock) = entry_clone.try_borrow_mut() {
-                    lock.seeking = false;
-                }
-            }) as Box<dyn FnMut(web_sys::Event)>);
-            
-            let _ = el.add_event_listener_with_callback_and_bool("seeked", on_seeked.as_ref().unchecked_ref(), true);
-            entry._on_seeked = Some(on_seeked);
-            
-            el.set_current_time(rounded_time);
+        if entity_is_playing {
+            if diff > SYNC_TOLERANCE_PLAY {
+                el.set_current_time(rounded_time);
+            }
+            if !entry.playing {
+                let _ = el.play();
+                entry.playing = true;
+            }
+        } else {
+            if diff > SYNC_TOLERANCE_SCRUB {
+                el.set_current_time(rounded_time);
+            }
+            if entry.playing {
+                let _ = el.pause();
+                entry.playing = false;
+            }
         }
 
-        // Extract current frame if readyState >= 2 (HAVE_CURRENT_DATA)
         if el.ready_state() >= 2 {
             let w = el.video_width();
             let h = el.video_height();
             if w > 0 && h > 0 {
-                if let Some(rgba) = self.extract_rgba(&el, w, h) {
-                    let frame = FrameData {
-                        rgba: rgba.clone(),
-                        width: w,
-                        height: h,
-                    };
-                    self.cache.insert(cache_key.clone(), frame.clone());
-                    self.lru.push_back(cache_key.clone());
-                    self.last_good_frames.insert(url.to_string(), frame.clone());
-                    
-                    if self.lru.len() > MAX_CACHE {
-                        if let Some(old_key) = self.lru.pop_front() {
-                            self.cache.remove(&old_key);
-                        }
-                    }
-
-                    backend.video_frames.write().unwrap().insert(
-                        cache_key.clone(),
-                        (rgba, w, h),
-                    );
-                    return;
-                }
+                return Some((el, w, h));
             }
         }
 
-        // Fallback to last good frame if seeking or extracting failed
-        if let Some(frame) = self.last_good_frames.get(url) {
-            backend.video_frames.write().unwrap().insert(
-                cache_key.clone(),
-                (frame.rgba.clone(), frame.width, frame.height),
-            );
-        }
-    }
-
-    fn extract_rgba(&mut self, el: &HtmlVideoElement, width: u32, height: u32) -> Option<Vec<u8>> {
-        if self.canvas.is_none() || self.canvas.as_ref().unwrap().width() != width || self.canvas.as_ref().unwrap().height() != height {
-            let document = web_sys::window()?.document()?;
-            let canvas = document.create_element("canvas").ok()?.dyn_into::<HtmlCanvasElement>().ok()?;
-            canvas.set_width(width);
-            canvas.set_height(height);
-            let options = js_sys::Object::new();
-            js_sys::Reflect::set(&options, &JsValue::from_str("willReadFrequently"), &JsValue::from_bool(true)).unwrap();
-            let ctx = canvas
-                .get_context_with_context_options("2d", &options)
-                .ok()??
-                .dyn_into::<CanvasRenderingContext2d>()
-                .ok()?;
-            self.canvas = Some(canvas);
-            self.ctx = Some(ctx);
-        }
-
-        if let Some(ctx) = &self.ctx {
-            ctx.draw_image_with_html_video_element_and_dw_and_dh(
-                el, 0.0, 0.0, width as f64, height as f64
-            ).ok()?;
-            
-            let img_data = ctx.get_image_data(0.0, 0.0, width as f64, height as f64).ok()?;
-            return Some(img_data.data().0);
-        }
         None
     }
 
-    pub fn clear(&mut self) {
-        for entry in self.videos.values() {
-            let lock = entry.borrow_mut();
-            let _ = lock.el.pause();
-            lock.el.set_src("");
-            lock.el.load();
+    /// Check if a video has enough data loaded for a specific timestamp WITHOUT altering playback state.
+    pub fn is_video_ready(&mut self, entity_id: &str, url: &str, time: f64) -> bool {
+        let entry_rc = self.get_video(entity_id, url);
+        let entry = entry_rc.borrow();
+        
+        if !entry.ready {
+            return false;
         }
+
+        let el = entry.el.clone();
+        
+        // Wait, HtmlVideoElement's ready_state >= 3 (HAVE_FUTURE_DATA) means we can play smoothly. 
+        // 2 (HAVE_CURRENT_DATA) is enough for the precise frame, but for robust buffering we check >= 3.
+        if el.ready_state() >= 3 {
+            // Also check if we have dimensions
+            if el.video_width() > 0 && el.video_height() > 0 {
+                return true;
+            }
+        }
+        
+        false
+    }
+
+    /// Pre-warm a video element for future playback.
+    pub fn preload_video(&mut self, entity_id: &str, url: &str, target_time: f64) {
+        // Just calling get_video forces the creation of the <video> DOM element with preload="auto"
+        let entry_rc = self.get_video(entity_id, url);
+        let entry = entry_rc.borrow();
+        
+        // Optionally, if not playing, we can seek to the target_time to force buffer loading around that area.
+        if entry.ready && !entry.playing {
+            let diff = (entry.el.current_time() - target_time).abs();
+            if diff > 1.0 { // Prevent thrashing the seek head
+                entry.el.set_current_time(target_time);
+            }
+        }
+    }
+
+    /// Evict videos not found in active entities set.
+    pub fn cleanup_orphaned(&mut self, active_entity_ids: &HashSet<String>) {
+        // `retain` automatically calls `Drop` on removed items (which removes them from the DOM)
+        self.videos.retain(|id, _| active_entity_ids.contains(id));
+    }
+
+    /// Clear entirely. Drops all VideoEntry, triggering DOM remove.
+    pub fn clear(&mut self) {
         self.videos.clear();
-        self.cache.clear();
-        self.lru.clear();
-        self.last_good_frames.clear();
     }
 }

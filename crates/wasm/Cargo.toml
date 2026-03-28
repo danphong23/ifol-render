@@ -13,7 +13,7 @@ ifol-render-core = { path = "../../core" }
 ifol-render-ecs = { path = "../core" }
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = [
-    "HtmlCanvasElement", "Window", "Document", "HtmlVideoElement", "HtmlImageElement",
+    "HtmlCanvasElement", "Window", "Document", "HtmlVideoElement", "HtmlImageElement", "HtmlAudioElement",
     "OffscreenCanvas", "OffscreenCanvasRenderingContext2d", "ImageData", "Event", "EventTarget",
     "CanvasRenderingContext2d"
 ] }

@@ -7,8 +7,12 @@
 pub mod components;
 pub mod pipeline;
 pub mod systems;
+pub mod typemap;
+pub mod registry;
+#[cfg(test)]
+mod tests;
 
-use crate::scene::{AssetDef, FloatTrack, Lifespan, MaterialV2, StringTrack, TransformTrack};
+use crate::scene::{AssetDef, FloatTrack, Lifespan, MaterialV2, StringTrack};
 use crate::time::EntityTime;
 
 use serde::{Deserialize, Serialize};
@@ -22,83 +26,14 @@ pub type EntityId = String;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entity {
     pub id: EntityId,
-    pub components: Components,
 
     /// Runtime-resolved data (not serialized).
     #[serde(skip)]
     pub resolved: ResolvedState,
-}
 
-/// All possible components an entity can have.
-/// Presence of a component defines behavior — entities are not typed.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Components {
-    // ── Sources (what to display/play — mutually exclusive for visual) ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub video_source: Option<components::VideoSource>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub image_source: Option<components::ImageSource>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text_source: Option<components::TextSource>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub color_source: Option<components::ColorSource>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub audio_source: Option<components::AudioSource>,
-
-    // ── Camera (presence = this entity is a camera) ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub camera: Option<components::CameraComponent>,
-
-    // ── Spatial (world units) ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub transform: Option<TransformTrack>,
-
-    // ── Display Rect (width/height + fit_mode) ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rect: Option<components::Rect>,
-
-    // ── Composition (nested timeline group) ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub composition: Option<components::Composition>,
-
-    // ── Time ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lifespan: Option<Lifespan>,
-    /// Z-order layer index (higher = on top).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub layer: Option<i32>,
-
-    // ── Rendering ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub opacity: Option<FloatTrack>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub blend_mode: Option<StringTrack>,
-    // Legacy compat: accept old fit_mode field but prefer rect.fit_mode
-    #[serde(default, skip_serializing)]
-    pub fit_mode: Option<StringTrack>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub materials: Vec<MaterialV2>,
-
-    // ── Playback (legacy compat — prefer Composition for speed/trim) ──
-    #[serde(default, skip_serializing)]
-    pub playback_time: Option<FloatTrack>,
-    #[serde(default, skip_serializing)]
-    pub speed: Option<FloatTrack>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub volume: Option<FloatTrack>,
-
-    // ── Relations ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mask_id: Option<String>,
-
-    // ── Extensible (custom shader uniforms) ──
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub float_uniforms: HashMap<String, FloatTrack>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub string_uniforms: HashMap<String, StringTrack>,
+    /// Runtime-only draw instructions (not serialized).
+    #[serde(skip)]
+    pub draw: components::DrawComponent,
 }
 
 /// Runtime-resolved state (computed by systems each frame).
@@ -126,6 +61,7 @@ pub struct ResolvedState {
     pub opacity: f32,
     pub volume: f32,
     pub blend_mode: components::BlendMode,
+    pub color: [f32; 4],
     pub layer: i32,
     // ── Time ──
     pub time: EntityTime,
@@ -158,6 +94,7 @@ impl Default for ResolvedState {
             opacity: 1.0,
             volume: 1.0,
             blend_mode: components::BlendMode::Normal,
+            color: [1.0, 1.0, 1.0, 1.0],
             layer: 0,
             time: EntityTime::default(),
             scope_time: 0.0,
@@ -170,7 +107,7 @@ impl Default for ResolvedState {
 }
 
 /// The world: collection of all entities + asset registry.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct World {
     pub entities: Vec<Entity>,
     /// Asset registry: asset_id → definition (URL/path).
@@ -179,6 +116,11 @@ pub struct World {
     /// Entity lookup by ID.
     #[serde(skip)]
     id_index: HashMap<EntityId, usize>,
+    
+    #[serde(skip)]
+    pub storages: typemap::TypeMap,
+    #[serde(skip)]
+    pub registry: registry::ComponentRegistry,
 }
 
 impl World {
@@ -233,14 +175,32 @@ impl World {
         sorted
     }
 
-    /// Find the first active camera entity.
     pub fn find_camera(&self, camera_id: &str) -> Option<&Entity> {
+        let storages = &self.storages;
         if !camera_id.is_empty() {
-            return self.get(camera_id).filter(|e| e.components.camera.is_some());
+            return self.get(camera_id).filter(|e| storages.get_component::<crate::ecs::components::CameraComponent>(&e.id).is_some());
         }
         // Fallback: first visible camera
         self.entities.iter()
-            .find(|e| e.resolved.visible && e.components.camera.is_some())
+            .find(|e| e.resolved.visible && storages.get_component::<crate::ecs::components::CameraComponent>(&e.id).is_some())
+    }
+
+    pub fn add_component<T: 'static>(&mut self, entity_id: &str, component: T) {
+        if self.storages.get::<HashMap<EntityId, T>>().is_none() {
+            self.storages.insert(HashMap::<EntityId, T>::new());
+        }
+        let map = self.storages.get_mut::<HashMap<EntityId, T>>().unwrap();
+        map.insert(entity_id.to_string(), component);
+    }
+
+    pub fn get_component<T: 'static>(&self, entity_id: &str) -> Option<&T> {
+        self.storages.get::<HashMap<EntityId, T>>()
+            .and_then(|map| map.get(entity_id))
+    }
+    
+    pub fn get_component_mut<T: 'static>(&mut self, entity_id: &str) -> Option<&mut T> {
+        self.storages.get_mut::<HashMap<EntityId, T>>()
+            .and_then(|map| map.get_mut(entity_id))
     }
 
     /// Build ECS World from a SceneV2 definition.
@@ -248,39 +208,30 @@ impl World {
         // Load asset registry
         self.assets = scene.assets.clone();
 
+        self.entities.clear();
+        self.storages = typemap::TypeMap::new();
+
         // Load entities
         for ent_def in &scene.entities {
-            let mut comps = Components::default();
-
-            // Copy all components directly from the scene definition
-            comps.video_source = ent_def.video_source.clone();
-            comps.image_source = ent_def.image_source.clone();
-            comps.text_source = ent_def.text_source.clone();
-            comps.color_source = ent_def.color_source.clone();
-            comps.audio_source = ent_def.audio_source.clone();
-            comps.camera = ent_def.camera.clone();
-            comps.transform = ent_def.transform.clone();
-            comps.rect = ent_def.rect.clone();
-            comps.composition = ent_def.composition.clone();
-            comps.lifespan = ent_def.lifespan;
-            comps.layer = ent_def.layer;
-            comps.opacity = ent_def.opacity.clone();
-            comps.blend_mode = ent_def.blend_mode.clone();
-            comps.fit_mode = ent_def.fit_mode.clone();
-            comps.materials = ent_def.materials.clone().unwrap_or_default();
-            comps.playback_time = ent_def.playback_time.clone();
-            comps.speed = ent_def.speed.clone();
-            comps.volume = ent_def.volume.clone();
-            comps.parent_id = ent_def.parent_id.clone();
-            comps.mask_id = ent_def.mask_id.clone();
-            comps.float_uniforms = ent_def.float_uniforms.clone().unwrap_or_default();
-            comps.string_uniforms = ent_def.string_uniforms.clone().unwrap_or_default();
-
+            let entity_id = ent_def.id.clone();
+            
             self.add_entity(Entity {
-                id: ent_def.id.clone(),
-                components: comps,
+                id: entity_id.clone(),
                 resolved: ResolvedState::default(),
+                draw: crate::ecs::components::DrawComponent::default(),
             });
+
+            // Dynamically inject components using the registry
+            for (key, value) in &ent_def.components {
+                let loader_opt = self.registry.loaders.get(key).copied();
+                if let Some(loader) = loader_opt {
+                    if let Err(e) = loader(self, &entity_id, value) {
+                        eprintln!("Failed to load component '{}' for entity '{}': {}", key, entity_id, e);
+                    }
+                } else {
+                    println!("Warning: Unknown component '{}' for entity '{}'", key, entity_id);
+                }
+            }
         }
 
         self.rebuild_index();

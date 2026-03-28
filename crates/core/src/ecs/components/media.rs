@@ -47,16 +47,16 @@ pub struct TextSource {
     pub font: String,
     #[serde(default = "default_font_size")]
     pub font_size: f32,
-    #[serde(default = "Color4::white")]
-    pub color: Color4,
-    #[serde(default)]
-    pub bold: bool,
-    #[serde(default)]
-    pub italic: bool,
+    #[serde(default = "default_white")]
+    pub color: [f32; 4],
+    #[serde(default = "default_true")]
+    pub continuous_rasterization: bool,
 }
 
 fn default_font() -> String { "Inter".into() }
 fn default_font_size() -> f32 { 48.0 }
+fn default_true() -> bool { true }
+fn default_white() -> [f32; 4] { [1.0, 1.0, 1.0, 1.0] }
 
 /// Solid color fill source.
 /// Display size comes from entity-level `Rect` component, not here.
