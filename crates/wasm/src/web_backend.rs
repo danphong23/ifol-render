@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 
 #[derive(Clone)]
 pub struct WebMediaBackend {
-    pub images: Arc<RwLock<HashMap<String, Vec<u8>>>>,
+    pub images: Arc<RwLock<HashMap<String, (Vec<u8>, u32, u32)>>>,  // (RGBA, w, h)
     pub video_frames: Arc<RwLock<HashMap<String, (Vec<u8>, u32, u32)>>>,
     pub video_infos: Arc<RwLock<HashMap<String, VideoInfo>>>,
 }
@@ -23,7 +23,7 @@ impl WebMediaBackend {
 
 impl MediaBackend for WebMediaBackend {
     fn read_file_bytes(&self, path: &str) -> Option<Vec<u8>> {
-        self.images.read().unwrap().get(path).cloned()
+        self.images.read().unwrap().get(path).map(|(rgba, _, _)| rgba.clone())
     }
 
     fn get_video_info(&self, path: &str) -> Option<VideoInfo> {
@@ -35,9 +35,27 @@ impl MediaBackend for WebMediaBackend {
     }
 
     fn get_video_frame_rgba(&self, path: &str, timestamp: f64) -> Option<(Vec<u8>, u32, u32)> {
-        let key = format!("{}@{}", path, timestamp);
         let frames = self.video_frames.read().unwrap();
-        frames.get(&key).cloned()
+        // Find nearest cached frame for this path (exact float matching is impossible)
+        let prefix = format!("{}@", path);
+        let mut best: Option<(&str, f64)> = None;
+        for key in frames.keys() {
+            if let Some(ts_str) = key.strip_prefix(&prefix) {
+                if let Ok(ts) = ts_str.parse::<f64>() {
+                    let diff = (ts - timestamp).abs();
+                    if best.is_none() || diff < best.unwrap().1 {
+                        best = Some((key.as_str(), diff));
+                    }
+                }
+            }
+        }
+        // Accept frame if within 0.5s tolerance
+        if let Some((key, diff)) = best {
+            if diff < 0.5 {
+                return frames.get(key).cloned();
+            }
+        }
+        None
     }
 
     fn decode_video(

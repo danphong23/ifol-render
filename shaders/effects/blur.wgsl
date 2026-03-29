@@ -31,25 +31,22 @@ fn vs_fullscreen(@builtin(vertex_index) vi: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    let direction = vec2f(params.direction_x, params.direction_y);
-    let step = direction * params.texel_size * params.radius;
+    // High-quality single-pass Golden Spiral blur
+    // This replaces the old 2-pass separable blur with a much more beautiful radial bokeh
+    var result = vec4f(0.0);
+    let golden_angle = 2.39996323; // ~137.5 degrees
+    let taps = 32.0;
+    var total_weight = 0.0;
 
-    // 9-tap Gaussian weights (sigma ≈ 2.0)
-    let w0 = 0.2270270270;
-    let w1 = 0.1945945946;
-    let w2 = 0.1216216216;
-    let w3 = 0.0540540541;
-    let w4 = 0.0162162162;
+    for (var i = 0.0; i < taps; i = i + 1.0) {
+        // Square root of distance ensures uniform density of samples in the circle
+        let r = sqrt(i / taps) * params.radius * params.texel_size;
+        let theta = i * golden_angle;
+        let offset = vec2f(cos(theta), sin(theta)) * r;
+        
+        result += textureSample(t_input, t_sampler, in.uv + offset);
+        total_weight += 1.0;
+    }
 
-    var result = textureSample(t_input, t_sampler, in.uv) * w0;
-    result += textureSample(t_input, t_sampler, in.uv + step * 1.0) * w1;
-    result += textureSample(t_input, t_sampler, in.uv - step * 1.0) * w1;
-    result += textureSample(t_input, t_sampler, in.uv + step * 2.0) * w2;
-    result += textureSample(t_input, t_sampler, in.uv - step * 2.0) * w2;
-    result += textureSample(t_input, t_sampler, in.uv + step * 3.0) * w3;
-    result += textureSample(t_input, t_sampler, in.uv - step * 3.0) * w3;
-    result += textureSample(t_input, t_sampler, in.uv + step * 4.0) * w4;
-    result += textureSample(t_input, t_sampler, in.uv - step * 4.0) * w4;
-
-    return result;
+    return result / total_weight;
 }

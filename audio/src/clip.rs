@@ -17,6 +17,9 @@ pub struct AudioClip {
     /// Offset within the source file — skip N seconds (seconds).
     #[serde(default)]
     pub offset: f64,
+    /// Playback speed multiplier. Default: 1.0
+    #[serde(default = "default_speed")]
+    pub speed: f32,
     /// Volume: 0.0 (silent) to 1.0 (full). Default: 1.0
     #[serde(default = "default_volume")]
     pub volume: f32,
@@ -29,6 +32,10 @@ pub struct AudioClip {
 }
 
 fn default_volume() -> f32 {
+    1.0
+}
+
+fn default_speed() -> f32 {
     1.0
 }
 

@@ -53,7 +53,7 @@ impl CoreEngine {
     /// Create a new CoreEngine with the given output settings (Native only).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(settings: RenderSettings) -> Self {
-        let renderer = Renderer::new(settings.width, settings.height);
+        let renderer = Renderer::new(settings.width, settings.height, settings.hdr_enabled);
         let default_backend = Box::new(FfmpegMediaBackend::new("ffmpeg")) as Box<dyn MediaBackend>;
         Self::build(renderer, settings, default_backend)
     }
@@ -62,7 +62,7 @@ impl CoreEngine {
     ///
     /// On native, pass `FfmpegMediaBackend`. On WASM, pass `WebMediaBackend`.
     pub async fn new_async(settings: RenderSettings, backend: Box<dyn MediaBackend>) -> Self {
-        let renderer = Renderer::new_async(settings.width, settings.height).await;
+        let renderer = Renderer::new_async(settings.width, settings.height, settings.hdr_enabled).await;
         Self::build(renderer, settings, backend)
     }
 
@@ -73,7 +73,7 @@ impl CoreEngine {
         settings: RenderSettings,
         backend: Box<dyn MediaBackend>,
     ) -> Self {
-        let renderer = Renderer::new_web(canvas, settings.width, settings.height).await;
+        let renderer = Renderer::new_web(canvas, settings.width, settings.height, settings.hdr_enabled).await;
         Self::build(renderer, settings, backend)
     }
 
@@ -135,11 +135,28 @@ impl CoreEngine {
         self.renderer.capabilities()
     }
 
+    /// Access the underlying Renderer directly (useful for bypassing CPU-side queues on Web)
+    pub fn renderer_mut(&mut self) -> &mut Renderer {
+        &mut self.renderer
+    }
+
     // ── Shaders ──
 
     /// Register a custom shader pipeline.
     pub fn register_shader(&mut self, name: &str, wgsl: &str, config: PipelineConfig) {
         self.renderer.register_pipeline(name, wgsl, config);
+    }
+
+    /// Register a custom fullscreen effect shader (like blur/vignette).
+    /// Effects use fullscreen triangle and operate on input textures.
+    pub fn register_effect(
+        &mut self,
+        name: &str,
+        wgsl: &str,
+        defaults: Vec<(String, f32)>,
+        pass_count: u32,
+    ) {
+        self.renderer.register_effect(name, wgsl, defaults, pass_count);
     }
 
     /// Check if a shader is registered.
@@ -184,11 +201,14 @@ impl CoreEngine {
         font_key: Option<&str>,
     ) -> Result<[u32; 2], String> {
         let font_data = match font_key {
-            Some(fk) => self
-                .font_cache
-                .get(fk)
-                .map(|v| v.as_slice())
-                .ok_or_else(|| format!("Font '{}' not loaded", fk))?,
+            Some(fk) => {
+                if let Some(data) = self.font_cache.get(fk) {
+                    data.as_slice()
+                } else {
+                    log::warn!("Font '{}' not loaded. Falling back to default font.", fk);
+                    text::default_font_data()
+                }
+            }
             None => text::default_font_data(),
         };
         let (pixels, tw, th) = text::rasterize_text(content, font_data, opts)?;
@@ -206,6 +226,30 @@ impl CoreEngine {
             self.font_cache.insert(key.to_string(), data);
         }
         Ok(())
+    }
+
+    /// Load font data directly from a byte array (used by WASM to bypass filesystem).
+    pub fn load_font_bytes(&mut self, key: &str, data: Vec<u8>) {
+        if !self.font_cache.contains_key(key) {
+            self.font_cache.insert(key.to_string(), data);
+        }
+    }
+
+    /// Check if a font is already loaded.
+    pub fn has_font(&self, key: &str) -> bool {
+        self.font_cache.contains_key(key)
+    }
+
+    /// Load video frame via wgpu's Zero-Copy GPU bypass
+    #[cfg(target_arch = "wasm32")]
+    pub fn load_video_texture_web(
+        &mut self,
+        key: &str,
+        video: &web_sys::HtmlVideoElement,
+        width: u32,
+        height: u32,
+    ) {
+        self.renderer.load_video_texture_web(key, video, width, height);
     }
 
     /// Decode a video frame and upload as texture.
@@ -309,6 +353,16 @@ impl CoreEngine {
         self.renderer.clear_textures();
     }
 
+    /// Kill all persistent FFmpeg VideoStream processes and clear the cache.
+    /// Call this on timeline loop/seek-to-zero to avoid the 200ms backward-seek penalty.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn reset_video_streams(&mut self) {
+        for (_key, stream) in self.video_streams.drain() {
+            drop(stream);
+        }
+        log::debug!("Reset all video streams");
+    }
+
     // ── Render ──
 
     /// Render a single frame → return RGBA pixels.
@@ -318,6 +372,8 @@ impl CoreEngine {
     /// 2. Execute render passes in order
     /// 3. Return final output pixels
     pub fn render_frame(&mut self, frame: &Frame) -> Vec<u8> {
+        self.renderer.begin_frame();
+
         // Step 1: Process texture updates
         self.process_texture_updates(&frame.texture_updates);
 
@@ -325,6 +381,9 @@ impl CoreEngine {
         let mut last_pixels = Vec::new();
 
         for pass in &frame.passes {
+            let target_w = pass.target_width.unwrap_or(self.settings.width);
+            let target_h = pass.target_height.unwrap_or(self.settings.height);
+
             match &pass.pass_type {
                 PassType::Entities {
                     entities,
@@ -334,16 +393,20 @@ impl CoreEngine {
                     let mut sorted = entities.clone();
                     draw::sort_entities(&mut sorted);
 
-                    // Build draw commands (pixel→clip + pack uniforms)
+                    // Get texture dimensions for fit_mode UV calculations
+                    let tex_dims = self.renderer.texture_dimensions();
+
+                    // Build draw commands (pixel→clip + pack uniforms) using TARGET bounds!
                     let commands = draw::build_draw_commands(
                         &sorted,
-                        self.settings.width,
-                        self.settings.height,
+                        target_w,
+                        target_h,
+                        &tex_dims,
                     );
 
                     // ZERO-COPY: Render directly to intermediate target in VRAM
                     self.renderer
-                        .render_frame_to(&commands, *clear_color, Some(&pass.output));
+                        .render_frame_to(&commands, *clear_color, Some(&pass.output), target_w, target_h);
                 }
 
                 PassType::Effect {
@@ -363,13 +426,15 @@ impl CoreEngine {
                         &commands,
                         [0.0, 0.0, 0.0, 0.0],
                         Some(&pass.output),
+                        target_w,
+                        target_h,
                     );
                 }
 
                 PassType::Output { input } => {
                     // Output pass: Draws VRAM `input` texture back into the CPU mapped Buffer!
                     let commands = vec![DrawCommand {
-                        pipeline: "copy".to_string(),
+                        pipeline: "output_copy".to_string(),
                         uniforms: vec![0.0], // Padding to fulfill minimal binding size
                         textures: vec![input.clone()],
                     }];
@@ -379,6 +444,9 @@ impl CoreEngine {
                 }
             }
         }
+
+        // Cleanup stale textures (unused for 3+ frames) to prevent VRAM leaks
+        self.renderer.cleanup_stale_textures(3);
 
         last_pixels
     }
@@ -424,9 +492,6 @@ impl CoreEngine {
             .backend
             .start_export(width, height, fps, config, &sys_info)?;
 
-        // GPU-CPU pipeline: buffer up to 3 frames.
-        // GPU renders -> pushes to this channel.
-        // Background thread -> pops from channel -> encodes via FFmpeg.
         let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(3);
 
         let encode_thread = std::thread::spawn(move || {
@@ -445,42 +510,172 @@ impl CoreEngine {
             result
         });
 
+        let max_in_flight = 3;
+        let padded_bytes_per_row = {
+            let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+            (width * 4).div_ceil(align) * align
+        };
+
+        // Pre-allocate N staging buffers on GPU
+        let mut staging_buffers = Vec::with_capacity(max_in_flight);
+        for i in 0..max_in_flight {
+            let staging = self.renderer.engine.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&format!("Async Staging Buffer {}", i)),
+                size: (padded_bytes_per_row * height) as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            staging_buffers.push(staging);
+        }
+
+        let mut pending_reads = std::collections::VecDeque::new();
+        let mut frames_iter = frames.into_iter();
+        let mut frames_submitted = 0usize;
+        let mut input_finished = false;
+        let mut export_cancelled = false;
+
         let start = std::time::Instant::now();
 
-        for (i, frame) in frames.into_iter().enumerate() {
-            let pixels = self.render_frame(&frame);
+        // Pipelined Event Loop
+        while !input_finished || !pending_reads.is_empty() {
+            // STEP 1: Queue GPU Renders up to max_in_flight
+            while pending_reads.len() < max_in_flight && !input_finished && !export_cancelled {
+                if let Some(frame) = frames_iter.next() {
+                    // Inline render sequence (skipped synchronous readback)
+                    self.renderer.begin_frame();
+                    self.process_texture_updates(&frame.texture_updates);
 
-            // Push pixels to encode thread. Blocks if queue is full.
-            // If encode thread hit an error, the queue is closed and `send` fails.
-            if tx.send(pixels).is_err() {
-                break;
+                    for pass in &frame.passes {
+                        let target_w = pass.target_width.unwrap_or(width);
+                        let target_h = pass.target_height.unwrap_or(height);
+
+                        match &pass.pass_type {
+                            PassType::Entities { entities, clear_color } => {
+                                let mut sorted = entities.clone();
+                                draw::sort_entities(&mut sorted);
+                                let tex_dims = self.renderer.texture_dimensions();
+                                let commands = draw::build_draw_commands(&sorted, target_w, target_h, &tex_dims);
+                                self.renderer.render_frame_to(&commands, *clear_color, Some(&pass.output), target_w, target_h);
+                            }
+                            PassType::Effect { shader, inputs, params } => {
+                                let commands = vec![DrawCommand {
+                                    pipeline: shader.clone(),
+                                    uniforms: params.clone(),
+                                    textures: inputs.clone(),
+                                }];
+                                self.renderer.render_frame_to(&commands, [0.0; 4], Some(&pass.output), target_w, target_h);
+                            }
+                            PassType::Output { input } => {
+                                let commands = vec![DrawCommand {
+                                    pipeline: "output_copy".to_string(),
+                                    uniforms: vec![0.0],
+                                    textures: vec![input.clone()],
+                                }];
+                                // Render to main output texture (None)
+                                self.renderer.render_frame_to(&commands, [0.0, 0.0, 0.0, 1.0], None, target_w, target_h);
+                            }
+                        }
+                    }
+
+                    self.renderer.cleanup_stale_textures(3);
+
+                    // STEP 2: Initiate Async Copy & Map for this frame
+                    let staging_idx = frames_submitted % max_in_flight;
+                    let staging = &staging_buffers[staging_idx];
+
+                    if let Some(output_tex) = &self.renderer.engine.output_texture {
+                        let mut encoder = self.renderer.engine.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("readback_async"),
+                        });
+                        encoder.copy_texture_to_buffer(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: output_tex,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            wgpu::TexelCopyBufferInfo {
+                                buffer: staging,
+                                layout: wgpu::TexelCopyBufferLayout {
+                                    offset: 0,
+                                    bytes_per_row: Some(padded_bytes_per_row),
+                                    rows_per_image: Some(height),
+                                },
+                            },
+                            wgpu::Extent3d {
+                                width,
+                                height,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                        self.renderer.engine.queue.submit(std::iter::once(encoder.finish()));
+
+                        let slice = staging.slice(..);
+                        let (tx_map, rx_map) = std::sync::mpsc::channel();
+                        slice.map_async(wgpu::MapMode::Read, move |_| { let _ = tx_map.send(()); });
+
+                        pending_reads.push_back((frames_submitted, rx_map, staging_idx));
+                    }
+                    frames_submitted += 1;
+                } else {
+                    input_finished = true;
+                }
             }
 
-            let elapsed = start.elapsed().as_secs_f64();
-            let export_fps = if elapsed > 0.0 {
-                (i + 1) as f64 / elapsed
-            } else {
-                0.0
-            };
-            let remaining: u64 = if total_frames > i + 1 {
-                (total_frames - i - 1) as u64
-            } else {
-                0
-            };
-            let eta = if export_fps > 0.0 {
-                remaining as f64 / export_fps
-            } else {
-                0.0
-            };
+            // STEP 3: Poll GPU to trigger map_async callbacks
+            self.renderer.engine.device.poll(wgpu::Maintain::Poll);
 
-            if !on_progress(ExportProgress {
-                current_frame: i as u64,
-                total_frames: total_frames as u64,
-                eta_seconds: eta,
-                export_fps,
-            }) {
-                log::info!("Export cancelled via progress callback.");
-                break;
+            // STEP 4: Harvest oldest ready buffer
+            if pending_reads.len() >= max_in_flight || input_finished || export_cancelled {
+                if let Some((frame_idx, rx_map, staging_idx)) = pending_reads.pop_front() {
+                    // Force a Wait if it's the oldest buffer and pipeline is full
+                    self.renderer.engine.device.poll(wgpu::Maintain::Wait);
+                    let _ = rx_map.recv().unwrap();
+
+                    let staging = &staging_buffers[staging_idx];
+                    let data = staging.slice(..).get_mapped_range();
+                    
+                    let unpadded_bytes_per_row = width * 4;
+                    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+                    for row in 0..height {
+                        let start = (row * padded_bytes_per_row) as usize;
+                        let end = start + unpadded_bytes_per_row as usize;
+                        pixels.extend_from_slice(&data[start..end]);
+                    }
+
+                    drop(data);
+                    staging.unmap();
+
+                    // Convert BGRA to RGBA if required
+                    if matches!(
+                        self.renderer.engine.texture_format,
+                        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+                    ) {
+                        for chunk in pixels.chunks_exact_mut(4) {
+                            chunk.swap(0, 2);
+                        }
+                    }
+
+                    // Push to encode thread
+                    if tx.send(pixels).is_err() {
+                        export_cancelled = true;
+                    }
+
+                    let elapsed = start.elapsed().as_secs_f64();
+                    let export_fps = if elapsed > 0.0 { (frame_idx + 1) as f64 / elapsed } else { 0.0 };
+                    let remaining = if total_frames > frame_idx + 1 { (total_frames - frame_idx - 1) as u64 } else { 0 };
+                    let eta = if export_fps > 0.0 { remaining as f64 / export_fps } else { 0.0 };
+
+                    if !on_progress(ExportProgress {
+                        current_frame: frame_idx as u64,
+                        total_frames: total_frames as u64,
+                        eta_seconds: eta,
+                        export_fps,
+                    }) {
+                        export_cancelled = true;
+                        log::info!("Export cancelled via progress callback.");
+                    }
+                }
             }
         }
 
@@ -579,13 +774,11 @@ impl CoreEngine {
                     if let Err(e) =
                         self.decode_video_frame(key, path, *timestamp_secs, *width, *height)
                     {
-                        log::error!(
-                            "⚠ Video decode FAILED for key='{}' path='{}' t={:.2}s ({}×{}): {}",
+                        log::debug!(
+                            "Video decode skipped: key='{}' path='{}' t={:.2}s: {}",
                             key,
                             path,
                             timestamp_secs,
-                            width.unwrap_or(self.settings.width),
-                            height.unwrap_or(self.settings.height),
                             e
                         );
                     }

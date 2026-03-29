@@ -220,5 +220,5 @@ fn measure_line<F: Font>(text: &str, scaled_font: &ab_glyph::PxScaleFont<&F>) ->
 
 /// Default embedded font (Noto Sans Regular).
 pub fn default_font_data() -> &'static [u8] {
-    include_bytes!("../../assets/fonts/NotoSans-Regular.ttf")
+    &[]
 }

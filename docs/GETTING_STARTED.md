@@ -1,132 +1,155 @@
 # Getting Started with ifol-render
 
-## Installation
+## Prerequisites
 
-### Web (NPM)
-```bash
-npm install @danphong23/ifol-render-wasm ifol-render-sdk
-```
-
-### Desktop (GitHub Releases)
-Download the latest `.zip` from [Releases](https://github.com/danphong23/ifol-render/releases):
-- `ifol-render.exe` — CLI tool for headless rendering and export
-- `ifol-render-studio.exe` — GUI editor with real-time preview
-
-> **Note:** FFmpeg is required for video export. Install it from [ffmpeg.org](https://ffmpeg.org/download.html) or via `winget install ffmpeg`.
+- **Rust 1.85+** with `wasm32-unknown-unknown` target
+- **wasm-pack** (`cargo install wasm-pack`)
+- **Browser with WebGPU** (Chrome/Edge 113+)
+- **FFmpeg** (for video export via CLI only)
 
 ---
 
 ## Quick Start — Web
 
-### 1. Initialize the WASM engine
-```html
-<canvas id="canvas" width="1920" height="1080"></canvas>
-<script type="module">
-  import init, { IfolRenderWeb } from '@danphong23/ifol-render-wasm';
-  import { DrawableEntity, FrameBuilder, TextureUpdates } from 'ifol-render-sdk';
-
-  await init();
-  const canvas = document.getElementById('canvas');
-  const core = await new IfolRenderWeb(canvas, 1920, 1080, 30);
-  core.setup_builtins();
-</script>
+### 1. Build WASM
+```bash
+cd crates/wasm
+wasm-pack build --target web
 ```
 
-### 2. Draw your first frame
-```javascript
-// Create a blue background
-const bg = new DrawableEntity(0, 0, 0, 1920, 1080)
-  .setShader('shapes')
-  .setColor(0.1, 0.1, 0.3, 1)
-  .setLayer(0);
-
-// Create a green circle
-const circle = new DrawableEntity(1, 800, 400, 200, 200)
-  .setShader('shapes')
-  .setParams([1.0])  // 1.0 = circle
-  .setColor(0.2, 0.9, 0.4, 0.9)
-  .setLayer(1);
-
-// Build and render
-const frame = new FrameBuilder()
-  .setClearColor(0, 0, 0, 1)
-  .addEntity(bg)
-  .addEntity(circle)
-  .build();
-
-core.render_frame(JSON.stringify(frame));
+### 2. Start dev server
+```bash
+cd web
+npx vite --port 5174
 ```
 
-### 3. Load images
+### 3. Open in browser
+Navigate to `http://localhost:5174/v4-test.html` — test editor w/ timeline loads automatically.
+
+---
+
+## V4 API — Scene JSON (ECS)
+
+ifol-render V4 uses **pure ECS architecture**. Entities have components; systems process them.
+
 ```javascript
-import { AssetManager } from 'ifol-render-sdk';
+import init, { IfolRenderWeb } from '../crates/wasm/pkg/ifol_render_wasm.js';
 
-const assets = new AssetManager({
-  ppu: 100,
-  urlResolver: (path) => `/assets/${path}`,
-  coreCache: (key, data) => core.cache_image(key, data),
-});
+// Initialize
+await init();
+const canvas = document.getElementById('canvas');
+const engine = await new IfolRenderWeb(canvas, 1280, 720, 30);
+engine.setup_builtins();
 
-await assets.loadImage('hero.png');
+// Define scene
+const scene = {
+  assets: {
+    "photo": { image: { url: "./hero.png" } }
+  },
+  entities: [
+    {
+      id: "main_cam",
+      camera: { resolutionWidth: 1280, resolutionHeight: 720 },
+      rect: { width: 1280, height: 720 },
+      transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, anchorX: 0, anchorY: 0 },
+      lifespan: { start: 0, end: 100 }
+    },
+    {
+      id: "red_box",
+      shapeSource: { kind: "rectangle", fillColor: [0.8, 0.1, 0.1, 1.0] },
+      rect: { width: 200, height: 150 },
+      transform: { x: 100, y: 50, rotation: 0, scaleX: 1, scaleY: 1, anchorX: 0.5, anchorY: 0.5 },
+      lifespan: { start: 0, end: 10 },
+      layer: 1,
+      animation: { floatTracks: [
+        { target: "transformX", track: { keyframes: [
+          { time: 0, value: -200 },
+          { time: 5, value: 200, interpolation: { type: "cubic_bezier", x1: 0.42, y1: 0, x2: 0.58, y2: 1 } }
+        ]}}
+      ]}
+    }
+  ]
+};
 
-const img = new DrawableEntity(2, 100, 100, 400, 300)
-  .setShader('composite')
-  .addTexture('hero.png')
-  .setLayer(2);
-```
+// Load assets, then scene
+async function loadAndRender() {
+  // Fetch + decode image → RGBA → cache
+  const resp = await fetch("./hero.png");
+  const blob = await resp.blob();
+  const bitmap = await createImageBitmap(blob);
+  const c = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const ctx = c.getContext('2d');
+  ctx.drawImage(bitmap, 0, 0);
+  const rgba = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+  engine.cache_image("./hero.png", rgba.data, bitmap.width, bitmap.height);
+  bitmap.close();
 
-### 4. Add audio
-```javascript
-import { AudioScene } from 'ifol-render-sdk';
-
-const audio = new AudioScene();
-audio.addClip({
-  source: 'bgm.mp3',
-  startTime: 0,
-  volume: 0.8,
-  fadeIn: 1.0,
-  fadeOut: 2.0,
-}, 'bgm');
-```
-
-### 5. Export
-```javascript
-import { buildExportPayload } from 'ifol-render-sdk';
-
-const frames = []; // collect frames for each timestep
-const payload = buildExportPayload(
-  { output: 'video.mp4', width: 1920, height: 1080, fps: 30 },
-  frames,
-  audio.flattenForExport()
-);
-
-await fetch('/export', {
-  method: 'POST',
-  body: JSON.stringify(payload),
-});
+  // Load scene + render
+  engine.load_scene_v2(JSON.stringify(scene));
+  engine.render_frame_v2(0.0, "main_cam", true, 0, 0, 1280, 720);
+}
 ```
 
 ---
 
-## SDK Modules
+## Core Concepts
 
-| Module | Purpose |
-|--------|---------|
-| `DrawableEntity` | Pixel-space drawable element |
-| `FrameBuilder` | Composable frame assembly |
-| `AudioScene` | Audio track & clip management |
-| `AssetManager` | Image/video decode & cache |
-| `Scene` | Optional entity CRUD helper |
-| `Timeline` | Optional playback state |
-| `BoundCamera` / `FreeCamera` | Viewport math |
-| `AnimationManager` | Optional keyframe interpolation |
+### Entity = ID + Components
+An entity is a blank container. **Components define what it is**:
+- `shapeSource` → renders a rectangle or ellipse
+- `imageSource` → renders an image texture (requires asset loading)
+- `videoSource` → renders video frames
+- `camera` → defines a viewpoint
+- `composition` → groups children into a nested sub-timeline
 
-## Architecture
+### Animation = Keyframe Tracks
+Properties are animated via `floatTracks` in an `animation` component:
+```json
+{ "target": "transformX", "track": { "keyframes": [
+  { "time": 0, "value": 0 },
+  { "time": 5, "value": 400, "interpolation": { "type": "cubic_bezier", "x1": 0.42, "y1": 0, "x2": 0.58, "y2": 1 } }
+]}}
 ```
-Your App (any framework)
-  ↓ builds DrawableEntity / FrameBuilder
-SDK Toolkit (produces Frame JSON)
-  ↓ Frame JSON string
-Core WASM (GPU rendering)
-  ↓ pixels on canvas
+
+### Asset Pipeline (App Decodes, Core Renders)
 ```
+Scene JSON → assets: { "id": { image: { url: "..." } } }
+App layer:   fetch(url) → decode → RGBA → engine.cache_image(url, rgba, w, h)
+Core:        GPU upload once → reuse every frame. Zero per-frame cost.
+```
+
+### Render Modes
+```javascript
+// Editor mode: custom viewport (pan/zoom)
+engine.render_frame_v2(time, "cam", true, panX, panY, viewW, viewH);
+
+// Camera mode: render at camera's native resolution
+engine.render_frame_v2(time, "cam", false);
+```
+
+---
+
+## FitMode
+
+When an image/video is inside a Rect, FitMode controls scaling:
+
+| Mode | Behavior |
+|------|----------|
+| `stretch` (default) | Fill Rect exactly, may distort |
+| `contain` | Fit proportionally, transparent surplus |
+| `cover` | Fill Rect, crop edges |
+
+```json
+{ "rect": { "width": 400, "height": 300, "fitMode": "contain" } }
+```
+
+---
+
+## Further Reading
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — Full ECS pipeline, 6 systems, components, asset pipeline
+- [ASSET_MANAGEMENT.md](ASSET_MANAGEMENT.md) — Quy cách và ranh giới trách nhiệm khi nạp Asset cho Frontend/Backend
+- [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) — Hướng dẫn chi tiết setup WASM trong JS và gọi CLI trong NodeJS Backend
+- [TEST_CASES.md](TEST_CASES.md) — Danh sách và giải nghĩa các tính năng lõi (TC1 - TC19) để test
+- [ROADMAP.md](ROADMAP.md) — Bottom-up rebuild roadmap with completion status
+- [CLI_GUIDE.md](CLI_GUIDE.md) — Server-side export commands

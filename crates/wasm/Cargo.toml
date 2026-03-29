@@ -10,8 +10,13 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ifol-render-core = { path = "../../core" }
+ifol-render-ecs = { path = "../core" }
 wasm-bindgen = "0.2"
-web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Window"] }
+web-sys = { version = "0.3", features = [
+    "HtmlCanvasElement", "Window", "Document", "HtmlVideoElement", "HtmlImageElement", "HtmlAudioElement",
+    "OffscreenCanvas", "OffscreenCanvasRenderingContext2d", "ImageData", "Event", "EventTarget",
+    "CanvasRenderingContext2d"
+] }
 js-sys = "0.3"
 serde-wasm-bindgen = "0.6"
 serde_json = { workspace = true }

@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 ifol-render-core = { path = "../../core" }
+ifol-render-ecs = { path = "../core" }
 ifol-audio = { path = "../../audio" }
 clap = { workspace = true }
 env_logger = { workspace = true }

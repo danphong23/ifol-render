@@ -7,6 +7,7 @@ description = "Core ECS, components, systems, commands, and pipeline orchestrati
 
 [dependencies]
 ifol-render = { path = "../render" }
+ifol-render-ecs = { path = "../crates/core" }
 ifol-audio = { path = "../audio" }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -15,6 +16,7 @@ thiserror = { workspace = true }
 bytemuck = { workspace = true }
 ab_glyph = "0.2"
 image = { version = "0.25", default-features = false, features = ["png"] }
+wgpu = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Window"] }

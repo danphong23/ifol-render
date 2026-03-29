@@ -1,563 +1,426 @@
-# ifol-render — System Architecture
+# ifol-render — ECS Architecture V4
 
 ## Overview
 
-ifol-render is a GPU-accelerated rendering engine for video composition and visual effects.
-The system follows a **3-layer architecture** where each layer has a single responsibility:
+ifol-render is a pure ECS (Entity-Component-System) video/motion graphics engine.
+**Everything is a System** — including rendering.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Layer 3: Frontend (Web App / Studio / CLI)                    │
-│  ─────────────────────────────────────────                     │
-│  Owns: Scene editing, ECS, timeline, animation, camera,        │
-│        keyframes, bone systems, particle systems, plugins      │
-│  Output: FrameData (flat, pixel-based, pre-computed)           │
-└────────────────────────────┬────────────────────────────────────┘
-                             │ FrameData (JSON / Rust struct)
-┌────────────────────────────▼────────────────────────────────────┐
-│  Layer 2: Core Engine (Rust / WASM)                            │
-│  ──────────────────────────────────                            │
-│  Owns: Shader registry, texture cache, text rasterization,    │
-│        pixel→clip conversion, render pass orchestration,      │
-│        video export (FFmpeg)                                   │
-│  Output: DrawCommands per pass                                │
-└────────────────────────────┬────────────────────────────────────┘
-                             │ DrawCommands
-┌────────────────────────────▼────────────────────────────────────┐
-│  Layer 1: Render Tool (GPU / wgpu)                             │
-│  ─────────────────────────────────                             │
-│  Owns: GPU pipeline execution, vertex/index buffers,           │
-│        uniform ring buffer, texture upload, readback           │
-│  Output: RGBA pixels                                          │
-└─────────────────────────────────────────────────────────────────┘
+┌─ Consumer (Web/Studio/CLI) ─────────────────────────────┐
+│  Scene editing, asset loading, orchestration              │
+├─ Core Engine (Rust/WASM) ───────────────────────────────┤
+│  ECS World → Pipeline (6 systems) → Frame → GPU draw     │
+├─ Render Backend (wgpu) ─────────────────────────────────┤
+│  GPU execution: FlatEntity list → pixels                  │
+└───────────────────────────────────────────────────────────┘
 ```
+
+**Data flow:** Consumer builds Scene JSON → Core loads into ECS World → Pipeline runs 6 systems → `render_sys` compiles Frame → Backend renders pixels.
 
 ---
 
-## Technology Stack
+## Coordinate System & Units
 
-| Layer | Technology | Version |
-|-------|------------|---------|
-| Language | Rust | Edition 2024 (1.85+) |
-| GPU | wgpu | 24 (Vulkan / DX12 / Metal / WebGPU) |
-| Desktop GUI | egui + eframe | 0.31 |
-| Web Frontend | Vite + ES Modules | Vite 5 |
-| WASM Bridge | wasm-bindgen + wasm-pack | 0.2 |
-| Video I/O | FFmpeg (external binary) | 5+ |
-| Text Rendering | ab_glyph (CPU rasterization) | 0.2 |
-| Image Decoding | image crate | 0.25 |
-| Audio (Studio) | rodio | 0.19 |
-| CLI Parser | clap (derive) | 4 |
-| Serialization | serde + serde_json | 1 |
-
-### Workspace Crates
-
-| Crate | Type | Purpose |
-|-------|------|---------|
-| `ifol-render` | lib | GPU render tool — pure draw command executor |
-| `ifol-render-core` | lib | Core engine — textures, shaders, video decode, export |
-| `ifol-audio` | lib | Audio mixing, effects, and muxing (standalone) |
-| `ifol-render-studio` | bin | Desktop GUI editor (egui/wgpu) |
-| `ifol-render-cli` | bin | Headless CLI — render, export, test |
-| `ifol-render-wasm` | cdylib | WASM target for browser via WebGPU |
-| `ifol-render-server` | bin | HTTP server for web asset serving |
-
-## Design Principles
-
-1. **Data flows down, pixels flow up**
-   - Frontend produces data → Core processes → Render executes → pixels returned
-   - No layer reaches upward; dependencies are strictly one-directional
-
-2. **Frontend owns complexity, Core owns speed**
-   - Complex logic (ECS, animation, physics) lives in frontend — easy to change
-   - Hot path (sort, pack uniforms, GPU dispatch) lives in Core — compiled Rust
-
-3. **Flat data contract**
-   - Core does NOT know about timelines, keyframes, bone systems, or any domain logic
-   - Core receives `FrameData`: a flat list of "what to draw, where, how"
-   - All positions are in **pixels**, pre-computed by frontend
-
-4. **Shader-agnostic execution**
-   - Core ships with built-in shaders but frontend can register custom ones
-   - Core doesn't interpret shader params — just packs them as uniforms
-
-5. **Multi-pass render graph**
-   - A frame is a sequence of render passes
-   - Each pass either renders entities or applies a fullscreen shader effect
-   - Output of one pass can be input to the next (texture chaining)
+- **World units** — infinite 2D plane. Origin (0,0). X+ right, Y+ down.
+- All positions, sizes, and offsets are in **world units** throughout the ECS.
+- **Rotation** is in **radians** everywhere. JSON values, `resolved.rotation`, DrawCall.rotation — all radians.
+  - Example: `"rotation": 0.5` means 0.5 radians ≈ 28.6°
+  - A full rotation = `6.2832` (2π)
+- **Anchor** `(anchor_x, anchor_y)` is normalized 0–1. `(0,0)` = top-left, `(0.5,0.5)` = center.
+- Entity `(x, y)` = the **anchor point position** in parent-local space (cascaded by `hierarchy_sys`).
+- **Pixels** are only computed at render time by `render_sys`:
+  ```
+  screen_pos = (world_pos - cam_pos) × (screen_pixels / cam_view_size)
+  ```
 
 ---
 
-## Data Flow
+## Components
 
-### Preview (single frame, real-time)
+Components are pure data. No logic. Three categories:
 
-```
-User drags entity in editor
-  → Frontend ECS updates position
-  → Frontend resolves: hierarchy, camera, animation, visibility
-  → Frontend builds FrameData (entities in pixels)
-  → Core.render_frame(frame_data) 
-  → Core: sort → pixel→clip → pack uniforms → DrawCommands
-  → Render: GPU execute → RGBA pixels
-  → Display in viewport
-  
-  Total: < 16ms (60fps target)
-```
+### Context Components — define WHEN (not animatable)
 
-### Export (all frames, sequential)
+| Component | Fields | Purpose |
+|-----------|--------|---------|
+| **Lifespan** | `start: f64, end: f64` | Entity visibility window. `visible = time ∈ [start, end)` |
+| **Composition** | `speed, trim_start, duration: DurationMode, loop_mode: LoopMode` | Turns entity into group with internal timeline |
+| **Camera** | `post_effects: Vec` | Defines viewport projection. At least one camera per scene |
 
-```
-User clicks "Export"
-  → Frontend bakes ALL frames: for each frame time, resolve → FrameData
-  → Core.export_video(frame_iterator, config)
-  → Core: for each FrameData:
-       process textures → sort → pack → render → pipe to FFmpeg
-  → FFmpeg encodes → output.mp4
-```
+### Value Components — define WHAT (animatable)
 
----
+Static default values. AnimationComponent keyframes override these at runtime.
 
-## FrameData Specification
+| Component | Fields | Defaults |
+|-----------|--------|----------|
+| **Transform** | `x, y, rotation, anchor_x, anchor_y, scale_x, scale_y` | 0, 0, 0, 0, 0, 1, 1 |
+| **Rect** | `width, height, fit_mode` | 0, 0, Stretch |
+| **Visual** | `opacity, volume, blend_mode` | 1.0, 1.0, Normal |
 
-`FrameData` is the **API contract** between Frontend and Core.
-Frontend builds it, Core consumes it. Core never modifies it.
+### Source Components — what to draw
 
-### Structure
+At least one required for the entity to produce draw calls.
 
-```
-FrameData
-├── passes: Vec<RenderPass>        // ordered render passes
-└── texture_updates: Vec<TextureUpdate>  // textures to load/update this frame
-```
+| Component | Fields |
+|-----------|--------|
+| **ShapeSource** | `kind: ShapeKind (Rectangle/Ellipse), fill_color: [f32;4], stroke_color: Option, stroke_width` |
+| **ColorSource** | `r, g, b, a` (solid fill) |
+| **ImageSource** | `asset_id, intrinsic_width, intrinsic_height` |
+| **VideoSource** | `asset_id, trim_start, intrinsic_width/height, duration, fps` |
+| **TextSource** | `content, font, font_size, color, bold, italic` |
+| **AudioSource** | `asset_id, trim_start, duration` (no visual) |
 
-### RenderPass
-
-Each pass produces a texture that can be used by later passes.
-
-```
-RenderPass
-├── output: String                 // output texture key (e.g. "layer_0", "final")
-└── pass_type: PassType
-    ├── Entities                   // render a list of entities
-    │   ├── entities: Vec<FlatEntity>
-    │   └── clear_color: [f32; 4]  // background of this pass
-    ├── Effect                     // apply shader on existing texture(s)
-    │   ├── shader: String         // registered shader name
-    │   ├── inputs: Vec<String>    // input texture keys
-    │   └── params: Vec<f32>       // shader uniforms
-    └── Output                     // mark which texture is the final output
-        └── input: String          // texture key to read back as pixels
-```
-
-### FlatEntity
-
-A single drawable element. All values are **final** — no further computation needed.
-
-```
-FlatEntity
-├── id: u64                // unique ID for dirty tracking / caching
-├── x: f32                 // top-left X in pixels
-├── y: f32                 // top-left Y in pixels
-├── width: f32             // rendered width in pixels
-├── height: f32            // rendered height in pixels
-├── rotation: f32          // radians (around entity center)
-├── opacity: f32           // 0.0 (transparent) to 1.0 (opaque)
-├── blend_mode: u32        // 0=Normal 1=Multiply 2=Screen 3=Overlay ...
-├── color: [f32; 4]        // RGBA tint (default: [1,1,1,1] = no tint)
-├── shader: String         // pipeline name (e.g. "composite")
-├── textures: Vec<String>  // texture cache keys
-├── params: Vec<f32>       // additional shader uniforms
-├── layer: i32             // sorting priority 1 (ascending)
-└── z_index: f32           // sorting priority 2 within same layer (ascending)
-```
-
-### TextureUpdate
-
-Instructions for Core to load/update textures before rendering.
-
-```
-TextureUpdate
-├── LoadImage   { key, path }                          // from file (cached)
-├── UploadRgba  { key, data: Vec<u8>, width, height }  // raw pixels (video frame)
-├── RasterizeText { key, content, font_size, color }    // Core handles ab_glyph
-└── Evict       { key }                                // remove from cache
-```
-
-### Sorting Rules
-
-```
-Primary:   layer (i32, ascending)     — layer 0 draws first (behind)
-Secondary: z_index (f32, ascending)   — within same layer, lower z draws first
-```
-
----
-
-## Core Engine
-
-### Responsibilities
-
-| Responsibility | Details |
-|---------------|---------|
-| **Shader registry** | Register WGSL shaders (built-in + custom). Compile once, cache |
-| **Texture cache** | Load images, upload RGBA data, rasterize text. LRU eviction |
-| **Render pass orchestration** | Execute passes in order, manage intermediate textures |
-| **Pixel→clip conversion** | Convert pixel coordinates to GPU clip space (-1..1) |
-| **Uniform packing** | Pack entity fields into shader-specific uniform buffers |
-| **Dirty tracking** | Cache DrawCommands by entity ID. Reuse if unchanged |
-| **Video export** | FFmpeg pipe: iterate frames → render → encode |
-| **Text rasterization** | ab_glyph: string → RGBA texture (CPU side) |
-
-### NOT Core's Responsibility
-
-| Not Core | Who owns it |
-|----------|-------------|
-| Timeline / visibility | Frontend |
-| Animation / keyframes | Frontend |
-| Camera transform | Frontend |
-| Entity hierarchy | Frontend |
-| Bone / skeleton | Frontend |
-| Particle systems | Frontend |
-| Undo / redo | Frontend |
-| Scene serialization | Frontend |
-| UI / editor | Frontend |
-
-### Built-in Shaders
-
-Core ships with these shaders pre-registered:
-
-| Shader | Type | Purpose |
-|--------|------|---------|
-| `composite` | Per-entity | Texture/color rendering with blend modes, UV crop |
-| `shapes` | Per-entity | SDF shapes (circle, rectangle, rounded rect) |
-| `gradient` | Per-entity | Linear/radial/conic gradient fill |
-| `mask` | Per-entity | Alpha masking / clipping |
-| `blur` | Effect | Gaussian blur (horizontal + vertical, 2 passes) |
-| `color_grade` | Effect | Brightness, contrast, saturation |
-| `vignette` | Effect | Edge darkening |
-| `chromatic_aberration` | Effect | RGB channel offset |
-
-### Pixel→Clip Conversion
-
-Core converts pixel positions to GPU clip space:
-
-```
-Given: entity at (x=100, y=50, w=200, h=150) in a 1920×1080 output
-
-Step 1: Normalize to 0..1
-  nx = x / 1920 = 0.052
-  ny = y / 1080 = 0.046
-
-Step 2: Convert to clip space (-1..1)
-  clip_x = nx * 2 - 1 = -0.896
-  clip_y = 1 - ny * 2 = 0.907    (Y flipped for GPU)
-
-Step 3: Scale quad to entity size
-  scale_x = w / 1920 = 0.104
-  scale_y = h / 1080 = 0.139
-
-Step 4: Build transform matrix with rotation
-  → 4×4 matrix sent as uniform to shader
-```
-
----
-
-## Render Tool
-
-The lowest layer. A pure GPU executor.
-
-### What it does
-- Compile WGSL → GPU pipeline
-- Upload vertex/index/uniform data
-- Execute draw calls
-- Read back pixels from GPU → CPU
-
-### What it does NOT do
-- No scene logic
-- No coordinate systems
-- No caching decisions (Core decides)
-
-### Key optimizations
-- **Uniform ring buffer**: 2MB pre-allocated, zero-alloc per draw
-- **Dynamic bind group offsets**: 1 bind group per pipeline, offset per draw
-- **Pipeline switch tracking**: Only `set_pipeline()` when shader changes
-- **Single command encoder**: All draws in 1 `queue.submit()`
-- **Texture LRU**: Automatic eviction when VRAM budget exceeded
-- **Ping-pong textures**: Reuse 2 textures for multi-pass effects
-
----
-
-## Multi-Pass Rendering
-
-### Simple case (no effects)
-
-```json
-"passes": [
-  { "output": "main", "pass_type": { "Entities": { "entities": [...], "clear_color": [0,0,0,1] } } },
-  { "output": "screen", "pass_type": { "Output": { "input": "main" } } }
-]
-```
-
-### Entity + Post-effects
-
-```json
-"passes": [
-  { "output": "main", "pass_type": { "Entities": { "entities": [...] } } },
-  { "output": "bloomed", "pass_type": { "Effect": { "shader": "bloom", "inputs": ["main"], "params": [...] } } },
-  { "output": "graded", "pass_type": { "Effect": { "shader": "color_grade", "inputs": ["bloomed"], "params": [...] } } },
-  { "output": "screen", "pass_type": { "Output": { "input": "graded" } } }
-]
-```
-
-### Multi-layer with per-layer effects
-
-```
-passes: [
-  // Layer 0: background with blur
-  { Entities: [bg entities], output: "layer_0" },
-  { Effect: { shader: "blur", inputs: ["layer_0"], params: [4.0] }, output: "layer_0_blur" },
-
-  // Layer 1: foreground
-  { Entities: [fg entities], output: "layer_1" },
-
-  // Composite layers
-  { Effect: { shader: "composite", inputs: ["layer_0_blur", "layer_1"] }, output: "scene" },
-
-  // Frame-level post-processing
-  { Effect: { shader: "vignette", inputs: ["scene"], params: [0.5] }, output: "final" },
-  { Output: { input: "final" }, output: "screen" }
-]
-```
-
-### Scope mapping
-
-| Scope | How frontend builds passes |
-|-------|---------------------------|
-| **Per-entity** | entity.shader = custom shader within Entities pass |
-| **Per-layer** | Separate Entities pass + Effect pass for that layer |
-| **Per-scene** | Effect pass that composites all layer outputs |
-| **Per-frame** | Effect pass on final composited scene |
-
----
-
-## Performance Architecture
-
-### Dirty Tracking
-
-```
-Frame N-1: entities [A, B, C, D, E]
-Frame N  : entities [A, B*, C, D, F]   (* = changed, F = new)
-
-Core detects:
-  A → cache hit (reuse DrawCommand)
-  B → changed (rebuild DrawCommand)
-  C → cache hit
-  D → cache hit
-  E → removed (evict from cache)
-  F → new (build DrawCommand)
-
-Result: 3 cache hits, 1 rebuild, 1 new = 80% reuse
-```
-
-### Texture Management
-
-```
-Textures loaded once, reused across frames:
-  LoadImage("bg", "photo.png")     → cached until Evict
-  UploadRgba("vid_0", data, w, h)  → replaced each frame (video)
-  RasterizeText("txt_0", ...)      → cached until text changes
-
-LRU eviction when VRAM exceeds budget:
-  Least recently used textures evicted first
-  Active textures (used this frame) never evicted
-```
-
-### Export Optimization
-
-```
-Sequential frame rendering:
-  Frame 0: process textures + render (cold start)
-  Frame 1: only changed textures + render (warm)
-  Frame 2: only video frame update + render (minimal CPU)
-  ...
-  
-  Static textures loaded once, video frames streamed per-frame
-```
-
-### CPU-GPU Zero-Copy Pass Strategy
-
-To avoid suffocating the PCIe lanes (sending 8MB images back and forth between RAM and VRAM for every layer), intermediate passes (`PassType::Entities` and `PassType::Effect`) write directly to **offscreen GPU Texture Attachments** mapping to `wgpu::TextureUsages::RENDER_ATTACHMENT`. 
-These intermediate render streams never touch the CPU.
-
-Only upon encountering a `PassType::Output` node does the engine bind the synchronous `readback_output` wgpu staging buffer command to map the **final** frame array directly to `Vec<u8>`.
-
-### Multi-threaded `mpsc::sync_channel` Async Exporter
-
-Video encoding (`libx264` / `h264_qsv`) requires heavy, sustained CPU effort. Waiting for FFmpeg to finish encoding Frame `N` before letting the GPU render Frame `N+1` starves the GPU.
-
-Instead, the export pipeline initializes an `FfmpegMediaBackend` that acts on a dedicated thread. Completed `Vec<u8>` payloads are sent from the `CoreEngine` loop via a bounded `mpsc::sync_channel(3)`. This concurrency effectively hides FFmpeg's heavy write-stalls, ensuring the GPU is fed new draw commands constantly and doubling export throughput.
-
----
-
-## Extending the System
-
-### Add a new shader (no Core change)
-
-```
-1. Frontend: write custom.wgsl
-2. Frontend: core.register_shader("my_effect", wgsl_code, config)
-3. Frontend: entity.shader = "my_effect", entity.params = [...]
-4. Core renders it — zero code changes
-```
-
-### Add a new system (e.g. bone/skeleton)
-
-```
-1. Frontend: implement bone solver
-2. Frontend: resolve bone transforms → flat positions
-3. Frontend: emit FlatEntities with resolved positions
-4. Core renders them — zero code changes
-```
-
-### Add a new render pass type (Core change)
-
-```
-1. Add new PassType variant in frame.rs
-2. Add handler in engine.rs
-3. Frontend sends new pass type in FrameData
-4. Backward compatible — old FrameData still works
-```
-
----
-
-## MediaBackend — Multi-Environment Architecture
-
-The `MediaBackend` trait abstracts platform-specific operations:
-
-```
-MediaBackend trait
-├── read_file_bytes(path)          // asset loading
-├── get_video_frame(path, time)    // encoded frame (JPEG/PNG)
-├── get_video_frame_rgba(path, t)  // raw RGBA pixels
-├── get_video_info(path)           // probe duration, dimensions
-└── start_export(w, h, fps, cfg)   // begin video encoding
-```
-
-### Platform Implementations
-
-| Platform | Backend | Video Decode | Video Encode |
-|----------|---------|-------------|-------------|
-| **Native** | `FfmpegMediaBackend` | VideoStream (FFmpeg pipe, raw RGBA) | FFmpeg pipe (H264/H265/VP9/ProRes) |
-| **WASM** | `WebMediaBackend` | JS → Canvas2D → getImageData → WASM cache | N/A (uses server CLI for export) |
-
-### cfg-gated Optimization
-
-On native, `decode_video_frame` skips the MediaBackend entirely and uses `VideoStream` directly.
-On WASM, it delegates to the JS-provided frame cache.
-This avoids unnecessary `Arc<RwLock>` + HashMap lookups on native (2× per frame).
+### Animation Component — keyframe tracks
 
 ```rust
-#[cfg(target_arch = "wasm32")]  → backend.get_video_frame_rgba()
-#[cfg(not(wasm32))]             → VideoStream::frame_at() (direct FFmpeg pipe)
+struct AnimationComponent {
+    float_tracks: Vec<FloatAnimTrack>,    // {target: AnimTarget, track: FloatTrack}
+    string_tracks: Vec<StringAnimTrack>,  // {target: AnimTarget, track: StringTrack}
+}
 ```
 
-### Adding a New Environment
+**AnimTarget** — compile-time safe animatable property targets:
 
-1. Implement `MediaBackend` trait for your platform
-2. Pass to `CoreEngine::new_async(settings, Box::new(MyBackend))`
-3. All rendering works automatically — no Core changes needed
+| Target | Type | Source |
+|--------|------|--------|
+| `TransformX/Y/Rotation/AnchorX/AnchorY/ScaleX/ScaleY` | float | Transform |
+| `RectWidth/RectHeight` | float | Rect |
+| `Opacity/Volume` | float | Visual |
+| `PlaybackTime` | float | VideoSource/AudioSource |
+| `BlendMode` | string | Visual |
+| `ColorR/G/B/A` | float | ColorSource |
+| `FloatUniform(name)` | float | Material |
+| `StringUniform(name)` | string | Material |
 
-Example targets: Android (MediaCodec), iOS (AVFoundation), Server (headless FFmpeg).
+**Keyframe Interpolation** — 4 core primitives only. All presets (ease-in, ease-out, spring, steps) are defined at app/frontend level by mapping to `cubic_bezier` control points:
+
+| Type | Description | JSON |
+|------|-------------|------|
+| `linear` | Straight line (default) | `{"type": "linear"}` |
+| `hold` | Constant until next keyframe | `{"type": "hold"}` |
+| `cubic_bezier` | Universal timing curve | `{"type": "cubic_bezier", "x1": 0.42, "y1": 0, "x2": 0.58, "y2": 1}` |
+| `bezier` | AE-style tangent handles | `{"type": "bezier", "outX": 0.33, "outY": 0, "inX": 0.33, "inY": 0}` |
+
+> **Design:** Core does NOT include named presets. `cubic_bezier` covers all standard curves:
+> ease-in = `(0.42, 0, 1, 1)`, ease-out = `(0, 0, 0.58, 1)`, etc.
+> Complex curves (steps, spring) are achieved by generating multiple keyframes at app level.
+
+Entity **without** AnimationComponent = fully static. Zero evaluation cost.
+
+### Runtime Component — draw output (not serialized)
+
+| Component | Fields | Lifetime |
+|-----------|--------|----------|
+| **DrawComponent** | `draw_calls: Vec<DrawCall>, texture_requests: Vec<TextureRequest>` | Created fresh each frame by `source_sys`. Never serialized |
+
+`DrawCall` is the universal render primitive:
+
+```rust
+struct DrawCall {
+    kind: DrawKind,              // SolidRect, SolidEllipse, Texture, Text, Outline, Gizmo, CameraFrame
+    x, y, width, height: f32,   // world units
+    rotation: f32,               // radians (raw from resolved, NOT converted)
+    anchor_x, anchor_y: f32,
+    opacity: f32,
+    blend_mode: String,
+    color: [f32; 4],
+    texture_key: Option<String>,
+    params: Vec<f32>,            // [shape_type, corner_radius, border_width, pad]
+    fit_mode: FitMode,
+    intrinsic_width, intrinsic_height: f32,
+}
+```
+
+### Meta
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `parent_id` | `Option<String>` | Hierarchy parent. Position/rotation/scale relative to parent |
+| `layer` | `Option<i32>` | Z-order (higher = on top) |
+| `materials` | `Vec<Material>` | Shader effect chain (blur, color_grade, ...) |
 
 ---
 
-## Deployment
+## Pipeline — 3 Phases, 6 Systems
 
-### Windows / macOS / Linux (Desktop)
-
-**Prerequisites**: Rust 1.85+, GPU with Vulkan/DX12/Metal, FFmpeg in PATH or `tool/` directory.
-
-```bash
-# Build all
-cargo build --release
-
-# Run Studio GUI
-cargo run -p ifol-render-studio --release
-
-# CLI export
-cargo run -p ifol-render-cli --release -- export \
-  --scene scene.json --output video.mp4 --ffmpeg path/to/ffmpeg
-
-# CLI single-frame render
-cargo run -p ifol-render-cli --release -- frame-render \
-  --frame frame.json --output frame.png
+```
+┌─── PHASE 1: TIME ──────────────────────────────────────────┐
+│  ① time_sys                                                 │
+│     Queries: Lifespan, Composition, parent_id               │
+│     Output: visible, local_time, content_time               │
+├─── PHASE 2: RESOLVE ───────────────────────────────────────┤
+│  ② animation_sys                                            │
+│     Queries: Transform, Rect, Visual, ColorSource,          │
+│              AnimationComponent                              │
+│     Output: resolved.x/y/rot/scale/w/h/opacity/color/...   │
+│                                                              │
+│  ③ rect_sys                                                  │
+│     Queries: resolved state, VideoSource/ImageSource         │
+│     Output: resolved.width/height = base × scale            │
+│                                                              │
+│  ④ hierarchy_sys                                             │
+│     Queries: resolved state, parent_id                       │
+│     Output: cascaded world-space resolved state              │
+│             (position, rotation, scale, width/height, opacity)│
+├─── PHASE 3: RENDER ────────────────────────────────────────┤
+│  ⑤ source_sys                                                │
+│     Queries: Shape/Color/Video/Image/TextSource, resolved    │
+│     Output: DrawComponent on each entity                     │
+│                                                              │
+│  ⑥ render_sys                                                │
+│     Queries: DrawComponent, Camera, editor state             │
+│     Output: Frame (FlatEntity list) → GPU pipeline           │
+│     Also: injects camera wireframe + selection overlays      │
+│            when in editor mode                               │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-**FFmpeg path resolution** (Studio):
-1. `tool/ffmpeg.exe` relative to working directory
-2. `tool/ffmpeg.exe` relative to executable
-3. System PATH (`ffmpeg`)
-4. User-specified path in Studio settings
+### ① time_sys
 
-### Web (Browser — WebGPU)
+Resolves `local_time` for all entities in the time hierarchy.
 
-**Prerequisites**: wasm-pack, Node.js 18+, Chrome/Edge 113+ (WebGPU support).
+**Phase 1 — Roots** (no parent, or parent without Composition):
+- `current_time = global_time`
+- Check lifespan → `visible`, `local_time = current_time - start`
+- *(Note: `time_sys` DOES NOT compute media `playback_time`. It defaults to `0.0` here).*
 
-**Step 1: Build WASM module**
-```bash
-cd crates/wasm
-wasm-pack build --target web --release
+**Phase 2 — Composition cascade** (top-down, parents before children):
+- `content_time = local_time × speed + trim_start` (apply loop)
+- For each child: `current_time = parent.content_time`, re-check lifespan
+
+### ② animation_sys
+
+1. Copy component defaults → resolved state
+2. If AnimationComponent exists: evaluate each track at `local_time` → override resolved
+   - **Important:** Media `playback_time` is driven strictly by an `AnimationComponent` targeting `PlaybackTime`. Evaluated linear curves automatically spin the media, keeping Core fully data-driven.
+
+### ③ rect_sys
+
+Size fallback: Rect value > intrinsic (video/image) > default 200×200.
+Final: `width = base × scale_x`, `height = base × scale_y`.
+
+### ④ hierarchy_sys
+
+Parent→child cascade in world space (requires topological order):
+- Position: `child_world = parent_pos + rotate(child_local × parent_scale, parent_rot)`
+- Rotation: `child_rot += parent_rot` (additive, in radians)
+- Scale: `child_scale *= parent_scale`
+- **Width/Height: recomputed** after scale propagation (`width = base_w × composite_scale`)
+- Opacity: `child_opacity *= parent_opacity`
+- Layer: `child_layer += parent_layer`
+
+### ⑤ source_sys
+
+Reads source components + resolved state → creates `DrawComponent` with `DrawCall`s.
+Each source type maps to a `DrawKind` (SolidRect, SolidEllipse, Texture, Text).
+
+**FitMode** (`apply_fit_mode`) — applied to Texture DrawCalls (image/video):
+- **Stretch** (default): texture fills DrawCall w/h exactly, may distort
+- **Contain**: shrinks DrawCall w/h to fit image proportionally within Rect. Surplus area = transparent (no black fill)
+- **Cover**: keeps Rect size, image scaled to cover entirely, edges cropped (UV crop in shader)
+
+**Important:** `DrawCall.rotation` is copied directly from `resolved.rotation` — NO `.to_radians()` conversion. The entire pipeline uses radians.
+
+Shape params layout: `[shape_type, corner_radius, border_width, pad]`
+- shape_type: 0=rectangle, 3=ellipse
+
+### ⑥ render_sys
+
+1. Collects all DrawCalls from all entities, sorted by layer
+2. **Editor mode overlays** (injected inline, not a separate system):
+   - Camera entities → Magenta wireframe DrawCall (border-only via SDF shader)
+   - Selected entities → Cyan wireframe DrawCall (shape-aware: rect or ellipse)
+3. Projects world units → screen pixels via camera
+4. Outputs `Frame` with `FlatEntity` list for GPU backend
+
+**Camera projection:**
 ```
-
-**Step 2: Install web dependencies**
-```bash
-cd web
-npm install
+sx = screen_width / cam_view_width
+sy = screen_height / cam_view_height
+center_x = (entity.x - cam_x) × sx + anchor_offset_rotated
+flat_x = center_x - pixel_width / 2
 ```
-
-**Step 3: Start asset server** (serves video/image files)
-```bash
-python web/server.py
-# Listens on http://localhost:8000
-```
-
-**Step 4: Start Vite dev server**
-```bash
-cd web
-npm run dev
-# Opens http://localhost:5173
-```
-
-**Web Architecture**:
-```
-Browser (Vite + JS)
-  ├── main.js           → UI, playback loop (rAF + wall-clock timing)
-  ├── ifol-render-wasm  → WASM module (WebGPU rendering)
-  └── server.py         → Asset proxy + CLI export dispatcher
-      └── ifol-render.exe export  (headless native export)
-```
-
-**Web Playback Pipeline**:
-1. `video.play()` — browser hardware-decodes video continuously
-2. `Canvas2D.drawImage(video)` → `getImageData()` — capture frame pixels
-3. `renderer.cache_video_frame()` — copy RGBA to WASM HashMap
-4. `renderer.render_frame_scaled()` — WebGPU composite + display
-
-**Web Export** delegates to native CLI for full-speed FFmpeg encoding.
 
 ---
 
-## Video Frame Performance
+## Composition Scoped Playback
 
-### Native — `update_rgba` texture reuse
+Compositions act as sub-timelines with **independent local time**:
 
-Video frames use `update_rgba` instead of `load_rgba` to write new pixel data into an existing GPU texture. This eliminates 8MB alloc/dealloc per frame at 30fps (240MB/s VRAM churn → 0).
+```
+World time → Composition(speed, trimStart, loop, duration) → content_time
+  → children use content_time as their current_time
+```
 
-First frame: fallback to `load_rgba` (creates texture).
-Subsequent frames: `queue.write_texture` directly into existing texture.
+When an editor "enters" a composition:
+1. `set_render_scope(entity_id)` — only render this composition's children
+2. `set_scope_time(local_time)` — directly control composition's internal time (bypasses speed/loop/trim)
+3. Children are evaluated using `scope_time_override` instead of `content_time`
 
-### Web — Known Limitation
+**Composition properties:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `speed` | f64 | Playback speed multiplier (1.0 = normal) |
+| `trim_start` | f64 | Start offset within composition |
+| `duration` | DurationMode | `Fixed(secs)` or `Auto` |
+| `loop_mode` | LoopMode | `None`, `Loop`, `PingPong` |
 
-`getImageData()` CPU readback is ~15-30ms/frame at 1280×720. Combined with WASM boundary crossing and GPU re-upload, total per-frame cost is ~40-80ms (vs 33ms budget at 30fps). This causes frame drops during playback.
+**Nested compositions:** Full 3-level support — compositions can contain other compositions, each with independent speed/loop/trim.
 
-**Future fix**: `WebGPU.copyExternalImageToTexture()` can import `HTMLVideoElement` directly to GPU texture without CPU readback, potentially reducing per-frame cost to <5ms.
+---
+
+## Media Playback Architecture
+
+Video and Audio are treated as strictly data-driven entities. The Core engine does **not** rely on implicit "magic" formulas to play videos. 
+
+**The Drop-In Workflow:**
+When a Video or Audio asset is imported, the App/SDK generates an Entity with:
+1. `VideoSource`/`AudioSource` Component.
+2. `Lifespan`: `[0, duration]`.
+3. `AnimationComponent`: A `FloatTrack` targeting `PlaybackTime` with two linear keyframes from `(time: 0.0, value: 0.0)` to `(time: duration, value: duration)`.
+
+**Composition Wrapping (Null Objects):**
+To keep the timeline UX clean, media entities are typically nested inside a parent `Composition` entity. 
+- The Parent Composition acts as a **Null Object**: It possesses a `Transform` and `Lifespan` to dictate spatial layout and overall visibility, but it does **not** possess a `Rect` (no width/height) or a `VideoSource`. 
+- By splitting `Rect` from `Transform`, the parent Composition can translate, scale, and rotate its children locally without incurring the overhead of `rect_sys` bounding calculations or rendering actual pixels.
+- If a user wishes to trim or loop the video clip in the UI, they simply interact with the parent `Composition` wrapper, and `time_sys` automatically ripples the modified `content_time` down to the child video track.
+
+---
+
+## Scene JSON
+
+```json
+{
+  "assets": {
+    "bg_img": { "image": { "url": "./hero.png" } },
+    "clip1":  { "video": { "url": "asset://intro.mp4" } }
+  },
+  "entities": [
+    {
+      "id": "main_cam",
+      "camera": { "postEffects": [] },
+      "rect": { "width": 1280, "height": 720 },
+      "transform": { "x": 0, "y": 0, "rotation": 0, "scaleX": 1, "scaleY": 1, "anchorX": 0, "anchorY": 0 },
+      "lifespan": { "start": 0, "end": 100 }
+    },
+    {
+      "id": "photo",
+      "imageSource": { "assetId": "bg_img", "intrinsicWidth": 800, "intrinsicHeight": 600 },
+      "rect": { "width": 400, "height": 300, "fitMode": "contain" },
+      "transform": { "x": 640, "y": 360, "rotation": 0, "scaleX": 1, "scaleY": 1, "anchorX": 0.5, "anchorY": 0.5 },
+      "lifespan": { "start": 0, "end": 10 },
+      "layer": 1
+    },
+    {
+      "id": "box",
+      "shapeSource": { "kind": "rectangle", "fillColor": [1, 0, 0, 1] },
+      "transform": { "x": 100, "y": 50, "rotation": 0.5, "scaleX": 1, "scaleY": 1, "anchorX": 0.5, "anchorY": 0.5 },
+      "rect": { "width": 200, "height": 150 },
+      "lifespan": { "start": 0, "end": 10 },
+      "layer": 2,
+      "animation": {
+        "floatTracks": [
+          { "target": "transformX", "track": { "keyframes": [
+            { "time": 0, "value": 0 },
+            { "time": 3, "value": 500, "interpolation": { "type": "cubic_bezier", "x1": 0.42, "y1": 0, "x2": 0.58, "y2": 1 } }
+          ]}}
+        ]
+      }
+    }
+  ]
+}
+```
+
+> **Note:** `rotation` values in JSON are in **radians**. `0.5` = 0.5 rad ≈ 28.6°.
+> **Assets:** `url` is an abstract identifier resolved by the app layer. Core does not fetch.
+
+---
+
+## WASM API
+
+### Core
+
+| Method | Description |
+|--------|-------------|
+| `new(canvas, width, height, fps)` | Create engine instance bound to a canvas element |
+| `load_scene_v2(json)` | Parse scene JSON → create ECS World |
+| `render_frame_v2(time, cam_id, editor, cam_x?, cam_y?, cam_w?, cam_h?)` | Run full pipeline → render to GPU |
+| `set_render_scope(entity_id)` | Scope render to a composition entity (show only its children) |
+| `set_scope_time(time?)` | Override local time for scoped composition (bypasses speed/loop/trim) |
+
+### Editor Interaction
+
+| Method | Description |
+|--------|-------------|
+| `pick_entity_v2(screen_x, screen_y, cam_id, cam_x?, cam_y?, cam_w?, cam_h?)` | Hit-test: returns entity ID at screen position |
+| `drag_entity_v2(entity_id, screen_dx, screen_dy, cam_id, cam_w?, cam_h?)` | Translate entity by screen delta |
+| `select_entity_v2(entity_id)` | Set selection state for editor overlays |
+
+### Asset Cache
+
+| Method | Description |
+|--------|-------------|
+| `cache_image(url, rgba_data, width, height)` | Inject pre-decoded RGBA pixels for an image asset. App decodes, Core receives raw pixels |
+| `cache_video_frame(url, timestamp, rgba_data, w, h)` | Inject decoded video frame RGBA |
+| `clear_video_frames()` | Clear all cached video frames from WASM memory |
+| `evict_texture(key)` | Remove a specific texture from GPU cache |
+
+### Asset Pipeline
+
+```
+Scene JSON: assets."img1".image.url = "./hero.png"
+         ↓ asset_id
+App Resolver (environment-specific):
+  Web:    fetch(url) → ImageBitmap → RGBA → cache_image(url, rgba, w, h)
+  Server: fs.read(path) → image::decode → RGBA → cache_image(url, rgba, w, h)
+         ↓ RGBA bytes
+Core (agnostic):
+  render_frame_v2 → has_texture(url)? skip : load_rgba(url, rgba, w, h)
+  GPU texture cached → reused across ALL frames. Zero per-frame cost.
+```
+
+**Key design:** Core NEVER fetches or decodes assets. App layer is the sole resolver.
+`url` in assets map is an abstract identifier — app decides what it means.
+
+### Web Integration Notes
+
+- **Screen coordinates** passed to `pick_entity_v2` must be in **canvas pixel space**, not CSS pixels
+- Convert: `canvasX = cssX × (canvas.width / canvas.getBoundingClientRect().width)`
+- **Special characters in URLs:** `#` must be encoded as `%23` for HTTP fetch
+- **Mouse mapping:** Left-click = select/drag entity, Right-click = pan viewport, Scroll = zoom
+
+---
+
+## Editor Mode
+
+When `editor=true` in `tick_v2`, `render_sys` injects additional overlays:
+
+### Camera Wireframe
+- Every camera entity gets a Magenta border-only DrawCall
+- SDF shader params: `[0, 0, 0.012, 0]` (rect, no corner radius, thin border)
+- Rendered at layer 9999 (always on top)
+
+### Selection Highlight
+- Selected entities get a Cyan border-only DrawCall
+- Shape-aware: matches the entity's `ShapeKind` (Rectangle → rect outline, Ellipse → ellipse outline)
+- SDF shader params: `[shape_type, 0, 0.015, 0]`
+
+### Hit-Testing Algorithm
+```
+1. Convert screen coords → world coords via camera
+2. For each entity (top layer first):
+   a. Compute visual center = anchor_pos + rotate((0.5-ax)*w, (0.5-ay)*h)
+   b. Inverse-rotate test point around center
+   c. Check |local_x| ≤ w/2 && |local_y| ≤ h/2
+3. Return first hit
+```
+
+### Drag Algorithm
+```
+1. Convert screen delta → world delta via camera scale
+2. If entity has parent:
+   a. Read parent.resolved (already contains full ancestor chain)
+   b. Inverse-rotate world delta by parent rotation
+   c. Divide by parent scale
+3. Apply local delta to entity.components.transform.x/y
+```

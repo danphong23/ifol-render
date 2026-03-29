@@ -27,6 +27,14 @@ pub fn setup_builtins(renderer: &mut Renderer) {
         );
     }
 
+    if !renderer.has_pipeline("dashed_rect") {
+        renderer.register_pipeline(
+            "dashed_rect",
+            include_str!("../../shaders/dashed_rect.wgsl"),
+            PipelineConfig::quad(),
+        );
+    }
+
     if !renderer.has_pipeline("gradient") {
         renderer.register_pipeline(
             "gradient",
@@ -43,18 +51,7 @@ pub fn setup_builtins(renderer: &mut Renderer) {
         );
     }
 
-    if !renderer.has_pipeline("mask") {
-        renderer.register_pipeline(
-            "mask",
-            include_str!("../../shaders/mask.wgsl"),
-            PipelineConfig::quad(),
-        );
-    }
-
-    if !renderer.has_pipeline("copy") {
-        renderer.register_effect(
-            "copy",
-            "
+    let copy_shader_src = "
             struct VertexOutput {
                 @builtin(position) clip_position: vec4f,
                 @location(0) uv: vec2f,
@@ -77,9 +74,32 @@ pub fn setup_builtins(renderer: &mut Renderer) {
             fn fs_main(in: VertexOutput) -> @location(0) vec4f {
                 return textureSample(t_color, s_color, in.uv);
             }
-            ",
+            ";
+
+    if !renderer.has_pipeline("copy") {
+        renderer.register_effect(
+            "copy",
+            copy_shader_src,
             vec![("_pad".into(), 0.0)],
             1,
+        );
+    }
+
+    if !renderer.has_pipeline("output_copy") {
+        let mut config = PipelineConfig::fullscreen();
+        config.target_format = Some(renderer.texture_format()); // Force output to surface format
+        renderer.register_pipeline(
+            "output_copy",
+            copy_shader_src,
+            config,
+        );
+    }
+
+    if !renderer.has_pipeline("mask_composite") {
+        renderer.register_pipeline(
+            "mask_composite",
+            include_str!("../../shaders/effects/mask_composite.wgsl"),
+            PipelineConfig::fullscreen_two_textures(),
         );
     }
 
@@ -95,7 +115,7 @@ pub fn setup_builtins(renderer: &mut Renderer) {
                 ("radius".into(), 4.0),
                 ("texel_size".into(), 0.001),
             ],
-            2,
+            1,
         );
     }
 
@@ -127,12 +147,64 @@ pub fn setup_builtins(renderer: &mut Renderer) {
         );
     }
 
+    // ── Newly added material effects ──
+
+    if !renderer.has_pipeline("glow") {
+        renderer.register_effect(
+            "glow",
+            include_str!("../../web/examples/glow.wgsl"),
+            vec![
+                ("color_r".into(), 1.0),
+                ("color_g".into(), 1.0),
+                ("color_b".into(), 1.0),
+                ("color_a".into(), 1.0),
+                ("size".into(), 10.0),
+                ("intensity".into(), 1.0),
+                ("pad1".into(), 0.0),
+                ("pad2".into(), 0.0),
+            ],
+            1,
+        );
+    }
+
+    if !renderer.has_pipeline("drop_shadow") {
+        renderer.register_effect(
+            "drop_shadow",
+            include_str!("../../web/examples/drop_shadow.wgsl"),
+            vec![
+                ("color_r".into(), 0.0),
+                ("color_g".into(), 0.0),
+                ("color_b".into(), 0.0),
+                ("color_a".into(), 1.0),
+                ("offset_x".into(), 10.0),
+                ("offset_y".into(), 10.0),
+                ("blur".into(), 10.0),
+                ("pad1".into(), 0.0),
+            ],
+            1,
+        );
+    }
+
     if !renderer.has_pipeline("chromatic_aberration") {
         renderer.register_effect(
             "chromatic_aberration",
             include_str!("../../shaders/effects/chromatic_aberration.wgsl"),
             vec![
                 ("intensity".into(), 0.005),
+                ("_pad0".into(), 0.0),
+                ("_pad1".into(), 0.0),
+                ("_pad2".into(), 0.0),
+            ],
+            1,
+        );
+    }
+
+    if !renderer.has_pipeline("selection_outline") {
+        renderer.register_effect(
+            "selection_outline",
+            include_str!("../../shaders/effects/selection_outline.wgsl"),
+            vec![
+                ("thickness".into(), 3.0),
                 ("_pad0".into(), 0.0),
                 ("_pad1".into(), 0.0),
                 ("_pad2".into(), 0.0),

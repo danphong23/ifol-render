@@ -53,6 +53,9 @@ enum Commands {
         /// Override output height (default: from scene settings).
         #[arg(long)]
         height: Option<u32>,
+        /// Override output frame rate (default: from scene settings).
+        #[arg(long)]
+        fps: Option<f64>,
     },
 
     /// Render a Frame JSON file to PNG using CoreEngine.
@@ -97,6 +100,7 @@ fn main() {
             pixel_format,
             width,
             height,
+            fps,
         } => {
             eprintln!("ifol-render export: {:?} → {}", scene, output);
 
@@ -111,8 +115,7 @@ fn main() {
                 std::process::exit(1);
             });
 
-            // Parse settings
-            let settings: ifol_render_core::RenderSettings = doc
+            let mut settings: ifol_render_core::RenderSettings = doc
                 .get("settings")
                 .map(|s| {
                     serde_json::from_value(s.clone()).unwrap_or_else(|e| {
@@ -122,30 +125,91 @@ fn main() {
                 })
                 .unwrap_or_default();
 
-            // Parse frames
-            let frames: Vec<ifol_render_core::Frame> = doc
-                .get("frames")
-                .map(|f| {
-                    serde_json::from_value(f.clone()).unwrap_or_else(|e| {
-                        eprintln!("Invalid frames: {}", e);
-                        std::process::exit(1);
-                    })
-                })
-                .unwrap_or_else(|| {
-                    eprintln!("Missing 'frames' array in scene JSON");
-                    std::process::exit(1);
-                });
+            // Override settings with CLI arguments
+            if let Some(f) = fps { settings.fps = f; }
+            if let Some(w) = width { settings.width = w; }
+            if let Some(h) = height { settings.height = h; }
 
-            // Parse audio clips (optional) — from ifol-audio crate
-            let audio_clips: Vec<ifol_audio::AudioClip> = doc
-                .get("audio_clips")
-                .map(|a| {
-                    serde_json::from_value(a.clone()).unwrap_or_else(|e| {
-                        eprintln!("Warning: Invalid audio_clips: {}", e);
-                        Vec::new()
-                    })
-                })
-                .unwrap_or_default();
+            eprintln!("Detected V2 Scene format (entities)");
+            let scene_v2: ifol_render_ecs::scene::SceneV2 = serde_json::from_value(
+                serde_json::Value::Object(doc.as_object().unwrap().clone())
+            ).unwrap_or_else(|e| {
+                eprintln!("Invalid V2 scene: {}", e);
+                std::process::exit(1);
+            });
+            
+            let mut world = ifol_render_ecs::ecs::World::new();
+            world.load_scene(&scene_v2);
+            
+            let mut camera_id = "cam".to_string();
+            let mut max_end: f64 = 10.0;
+            let storages = &world.storages;
+            for ent in &world.entities {
+                if ent.id.starts_with("cam") && storages.get_component::<ifol_render_ecs::ecs::components::Transform>(&ent.id).is_some() {
+                    camera_id = ent.id.clone();
+                }
+                if let Some(tl) = storages.get_component::<ifol_render_ecs::scene::Lifespan>(&ent.id) {
+                    if tl.end > max_end && tl.end < 1_000_000.0 { max_end = tl.end; }
+                }
+            }
+            
+            let fps_val = settings.fps;
+            let total_frames = (max_end * fps_val).ceil() as usize;
+            eprintln!("V2 Scene: {} entities, cam={}, duration={:.1}s, {} frames", 
+                world.entities.len(), camera_id, max_end, total_frames);
+            
+            let total = total_frames;
+            let computed_fps = settings.fps;
+
+            // Extract audio clips from V2 components
+            let mut audio_clips: Vec<ifol_audio::AudioClip> = Vec::new();
+            let storages = &world.storages;
+            for ent in &world.entities {
+                let mut has_audio = false;
+                let mut asset_id = String::new();
+                if let Some(vid) = storages.get_component::<ifol_render_ecs::ecs::components::VideoSource>(&ent.id) {
+                    has_audio = true;
+                    asset_id = vid.asset_id.clone();
+                } else if let Some(aud) = storages.get_component::<ifol_render_ecs::ecs::components::AudioSource>(&ent.id) {
+                    has_audio = true;
+                    asset_id = aud.asset_id.clone();
+                }
+                
+                if has_audio {
+                    // Get timing from Lifespan
+                    if let Some(life) = storages.get_component::<ifol_render_ecs::scene::Lifespan>(&ent.id) {
+                        let duration = life.end - life.start;
+                        // For audio, we check Composition/Video duration limit if any (simplified here to full lifespan)
+                        if duration > 0.0 {
+                            let original_url = world.resolve_asset_url(&asset_id).unwrap_or(&asset_id).to_string();
+                            let mut local_path = original_url.clone();
+                            if local_path.starts_with("http") {
+                                if local_path.contains("/examples/") {
+                                    if let Some(filename) = local_path.split('/').last() {
+                                        local_path = format!("web/examples/{}", filename);
+                                    }
+                                } else {
+                                    let safe_name = original_url.chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+                                    local_path = format!("ifol_temp_{}", safe_name);
+                                }
+                            } else if local_path.starts_with("file:///") {
+                                local_path = local_path.replace("file:///", "");
+                            }
+                            
+                            audio_clips.push(ifol_audio::AudioClip {
+                                path: local_path,
+                                start_time: life.start,
+                                duration: Some(duration),
+                                offset: 0.0,
+                                speed: 1.0,
+                                volume: ent.resolved.opacity.max(1.0), // Use resolved base volume
+                                fade_in: 0.0,
+                                fade_out: 0.0,
+                            });
+                        }
+                    }
+                }
+            }
 
             // Parse codec
             let video_codec = ifol_render_core::export::VideoCodec::parse_codec(&codec)
@@ -157,25 +221,17 @@ fn main() {
                     std::process::exit(1);
                 });
 
-            let total = frames.len();
-            let out_w = width.unwrap_or(settings.width);
-            let out_h = height.unwrap_or(settings.height);
-            let fps = settings.fps;
+            let out_w = settings.width;
+            let out_h = settings.height;
+            let fps = computed_fps;
 
             eprintln!(
                 "Scene: {}x{} @ {}fps, {} frames, {} audio clips",
-                out_w,
-                out_h,
-                fps,
-                total,
-                audio_clips.len()
+                out_w, out_h, fps, total, audio_clips.len()
             );
             eprintln!(
                 "Export: codec={}, crf={}, preset={}, pix_fmt={}",
-                video_codec.encoder_name(),
-                crf,
-                preset,
-                pixel_format
+                video_codec.encoder_name(), crf, preset, pixel_format
             );
 
             // Create headless CoreEngine
@@ -192,10 +248,79 @@ fn main() {
                 engine.set_ffmpeg_path(fp);
             }
 
+            // V2: Pre-load assets into engine GPU texture/font cache
+            // Fallback for remote fonts and images: download via curl to tmp
+            let download_remote = |url: &str| -> String {
+                if url.starts_with("http") && !url.contains("/examples/") {
+                    let safe_name: String = url.chars().filter(|c| c.is_alphanumeric()).collect();
+                    let tmp_path = format!("ifol_temp_{}", safe_name);
+                    if !std::path::Path::new(&tmp_path).exists() {
+                        eprintln!("Downloading remote asset {}...", url);
+                        let _ = std::process::Command::new("curl")
+                            .arg("-s")
+                            .arg("-o").arg(&tmp_path)
+                            .arg(url)
+                            .status();
+                    }
+                    return tmp_path;
+                }
+                url.to_string()
+            };
+
+            let storages = &world.storages;
+            for ent in &world.entities {
+                if let Some(img) = storages.get_component::<ifol_render_ecs::ecs::components::ImageSource>(&ent.id) {
+                    let original_url = world.resolve_asset_url(&img.asset_id).unwrap_or(&img.asset_id).to_string();
+                    let mut local_path = original_url.clone();
+                    
+                    // Map dev server URLs to local files
+                    if local_path.starts_with("http") && local_path.contains("/examples/") {
+                        if let Some(filename) = local_path.split('/').last() {
+                            local_path = format!("web/examples/{}", filename);
+                        }
+                    } else if local_path.starts_with("http") {
+                        local_path = download_remote(&local_path);
+                    } else if local_path.starts_with("file:///") {
+                        local_path = local_path.replace("file:///", "");
+                    }
+
+                    if !local_path.starts_with("blob:") && !local_path.starts_with("http") {
+                        match engine.load_image(&original_url, &local_path) {
+                            Ok(_) => eprintln!("  Loaded image: {} -> {}", original_url, local_path),
+                            Err(e) => eprintln!("  Image load error '{}': {}", local_path, e),
+                        }
+                    }
+                }
+                if let Some(text) = storages.get_component::<ifol_render_ecs::ecs::components::TextSource>(&ent.id) {
+                    let original_url = world.resolve_asset_url(&text.font).unwrap_or(&text.font).to_string();
+                    let mut local_path = original_url.clone();
+                    
+                    if local_path.starts_with("http") && local_path.contains("/examples/") {
+                        if let Some(filename) = local_path.split('/').last() {
+                            local_path = format!("web/examples/{}", filename);
+                        }
+                    } else if local_path.starts_with("http") {
+                        local_path = download_remote(&local_path);
+                    } else if local_path.starts_with("file:///") {
+                        local_path = local_path.replace("file:///", "");
+                    }
+
+                    if !local_path.starts_with("blob:") && !local_path.starts_with("http") {
+                        // Suppress errors if already loaded
+                        if !engine.has_font(&original_url) {
+                            match engine.load_font(&original_url, &local_path) {
+                                Ok(_) => eprintln!("  Loaded font: {} -> {}", original_url, local_path),
+                                Err(e) => eprintln!("  Font load error '{}': {}", local_path, e),
+                            }
+                        }
+                    }
+                }
+            }
+
             let caps = engine.capabilities();
             eprintln!("GPU: {} ({})", caps.gpu_name, caps.backend);
 
-            // Build export config — if audio clips exist, render to temp video first
+            // Build export config
             let has_audio = !audio_clips.is_empty();
             let video_output = if has_audio {
                 output
@@ -220,17 +345,64 @@ fn main() {
 
             let start = std::time::Instant::now();
 
-            // Step 1: Render video (Core — GPU only, no audio)
-            match engine.export_video(frames, total, &export_config, |prog| {
-                eprint!(
-                    "\rFrame {}/{} ({:.1}%) | {:.1} fps | ETA: {:.0}s   ",
-                    prog.current_frame,
-                    prog.total_frames,
-                    prog.percent(),
-                    prog.export_fps,
-                    prog.eta_seconds
+            // Build frame iterator using V2 ECS Pipeline
+            let mut fi = 0usize;
+            let frame_iter: Box<dyn Iterator<Item = ifol_render_core::Frame>> = Box::new(std::iter::from_fn(move || {
+                if fi >= total_frames { return None; }
+                let t = fi as f64 / fps_val;
+                let time_state = ifol_render_ecs::time::TimeState {
+                    global_time: t,
+                    delta_time: 1.0 / fps_val,
+                    frame_index: fi as u64,
+                    fps: fps_val,
+                };
+                ifol_render_ecs::ecs::pipeline::run(&mut world, &time_state, None, None);
+                let mut frame = ifol_render_ecs::ecs::systems::render_to_frame(
+                    &world, &camera_id, out_w, out_h, t,
+                    None, None, None, None, None
                 );
-                true // never cancel from CLI
+                
+                // Map paths dynamically to ensure decoding works
+                for update in &mut frame.texture_updates {
+                    match update {
+                        ifol_render_core::frame::TextureUpdate::DecodeVideoFrame { path, .. }
+                        | ifol_render_core::frame::TextureUpdate::LoadImage { path, .. }
+                        | ifol_render_core::frame::TextureUpdate::LoadFont { path, .. } => {
+                            if path.starts_with("http") {
+                                if path.contains("/examples/") {
+                                    if let Some(filename) = path.split('/').last() {
+                                        *path = format!("web/examples/{}", filename);
+                                    }
+                                } else {
+                                    let safe_name: String = path.chars().filter(|c| c.is_alphanumeric()).collect();
+                                    *path = format!("ifol_temp_{}", safe_name);
+                                }
+                            } else if path.starts_with("file:///") {
+                                *path = path.replace("file:///", "");
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                
+                fi += 1;
+                Some(frame)
+            }));
+
+            // Step 1: Render video (GPU + FFmpeg encoder)
+            match engine.export_video(frame_iter, total, &export_config, |prog| {
+                // Use eprintln with \n so server can capture line by line
+                if prog.current_frame % 30 == 0 || prog.current_frame == prog.total_frames {
+                    eprintln!(
+                        "Frame {}/{} ({:.1}%) | {:.1} fps | ETA: {:.0}s",
+                        prog.current_frame,
+                        prog.total_frames,
+                        prog.percent(),
+                        prog.export_fps,
+                        prog.eta_seconds
+                    );
+                }
+                true
             }) {
                 Ok(video_path) => {
                     // Step 2: Mix audio + mux (ifol-audio crate)
@@ -376,7 +548,7 @@ fn main() {
                 test, output, width, height
             );
 
-            let mut renderer = ifol_render_core::Renderer::new(width, height);
+            let mut renderer = ifol_render_core::Renderer::new(width, height, false);
 
             // Register built-in shaders from core
             ifol_render_core::shaders::setup_builtins(&mut renderer);

@@ -64,6 +64,20 @@ fn sdf_line(p: vec2f, half_len: f32, width: f32) -> f32 {
     return length(max(d, vec2f(0.0))) + min(max(d.x, d.y), 0.0);
 }
 
+fn sdf_triangle(p: vec2f, half_size: vec2f) -> f32 {
+    // Isoceles triangle pointing UP, centered at origin.
+    // Vertices: (-half_size.x, half_size.y), (half_size.x, half_size.y), (0, -half_size.y)
+    // We use an SDF approach: the triangle is the intersection of 3 half-planes.
+    let q = vec2f(abs(p.x), p.y);
+    
+    // Slope of the left/right edges
+    let edge_dir = normalize(vec2f(half_size.x, 2.0 * half_size.y));
+    let d_side = dot(q, vec2f(edge_dir.y, -edge_dir.x)) - 0.0;
+    let d_base = q.y - half_size.y;
+    
+    return max(d_side, d_base);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     // Map UV (0..1) to centered coords (-0.5..0.5)
@@ -89,6 +103,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
         }
         case 4 { // line
             dist = sdf_line(p, 0.5, u.param1);
+        }
+        case 5 { // triangle (pointing up)
+            dist = sdf_triangle(p, half);
         }
         default {
             dist = sdf_rect(p, half);

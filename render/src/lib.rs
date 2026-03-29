@@ -35,6 +35,12 @@ pub struct PipelineConfig {
     pub fragment_entry: String,
     pub uses_vertex_buffer: bool,
     pub alpha_blend: bool,
+    /// Explicit target format. If None, uses engine.working_format.
+    pub target_format: Option<wgpu::TextureFormat>,
+    /// Number of texture bindings to create.
+    /// Default is 1 (binding 1: tex, 2: sampler). 
+    /// If 2, creates additional bindings (binding 3: tex2, 4: sampler2).
+    pub num_textures: u32,
 }
 
 impl PipelineConfig {
@@ -45,6 +51,8 @@ impl PipelineConfig {
             fragment_entry: "fs_main".into(),
             uses_vertex_buffer: true,
             alpha_blend: true,
+            target_format: None,
+            num_textures: 1,
         }
     }
 
@@ -55,6 +63,20 @@ impl PipelineConfig {
             fragment_entry: "fs_main".into(),
             uses_vertex_buffer: false,
             alpha_blend: false,
+            target_format: None,
+            num_textures: 1,
+        }
+    }
+
+    /// Config for fullscreen effect pass that requires 2 textures (like mask_composite).
+    pub fn fullscreen_two_textures() -> Self {
+        Self {
+            vertex_entry: "vs_fullscreen".into(),
+            fragment_entry: "fs_main".into(),
+            uses_vertex_buffer: false,
+            alpha_blend: false,
+            target_format: None,
+            num_textures: 2,
         }
     }
 }
@@ -185,6 +207,10 @@ struct CachedTexture {
     #[allow(dead_code)]
     texture: wgpu::Texture,
     view: wgpu::TextureView,
+    /// Texture width in pixels.
+    width: u32,
+    /// Texture height in pixels.
+    height: u32,
     /// Size in bytes (w * h * 4).
     size_bytes: u64,
     /// Frame number when last used.
@@ -197,19 +223,25 @@ struct CachedTexture {
 
 /// The GPU renderer. Owns GPU context but NO shaders.
 pub struct Renderer {
-    engine: engine::GpuEngine,
+    pub engine: engine::GpuEngine,
     /// Registered draw pipelines (name → cached GPU pipeline).
     pipelines: HashMap<String, CachedPipeline>,
     /// Registered effects.
     effect_entries: HashMap<String, EffectEntry>,
     /// Cached textures with LRU tracking.
     texture_cache: HashMap<String, CachedTexture>,
+    /// GPU Texture Pool for offscreen render passes (material effects).
+    pub texture_pool: engine::texture_cache::TextureCache,
+    /// Transient texture views derived from the pool, valid for current frame only.
+    transient_views: HashMap<String, wgpu::TextureView>,
     /// Total texture cache VRAM.
     texture_cache_bytes: u64,
     /// Max texture cache size (0 = unlimited).
     max_cache_bytes: u64,
     /// 1x1 white fallback texture for solid color rendering.
     white_texture_view: wgpu::TextureView,
+    /// 1x1 transparent fallback texture.
+    transparent_texture_view: wgpu::TextureView,
     /// Shared quad vertex/index buffers.
     quad_vertex_buffer: wgpu::Buffer,
     quad_index_buffer: wgpu::Buffer,
@@ -226,21 +258,21 @@ pub struct Renderer {
 impl Renderer {
     /// Create a headless renderer (Native only).
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn new(width: u32, height: u32) -> Self {
-        let engine = pollster::block_on(GpuEngine::new_headless(width, height));
+    pub fn new(width: u32, height: u32, hdr_enabled: bool) -> Self {
+        let engine = pollster::block_on(GpuEngine::new_headless(width, height, hdr_enabled));
         Self::from_engine(engine)
     }
 
     /// Create an asynchronous headless renderer (for environments where block_on is not allowed).
-    pub async fn new_async(width: u32, height: u32) -> Self {
-        let engine = GpuEngine::new_headless(width, height).await;
+    pub async fn new_async(width: u32, height: u32, hdr_enabled: bool) -> Self {
+        let engine = GpuEngine::new_headless(width, height, hdr_enabled).await;
         Self::from_engine(engine)
     }
 
     /// Create a web renderer attached to an HTML canvas.
     #[cfg(target_arch = "wasm32")]
-    pub async fn new_web(canvas: web_sys::HtmlCanvasElement, width: u32, height: u32) -> Self {
-        let engine = GpuEngine::new_web(canvas, width, height).await;
+    pub async fn new_web(canvas: web_sys::HtmlCanvasElement, width: u32, height: u32, hdr_enabled: bool) -> Self {
+        let engine = GpuEngine::new_web(canvas, width, height, hdr_enabled).await;
         Self::from_engine(engine)
     }
 
@@ -308,14 +340,45 @@ impl Renderer {
         // (256 bytes aligned × 8000 = 2MB)
         let uniform_ring = UniformRingBuffer::new(&engine.device, 2 * 1024 * 1024);
 
+        // 1x1 transparent fallback texture
+        let transparent_texture = engine.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("transparent 1x1"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: engine.texture_format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        engine.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &transparent_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[0, 0, 0, 0], // RGBA transparent
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+        let transparent_texture_view = transparent_texture.create_view(&Default::default());
+
         Self {
             engine,
             pipelines: HashMap::new(),
             effect_entries: HashMap::new(),
             texture_cache: HashMap::new(),
+            texture_pool: engine::texture_cache::TextureCache::new(),
+            transient_views: HashMap::new(),
             texture_cache_bytes: 0,
             max_cache_bytes: 0, // unlimited by default
             white_texture_view,
+            transparent_texture_view,
             quad_vertex_buffer,
             quad_index_buffer,
             uniform_ring,
@@ -339,6 +402,16 @@ impl Renderer {
     /// Query GPU capabilities.
     pub fn capabilities(&self) -> GpuCapabilities {
         GpuCapabilities::from_adapter(&self.engine.adapter)
+    }
+
+    /// Get the engine's surface/output texture format.
+    pub fn texture_format(&self) -> wgpu::TextureFormat {
+        self.engine.texture_format
+    }
+
+    /// Get the engine's intermediate working format.
+    pub fn working_format(&self) -> wgpu::TextureFormat {
+        self.engine.working_format
     }
 
     // ── Texture Cache ──────────────────
@@ -430,6 +503,8 @@ impl Renderer {
             CachedTexture {
                 texture,
                 view,
+                width,
+                height,
                 size_bytes,
                 last_used_frame: self.frame_number,
             },
@@ -487,6 +562,81 @@ impl Renderer {
         }
         // Dimensions changed or texture doesn't exist — full recreation
         self.load_rgba(key, data, width, height);
+    }
+
+    /// Upload a video frame directly using wgpu copy_external_image_to_texture. WASM only.
+    /// This Bypasses the CPU Canvas getImageData completely!
+    #[cfg(target_arch = "wasm32")]
+    pub fn load_video_texture_web(
+        &mut self,
+        key: &str,
+        video: &web_sys::HtmlVideoElement,
+        width: u32,
+        height: u32,
+    ) {
+        let size_bytes = (width as u64) * (height as u64) * 4;
+
+        self.evict_if_needed(size_bytes);
+
+        let needs_create = match self.texture_cache.get(key) {
+            Some(entry) => entry.width != width || entry.height != height,
+            None => true,
+        };
+
+        if needs_create {
+            let texture = self.engine.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(key),
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.engine.texture_format, // Ensure texture mapping matches swapchain
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+
+            if let Some(old) = self.texture_cache.remove(key) {
+                self.texture_cache_bytes -= old.size_bytes;
+            }
+
+            self.texture_cache.insert(
+                key.to_string(),
+                CachedTexture {
+                    texture,
+                    view,
+                    width,
+                    height,
+                    size_bytes,
+                    last_used_frame: self.frame_number,
+                },
+            );
+            self.texture_cache_bytes += size_bytes;
+        }
+
+        let entry = self.texture_cache.get_mut(key).unwrap();
+        entry.last_used_frame = self.frame_number;
+
+        let source = wgpu::CopyExternalImageSourceInfo {
+            source: wgpu::ExternalImageSource::HTMLVideoElement(video.clone()),
+            origin: wgpu::Origin2d::ZERO,
+            flip_y: false,
+        };
+
+        let dest = wgpu::CopyExternalImageDestInfo {
+            texture: &entry.texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+            color_space: wgpu::PredefinedColorSpace::Srgb,
+            premultiplied_alpha: false,
+        };
+
+        let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+
+        self.engine.queue.copy_external_image_to_texture(&source, dest, size);
     }
 
     /// Check if a texture is cached.
@@ -581,37 +731,59 @@ impl Renderer {
             source: wgpu::ShaderSource::Wgsl(wgsl_source.into()),
         });
 
-        // Standard bind group layout: uniform buffer (dynamic offset) + texture + sampler
+        let mut layout_entries = vec![
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ];
+
+        if config.num_textures > 1 {
+            // Second texture
+            layout_entries.push(wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                },
+                count: None,
+            });
+            // Second sampler
+            layout_entries.push(wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            });
+        }
+
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some(&format!("{name} bgl")),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: true,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
+            entries: &layout_entries,
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -645,7 +817,7 @@ impl Renderer {
                 module: &shader,
                 entry_point: Some(&config.fragment_entry),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: self.engine.texture_format,
+                    format: config.target_format.unwrap_or(self.engine.working_format),
                     blend,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -729,27 +901,97 @@ impl Renderer {
         width: u32,
         height: u32,
     ) -> wgpu::TextureView {
+        if key.starts_with("_ent_") || key.starts_with("_sel_") {
+            // Allocate from exact-match TexturePool
+            let t_key = engine::texture_cache::TextureKey::render_target(width, height, self.engine.working_format);
+            let texture = self.texture_pool.acquire(&self.engine.device, t_key);
+            let view = texture.create_view(&Default::default());
+            self.transient_views.insert(key.to_string(), texture.create_view(&Default::default())); // Store a copy for later lookup
+            return view;
+        }
+
         let expected_size = (width as u64) * (height as u64) * 4;
         let needs_create = match self.texture_cache.get(key) {
             Some(entry) => entry.size_bytes != expected_size,
             None => true,
         };
         if needs_create {
-            self.load_rgba(key, &vec![0; expected_size as usize], width, height);
+            self.evict_if_needed(expected_size);
+            
+            let texture = self.engine.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(key),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.engine.working_format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+
+            if let Some(old) = self.texture_cache.remove(key) {
+                self.texture_cache_bytes -= old.size_bytes;
+            }
+
+            self.texture_cache.insert(
+                key.to_string(),
+                CachedTexture {
+                    texture,
+                    view,
+                    width,
+                    height,
+                    size_bytes: expected_size,
+                    last_used_frame: self.frame_number,
+                },
+            );
+            self.texture_cache_bytes += expected_size;
         }
-        let view = self
-            .texture_cache
-            .get(key)
-            .unwrap()
-            .texture
-            .create_view(&Default::default());
         self.texture_cache.get_mut(key).unwrap().last_used_frame = self.frame_number;
-        view
+        let texture = &self.texture_cache.get(key).unwrap().texture;
+        texture.create_view(&Default::default())
+    }
+
+    /// Get dimensions of all cached textures (for fit_mode UV calculations).
+    pub fn texture_dimensions(&self) -> HashMap<String, (u32, u32)> {
+        self.texture_cache
+            .iter()
+            .map(|(k, v)| (k.clone(), (v.width, v.height)))
+            .collect()
+    }
+
+    /// Reset transient frame-scoped resources.
+    pub fn begin_frame(&mut self) {
+        self.texture_pool.begin_frame();
+        self.transient_views.clear();
+    }
+
+    /// Evict textures not used in the last `max_age` frames.
+    /// Call after rendering to prevent VRAM leaks from removed entities.
+    pub fn cleanup_stale_textures(&mut self, max_age: u64) {
+        let current = self.frame_number;
+        let stale_keys: Vec<String> = self.texture_cache.iter()
+            .filter(|(_, v)| current > v.last_used_frame + max_age)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in stale_keys {
+            if let Some(entry) = self.texture_cache.remove(&key) {
+                self.texture_cache_bytes -= entry.size_bytes;
+            }
+        }
     }
 
     /// Render draw commands to the main output.
     pub fn render_frame(&mut self, commands: &[DrawCommand], clear_color: [f32; 4]) -> Vec<u8> {
-        self.render_frame_to(commands, clear_color, None);
+        let w = self.engine.width;
+        let h = self.engine.height;
+        self.render_frame_to(commands, clear_color, None, w, h);
         if self.engine.surface.is_none() {
             self.engine.readback_output()
         } else {
@@ -765,6 +1007,8 @@ impl Renderer {
         commands: &[DrawCommand],
         clear_color: [f32; 4],
         output_key: Option<&str>,
+        target_width: u32,
+        target_height: u32,
     ) {
         if commands.is_empty() && output_key.is_some() {
             // Nothing to draw to intermediate, skip to save GPU time
@@ -779,7 +1023,7 @@ impl Renderer {
 
         if let Some(key) = output_key {
             output_view =
-                self.get_or_create_render_target(key, self.engine.width, self.engine.height);
+                self.get_or_create_render_target(key, target_width, target_height);
         } else if let Some(ref surface) = self.engine.surface {
             // WebGPU canvas rendering!
             let frame = surface
@@ -787,7 +1031,10 @@ impl Renderer {
                 .expect("Failed to acquire next surface texture");
             output_view = frame
                 .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
+                .create_view(&wgpu::TextureViewDescriptor {
+                    format: Some(self.engine.texture_format), // Use sRGB view format
+                    ..Default::default()
+                });
             surface_frame = Some(frame);
         } else {
             // Headless Native rendering!
@@ -845,58 +1092,94 @@ impl Renderer {
 
         // Phase 2: Create bind groups, batched by texture
         // We need one bind group per (pipeline, texture) combination
-        struct DrawCall {
+        struct DrawCall<'a> {
             pipeline_name: String,
-            bind_group: wgpu::BindGroup,
+            textures: Vec<&'a String>, // Store refs to textures attached to the command
             uniform_offset: u32,
+            bind_group: Option<wgpu::BindGroup>, // Generated below
         }
 
-        let mut draw_calls: Vec<DrawCall> = Vec::with_capacity(prepared.len());
+        let mut draw_calls: Vec<DrawCall> = Vec::with_capacity(commands.len());
 
-        for prep in &prepared {
+        for (cmd, prep) in commands.iter().zip(prepared.iter()) {
             let cached = self.pipelines.get(&prep.pipeline_name).unwrap();
 
-            let tex_view = match &prep.texture_view_key {
-                Some(key) => match self.texture_cache.get(key) {
-                    Some(entry) => &entry.view,
-                    None => &self.white_texture_view,
+            // First texture logic
+            let tex_view = match cmd.textures.get(0) {
+                Some(key) => {
+                    if let Some(view) = self.transient_views.get(key) {
+                        view
+                    } else if let Some(entry) = self.texture_cache.get(key) {
+                        &entry.view
+                    } else {
+                        &self.transparent_texture_view // Missing asset -> transparent
+                    }
                 },
-                None => &self.white_texture_view,
+                None => &self.white_texture_view, // No texture requested -> use white for solid colors
             };
+            
+            // Build bind group entries dynamically
+            let mut entries = vec![
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.uniform_ring.buffer,
+                        offset: 0,
+                        size: Some(
+                            std::num::NonZeroU64::new(self.uniform_ring.alignment).unwrap(),
+                        ),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(tex_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&cached.sampler),
+                },
+            ];
 
-            // Bind group with the ENTIRE ring buffer + dynamic offset
+            // If pipeline expects multiple textures, map them
+            if cached.config.num_textures > 1 {
+                let tex_view_2 = match cmd.textures.get(1) {
+                    Some(key) => {
+                        if let Some(view) = self.transient_views.get(key) {
+                            view
+                        } else if let Some(entry) = self.texture_cache.get(key) {
+                            &entry.view
+                        } else {
+                            &self.transparent_texture_view
+                        }
+                    },
+                    None => &self.transparent_texture_view,
+                };
+                
+                entries.push(wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(tex_view_2),
+                });
+                entries.push(wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&cached.sampler), // Reusing standard sampler
+                });
+            }
+
+            // Create Bind Group
             let bg = self
                 .engine
                 .device
                 .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None, // Skip label for perf
+                    label: None,
                     layout: &cached.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                buffer: &self.uniform_ring.buffer,
-                                offset: 0,
-                                size: Some(
-                                    std::num::NonZeroU64::new(self.uniform_ring.alignment).unwrap(),
-                                ),
-                            }),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(tex_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::Sampler(&cached.sampler),
-                        },
-                    ],
+                    entries: &entries,
                 });
 
             draw_calls.push(DrawCall {
                 pipeline_name: prep.pipeline_name.clone(),
-                bind_group: bg,
+                textures: cmd.textures.iter().collect(),
                 uniform_offset: prep.uniform_offset,
+                bind_group: Some(bg),
             });
         }
 
@@ -949,8 +1232,7 @@ impl Renderer {
                     }
                 }
 
-                // Dynamic offset into uniform ring buffer
-                rpass.set_bind_group(0, &dc.bind_group, &[dc.uniform_offset]);
+                rpass.set_bind_group(0, dc.bind_group.as_ref().unwrap(), &[dc.uniform_offset]);
 
                 if cached.config.uses_vertex_buffer {
                     rpass.draw_indexed(0..6, 0, 0..1);
@@ -986,7 +1268,9 @@ impl Renderer {
         }
 
         // First: normal draw pass
-        self.render_frame_to(commands, [0.0, 0.0, 0.0, 1.0], Some("effect_input_temp"));
+        let w = self.engine.width;
+        let h = self.engine.height;
+        self.render_frame_to(commands, [0.0, 0.0, 0.0, 1.0], Some("effect_input_temp"), w, h);
 
         // Init effect context if needed
         if self.effect_ctx.is_none() {

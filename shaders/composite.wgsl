@@ -7,7 +7,9 @@ struct Uniforms {
     opacity: f32,
     use_texture: f32, // 1.0 = sample texture, 0.0 = use solid color
     blend_mode: f32,  // 0=Normal, 1=Multiply, 2=Screen, 3=Overlay, 4=SoftLight, 5=Add, 6=Difference
-    _pad: f32,
+    fit_mode: f32,    // 0=Stretch, 1=Contain, 2=Cover
+    uv_offset: vec2f, // UV offset for fit mode
+    uv_scale: vec2f,  // UV scale for fit mode
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -28,7 +30,8 @@ struct VertexOutput {
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.clip_position = uniforms.transform * vec4f(in.position, 0.0, 1.0);
-    out.uv = in.uv;
+    // Apply fit mode UV transformation
+    out.uv = in.uv * uniforms.uv_scale + uniforms.uv_offset;
     return out;
 }
 
@@ -100,7 +103,9 @@ fn apply_blend(base: vec3f, blend: vec3f, mode: f32) -> vec3f {
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     var src: vec4f;
     if (uniforms.use_texture > 0.5) {
-        src = textureSample(t_texture, t_sampler, in.uv);
+        let tex_color = textureSample(t_texture, t_sampler, in.uv);
+        let out_of_bounds = in.uv.x < 0.0 || in.uv.x > 1.0 || in.uv.y < 0.0 || in.uv.y > 1.0;
+        src = select(tex_color, vec4f(0.0, 0.0, 0.0, 0.0), out_of_bounds);
     } else {
         src = uniforms.color;
     }

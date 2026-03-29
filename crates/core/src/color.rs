@@ -120,6 +120,12 @@ impl Color4 {
     }
 }
 
+impl From<Color4> for [f32; 4] {
+    fn from(c: Color4) -> Self {
+        [c.r, c.g, c.b, c.a]
+    }
+}
+
 /// sRGB gamma to linear.
 fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.04045 {

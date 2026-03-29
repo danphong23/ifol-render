@@ -28,8 +28,8 @@ pub fn mix_clips(
             clip.volume
         );
 
-        // Decode source audio
-        let samples = decode_audio(&clip.path, clip.offset, clip.duration, config, ffmpeg_bin)?;
+        // Decode source audio with dynamic speed
+        let samples = decode_audio(&clip.path, clip.offset, clip.duration, clip.speed, config, ffmpeg_bin)?;
 
         if samples.is_empty() {
             log::warn!("Audio clip '{}' decoded to 0 samples", clip.path);
