@@ -6,7 +6,6 @@ use crate::frame::{FlatEntity, Frame, RenderPass, PassType};
 pub fn render_to_frame(
     world: &World,
     camera_id: &str,
-    is_editor_mode: bool,
     screen_width: u32,
     screen_height: u32,
     _time_secs: f64,
@@ -14,12 +13,11 @@ pub fn render_to_frame(
     custom_cam_y: Option<f32>,
     custom_cam_w: Option<f32>,
     custom_cam_h: Option<f32>,
-    _selected_entity_ids: &[&str],
     scope_entity_id: Option<&str>,
-    select_mode: &str,
 ) -> Frame {
     let mut passes = Vec::new();
     let mut texture_updates = Vec::new();
+    let mut audio_calls = Vec::new();
     let storages = &world.storages;
 
     // ── Camera projection: world units → pixels ──
@@ -52,6 +50,9 @@ pub fn render_to_frame(
         false
     };
 
+    let mut camera_effects = Vec::new();
+    let mut layer_effects_map = std::collections::HashMap::new();
+
     // Collect and sort flat entities directly from the pre-generated DrawCalls
     let mut flat_entities = Vec::new();
 
@@ -60,78 +61,23 @@ pub fn render_to_frame(
         if !entity.resolved.visible { continue; }
         // Skip entities outside render scope
         if !is_in_scope(&entity.id) { continue; }
-        // Skip cameras unless in editor mode
-        if storages.get_component::<crate::ecs::components::CameraComponent>(&entity.id).is_some() && !is_editor_mode {
-            continue;
-        }
-
-        // ── Camera gizmo: dashed border + orientation triangle ──
-        let mut gizmo_draws: Vec<crate::ecs::components::draw::DrawCall> = Vec::new();
-        if storages.get_component::<crate::ecs::components::CameraComponent>(&entity.id).is_some() && is_editor_mode {
-            let is_selected = _selected_entity_ids.contains(&entity.id.as_str());
-            let cam_color = if is_selected { [0.0, 0.85, 1.0, 1.0] } else { [1.0, 0.0, 1.0, 0.6] };
-            let cam_px_thickness = if is_selected { 6.0 } else { 4.0 };
-
-            // Dashed border around camera viewport
-            let mut dash_call = crate::ecs::components::draw::DrawCall::default();
-            dash_call.kind = crate::ecs::components::draw::DrawKind::DashedRect;
-            dash_call.x = entity.resolved.x;
-            dash_call.y = entity.resolved.y;
-            dash_call.width = entity.resolved.width;
-            dash_call.height = entity.resolved.height;
-            dash_call.anchor_x = entity.resolved.anchor_x;
-            dash_call.anchor_y = entity.resolved.anchor_y;
-            dash_call.rotation = entity.resolved.rotation;
-            dash_call.color = cam_color;
-            dash_call.opacity = 1.0;
-            
-            // params: [dash_length, gap_length, border_width, _pad]
-            // Use true pixel-relative sizing for normalized SDF
-            let max_dim = entity.resolved.width.max(entity.resolved.height).max(1.0);
-            let norm_border = cam_px_thickness / max_dim;
-            let norm_dash = 24.0 / max_dim;
-            let norm_gap = 16.0 / max_dim;
-            
-            dash_call.params = vec![norm_dash, norm_gap, norm_border, 0.0];
-            gizmo_draws.push(dash_call);
-
-            // Unity-style camera gizmo: triangle ABOVE the frame, pointing DOWN
-            let tri_size = entity.resolved.width * 0.05;
-            
-            // Triangle center in local anchor space — ABOVE the viewport's top edge
-            let orig_min_x = -entity.resolved.anchor_x * entity.resolved.width;
-            let orig_min_y = -entity.resolved.anchor_y * entity.resolved.height;
-            let local_tri_x = orig_min_x + entity.resolved.width * 0.5;
-            let local_tri_y = orig_min_y - tri_size * 0.6; // Above top edge, outside viewport
-            
-            let cos_r = entity.resolved.rotation.cos();
-            let sin_r = entity.resolved.rotation.sin();
-
-            let mut tri_call = crate::ecs::components::draw::DrawCall::default();
-            tri_call.kind = crate::ecs::components::draw::DrawKind::SolidRect; // Uses shapes shader
-            tri_call.x = entity.resolved.x + local_tri_x * cos_r - local_tri_y * sin_r;
-            tri_call.y = entity.resolved.y + local_tri_x * sin_r + local_tri_y * cos_r;
-            tri_call.width = tri_size;
-            tri_call.height = tri_size;
-            tri_call.anchor_x = 0.5;
-            tri_call.anchor_y = 0.5;
-            // Rotate 180° (π radians) so triangle points DOWN toward the camera
-            tri_call.rotation = entity.resolved.rotation + std::f32::consts::PI;
-            tri_call.color = cam_color;
-            tri_call.opacity = 1.0;
-            // params: [shape_type=5 (triangle), corner_radius, border_width=0 (filled), _pad]
-            tri_call.params = vec![5.0, 0.0, 0.0, 0.0];
-            gizmo_draws.push(tri_call);
-        }
-
-        // NOTE: Selection overlays are NOT rendered inline anymore.
-        // They are collected separately and rendered in a top-most editor pass.
+        // Camera effects are now implicitly captured because camera entities have DrawCalls 
+        // generated by `editor_gizmo_sys` (so they iterate and add their effects).
+        // If there's NO `editor_gizmo_sys` running, cameras might have NO `draw_calls`.
+        // Wait! We MUST process `camera_effects` regardless of whether they have `draw_calls`!
+        // So we will process `entity.draw.effect_chain` for ALL entities, even if they have no draws.
 
         // ── Process Texture Requests ──
         for req in &entity.draw.texture_requests {
             match req {
                 crate::ecs::components::draw::TextureRequest::LoadImage { key, asset_url } => {
                     texture_updates.push(crate::frame::TextureUpdate::LoadImage {
+                        key: key.clone(),
+                        path: asset_url.clone(),
+                    });
+                }
+                crate::ecs::components::draw::TextureRequest::LoadFont { key, asset_url } => {
+                    texture_updates.push(crate::frame::TextureUpdate::LoadFont {
                         key: key.clone(),
                         path: asset_url.clone(),
                     });
@@ -160,7 +106,41 @@ pub fn render_to_frame(
             }
         }
 
-        let iter = entity.draw.draw_calls.iter().chain(gizmo_draws.iter());
+        // ── Process Audio Calls ──
+        audio_calls.extend(entity.draw.audio_calls.iter().cloned());
+
+        let iter = entity.draw.draw_calls.iter();
+
+        let r = &entity.resolved;
+        
+        // Partition effects by scope
+        let mut padded_effects = Vec::new();
+        for effect in &entity.draw.effect_chain {
+            match effect.scope {
+                crate::schema::v2::ShaderScope::Camera => camera_effects.push(effect.clone()),
+                crate::schema::v2::ShaderScope::Layer => {
+                    layer_effects_map.entry(entity.id.clone())
+                        .or_insert_with(Vec::new)
+                        .push(effect.clone());
+                }
+                _ => padded_effects.push(effect.clone()),
+            }
+        }
+        
+        let has_effects = !padded_effects.is_empty();
+        let pad = if has_effects { entity.draw.effect_padding } else { 0.0 };
+        
+        let diag = (r.width * r.width + r.height * r.height).sqrt();
+        let ew = (diag * sx + pad * 2.0).max(1.0).ceil();
+        let eh = (diag * sy + pad * 2.0).max(1.0).ceil();
+
+        let (local_cam_x, local_cam_y) = if has_effects {
+            (r.x - ew / (2.0 * sx), r.y - eh / (2.0 * sy))
+        } else {
+            (cam_x, cam_y)
+        };
+
+        let mut local_flat_list = Vec::new();
 
         for call in iter {
             // ── World units → pixel projection ──
@@ -173,8 +153,8 @@ pub fn render_to_frame(
             let dy = (0.5 - call.anchor_y) * h;
             
             // Map world coordinates considering camera translation relative to top-left.
-            let center_x = (call.x - cam_x) * sx + dx * cos_r - dy * sin_r;
-            let center_y = (call.y - cam_y) * sy + dx * sin_r + dy * cos_r;
+            let center_x = (call.x - local_cam_x) * sx + dx * cos_r - dy * sin_r;
+            let center_y = (call.y - local_cam_y) * sy + dx * sin_r + dy * cos_r;
             let flat_x = center_x - w * 0.5;
             let flat_y = center_y - h * 0.5;
 
@@ -212,14 +192,21 @@ pub fn render_to_frame(
 
             let layer = if storages.get_component::<crate::ecs::components::CameraComponent>(&entity.id).is_some() { 9999 } else { entity.resolved.layer };
             
-            flat_entities.push(FlatEntity {
+            // Force center of the local texture target if this goes to offscreen pass!
+            let (target_x, target_y) = if has_effects {
+                (ew * 0.5 - w * 0.5, eh * 0.5 - h * 0.5)
+            } else {
+                (flat_x, flat_y)
+            };
+
+            local_flat_list.push(FlatEntity {
                 id: 0,
-                x: flat_x,
-                y: flat_y,
+                x: target_x,
+                y: target_y,
                 width: w,
                 height: h,
                 rotation: call.rotation,
-                opacity: call.opacity,
+                opacity: if has_effects { 1.0 } else { call.opacity }, // Apply opacity at the end if effects are used
                 blend_mode: blend_id,
                 color: call.color,
                 shader: shader.to_string(),
@@ -238,112 +225,131 @@ pub fn render_to_frame(
                 intrinsic_height: ih,
             });
         }
-    }
 
-    // ── Build selection outline via off-screen post-process ──
-    // Instead of a simple SolidRect border, we render the selected entity to an
-    // off-screen mask, apply the selection_outline effect shader, and composite
-    // the result as a fullscreen overlay on top of all entities.
-    let mut sel_mask_entities = Vec::new();
-    if is_editor_mode {
-        for entity in &sorted {
-            if !entity.resolved.visible { continue; }
-            if !_selected_entity_ids.contains(&entity.id.as_str()) { continue; }
+        if has_effects {
+            let input_base_key = format!("_ent_src_{}", entity.id);
+            passes.push(RenderPass {
+                output: input_base_key.clone(),
+                pass_type: PassType::Entities {
+                    entities: local_flat_list,
+                    clear_color: [0.0, 0.0, 0.0, 0.0],
+                },
+                target_width: Some(ew as u32),
+                target_height: Some(eh as u32),
+            });
 
-            let is_camera = storages.get_component::<crate::ecs::components::CameraComponent>(&entity.id).is_some();
-            if is_camera { continue; }
-
-            if select_mode == "content" {
-                // Generate silhouette mask based on exact pixel boundaries (Content Mode)
-                for call in entity.draw.draw_calls.iter() {
-                    let w = call.width * sx;
-                    let h = call.height * sy;
-
-                    let cos_r = call.rotation.cos();
-                    let sin_r = call.rotation.sin();
-                    let dx = (0.5 - call.anchor_x) * w;
-                    let dy = (0.5 - call.anchor_y) * h;
-                    let center_x = (call.x - cam_x) * sx + dx * cos_r - dy * sin_r;
-                    let center_y = (call.y - cam_y) * sy + dx * sin_r + dy * cos_r;
-                    let flat_x = center_x - w * 0.5;
-                    let flat_y = center_y - h * 0.5;
-                    let iw = call.intrinsic_width;
-                    let ih = call.intrinsic_height;
-                    let (uv_offset, uv_scale) = call.fit_mode.calculate_uv(call.width, call.height, iw, ih, call.align_x, call.align_y);
-
-                    let mut textures = Vec::new();
-                    if let Some(t) = &call.texture_key {
-                        textures.push(t.to_string());
-                    }
-
-                    let shader = match call.kind {
-                        crate::ecs::components::draw::DrawKind::SolidRect => "shapes",
-                        crate::ecs::components::draw::DrawKind::SolidEllipse => "shapes",
-                        crate::ecs::components::draw::DrawKind::Texture => "composite",
-                        crate::ecs::components::draw::DrawKind::Text => "composite",
-                        _ => "composite",
-                    };
-
-                    sel_mask_entities.push(FlatEntity {
-                        id: 0,
-                        x: flat_x,
-                        y: flat_y,
-                        width: w,
-                        height: h,
-                        rotation: call.rotation,
-                        opacity: 1.0,
-                        blend_mode: 0,
-                        color: [1.0, 1.0, 1.0, 1.0],
-                        shader: shader.to_string(),
-                        textures,
-                        params: call.params.clone(),
-                        layer: entity.resolved.layer,
-                        z_index: entity.resolved.layer as f32,
-                        fit_mode: match call.fit_mode {
-                            crate::ecs::components::FitMode::Contain => 1,
-                            crate::ecs::components::FitMode::Cover => 2,
-                            _ => 0,
+            let mut current_key = input_base_key.clone();
+            for (i, effect) in padded_effects.iter().enumerate() {
+                let out_key = format!("_ent_fx_{}_{}", entity.id, i);
+                passes.push(RenderPass {
+                    output: out_key.clone(),
+                    pass_type: PassType::Effect {
+                        shader: effect.shader_id.clone(),
+                        inputs: vec![current_key],
+                        params: effect.params.clone(),
+                    },
+                    target_width: Some(ew as u32),
+                    target_height: Some(eh as u32),
+                });
+                current_key = out_key;
+                
+                if effect.scope == crate::schema::v2::ShaderScope::Masked {
+                    let masked_key = format!("_ent_masked_{}_{}", entity.id, i);
+                    passes.push(RenderPass {
+                        output: masked_key.clone(),
+                        pass_type: PassType::Effect {
+                            shader: "mask_composite".to_string(),
+                            inputs: vec![current_key, input_base_key.clone()],
+                            params: vec![0.0, 0.0, 0.0, 0.0],
                         },
-                        uv_offset,
-                        uv_scale,
-                        intrinsic_width: iw,
-                        intrinsic_height: ih,
+                        target_width: Some(ew as u32),
+                        target_height: Some(eh as u32),
                     });
+                    current_key = masked_key;
                 }
-            } else if select_mode == "rect" {
-                // Render a solid rectangle mask for the full layer bounds, which the outline shader will trace and glow
-                let r = &entity.resolved;
-                let cb_w = r.width;
-                let cb_h = r.height;
+            }
 
-                let cos_r = r.rotation.cos();
-                let sin_r = r.rotation.sin();
+            let layer = if storages.get_component::<crate::ecs::components::CameraComponent>(&entity.id).is_some() { 9999 } else { entity.resolved.layer };
+            
+            flat_entities.push(FlatEntity {
+                id: 0,
+                x: (r.x - cam_x) * sx - ew * 0.5,
+                y: (r.y - cam_y) * sy - eh * 0.5,
+                width: ew,
+                height: eh,
+                rotation: 0.0, // Pre-rotated inside offscreen
+                opacity: r.opacity,
+                blend_mode: 0,
+                color: [1.0, 1.0, 1.0, 1.0],
+                shader: "composite".to_string(),
+                textures: vec![current_key],
+                params: vec![],
+                layer,
+                z_index: layer as f32,
+                fit_mode: 0,
+                uv_offset: [0.0, 0.0],
+                uv_scale: [1.0, 1.0],
+                intrinsic_width: ew,
+                intrinsic_height: eh,
+            });
+        } else {
+            flat_entities.extend(local_flat_list);
+        }
 
-                // Local center of the bounding box relative to the anchor
-                let cx = cb_w * 0.5 - r.width * r.anchor_x;
-                let cy = cb_h * 0.5 - r.height * r.anchor_y;
+        // ── Handle Adjustment Layer Effects ──
+        // If this entity has Layer scope effects, we must flush current flat_entities
+        // to a composite buffer, apply the layer effects, and output it back.
+        if let Some(layer_fx) = layer_effects_map.get(&entity.id) {
+            if !flat_entities.is_empty() {
+                // 1. Render all accumulated entities underneath this layer
+                let src_key = format!("_layer_src_{}", entity.id);
+                passes.push(RenderPass {
+                    output: src_key.clone(),
+                    pass_type: PassType::Entities {
+                        entities: std::mem::take(&mut flat_entities), // FLUSHand clear
+                        clear_color: [0.0, 0.0, 0.0, 0.0],
+                    },
+                    target_width: Some(screen_width),
+                    target_height: Some(screen_height),
+                });
 
-                let cb_x_rot = cx * cos_r - cy * sin_r;
-                let cb_y_rot = cx * sin_r + cy * cos_r;
+                // 2. Apply effects to the accumulated frame
+                let mut current_key = src_key;
+                for (i, effect) in layer_fx.iter().enumerate() {
+                    let out_key = format!("_layer_fx_{}_{}", entity.id, i);
+                    passes.push(RenderPass {
+                        output: out_key.clone(),
+                        pass_type: PassType::Effect {
+                            shader: effect.shader_id.clone(),
+                            inputs: vec![current_key],
+                            params: effect.params.clone(),
+                        },
+                        target_width: Some(screen_width),
+                        target_height: Some(screen_height),
+                    });
+                    current_key = out_key;
+                }
 
-                let sel_w = cb_w * sx;
-                let sel_h = cb_h * sy;
-                let sel_x = (r.x - cam_x) * sx + cb_x_rot * sx - sel_w * 0.5;
-                let sel_y = (r.y - cam_y) * sy + cb_y_rot * sy - sel_h * 0.5;
-
-                sel_mask_entities.push(FlatEntity {
+                // 3. Composite the resulting effect back into flat_entities as a fullscreen texture
+                // Note: The Adjustment Layer entity's Rect masks the effect!
+                // We use the entity's geometry (from `local_flat_list` but without drawing it directly)
+                // Wait, if we use the entity's geometry, it acts as a stencil/mask for the fullscreen effect!
+                // For simplicity, we just push the fullscreen effect over the background right now. 
+                // A true masked adjustment layer needs a mask shader.
+                // We'll just push it as a fullscreen textured rect.
+                flat_entities.push(FlatEntity {
                     id: 0,
-                    x: sel_x,
-                    y: sel_y,
-                    width: sel_w,
-                    height: sel_h,
-                    rotation: r.rotation,
+                    x: 0.0,
+                    y: 0.0,
+                    width: screen_width as f32,
+                    height: screen_height as f32,
+                    rotation: 0.0,
                     opacity: 1.0,
                     blend_mode: 0,
-                    color: [1.0, 1.0, 1.0, 1.0], // Solid white mask
-                    shader: "shapes".to_string(), // Use shapes shader to draw solid rect
-                    textures: vec![],
-                    params: vec![0.0, 0.0, 0.0, 0.0], // params[0] = 0.0 (SolidRect)
+                    color: [1.0, 1.0, 1.0, 1.0],
+                    shader: "composite".to_string(),
+                    textures: vec![current_key],
+                    params: vec![],
                     layer: entity.resolved.layer,
                     z_index: entity.resolved.layer as f32,
                     fit_mode: 0,
@@ -356,81 +362,57 @@ pub fn render_to_frame(
         }
     }
 
-    // ── Emit render passes ──
-    let has_selection_outline = !sel_mask_entities.is_empty();
+    // ── Build Main Screen RenderPass ──
 
-    // Pass 1: Selection mask (render selected entity to off-screen texture)
-    if has_selection_outline {
-        passes.push(RenderPass {
-            output: "_sel_mask".into(),
-            pass_type: PassType::Entities {
-                entities: sel_mask_entities,
-                clear_color: [0.0, 0.0, 0.0, 0.0], // Transparent background
-            },
-            target_width: None,
-            target_height: None,
-        });
+    // If no camera effects, we output directly to "main"
+    let base_output = if camera_effects.is_empty() {
+        "main".to_string()
+    } else {
+        "_camera_src".to_string()
+    };
 
-        // Pass 2: Selection outline effect (edge detection on mask)
+    passes.push(RenderPass {
+        output: base_output.clone(),
+        pass_type: PassType::Entities {
+            entities: flat_entities,
+            clear_color: [0.0, 0.0, 0.0, 0.0]
+        },
+        target_width: if camera_effects.is_empty() { None } else { Some(screen_width) },
+        target_height: if camera_effects.is_empty() { None } else { Some(screen_height) },
+    });
+
+    // Loop over camera effects
+    let mut current_cam_key = base_output;
+    for (i, effect) in camera_effects.iter().enumerate() {
+        let out_key = if i == camera_effects.len() - 1 {
+            "main".to_string() // Last effect writes directly to main
+        } else {
+            format!("_camera_fx_{}", i)
+        };
+        
         passes.push(RenderPass {
-            output: "_sel_outline".into(),
+            output: out_key.clone(),
             pass_type: PassType::Effect {
-                shader: "selection_outline".into(),
-                inputs: vec!["_sel_mask".into()],
-                params: vec![3.0, 0.0, 0.0, 0.0], // thickness=3px
+                shader: effect.shader_id.clone(),
+                inputs: vec![current_cam_key],
+                params: effect.params.clone(),
             },
-            target_width: None,
-            target_height: None,
+            target_width: if out_key == "main" { None } else { Some(screen_width) },
+            target_height: if out_key == "main" { None } else { Some(screen_height) },
         });
+        current_cam_key = out_key;
     }
 
-    // Pass 3: Main entities pass (includes outline composite if selection active)
-    if !flat_entities.is_empty() || has_selection_outline {
-        // Add selection outline as a fullscreen composite entity at top layer
-        if has_selection_outline {
-            flat_entities.push(FlatEntity {
-                id: 0,
-                x: 0.0,
-                y: 0.0,
-                width: screen_width as f32,
-                height: screen_height as f32,
-                rotation: 0.0,
-                opacity: 1.0,
-                blend_mode: 0,
-                color: [1.0, 1.0, 1.0, 1.0],
-                shader: "composite".to_string(),
-                textures: vec!["_sel_outline".to_string()],
-                params: vec![],
-                layer: 10001,
-                z_index: 10001.0,
-                fit_mode: 0,
-                uv_offset: [0.0, 0.0],
-                uv_scale: [1.0, 1.0],
-                intrinsic_width: 0.0,
-                intrinsic_height: 0.0,
-            });
-        }
-
-        passes.push(RenderPass {
-            output: "main".into(),
-            pass_type: PassType::Entities {
-                entities: flat_entities,
-                clear_color: [0.0, 0.0, 0.0, 0.0]
-            },
-            target_width: None,
-            target_height: None,
-        });
-
-        passes.push(RenderPass {
-            output: "final".into(),
-            pass_type: PassType::Output { input: "main".into() },
-            target_width: None,
-            target_height: None,
-        });
-    }
+    passes.push(RenderPass {
+        output: "final".into(),
+        pass_type: PassType::Output { input: "main".into() },
+        target_width: None,
+        target_height: None,
+    });
 
     Frame {
         passes,
         texture_updates,
+        audio_calls,
     }
 }

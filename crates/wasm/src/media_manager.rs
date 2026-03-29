@@ -76,10 +76,12 @@ impl WasmMediaManager {
         }));
 
         // Ready Callback
-        let entry_clone = entry.clone();
+        let entry_weak = Rc::downgrade(&entry);
         let ready_closure = Closure::wrap(Box::new(move |_e: web_sys::Event| {
-            if let Ok(mut lock) = entry_clone.try_borrow_mut() {
-                lock.ready = true;
+            if let Some(entry_rc) = entry_weak.upgrade() {
+                if let Ok(mut lock) = entry_rc.try_borrow_mut() {
+                    lock.ready = true;
+                }
             }
         }) as Box<dyn FnMut(web_sys::Event)>);
         let _ = el.add_event_listener_with_callback("loadedmetadata", ready_closure.as_ref().unchecked_ref());

@@ -12,7 +12,7 @@ pub mod registry;
 #[cfg(test)]
 mod tests;
 
-use crate::scene::{AssetDef, FloatTrack, Lifespan, MaterialV2, StringTrack};
+use crate::schema::v2::AssetDef;
 use crate::time::EntityTime;
 
 use serde::{Deserialize, Serialize};
@@ -154,13 +154,13 @@ impl World {
         }
     }
 
-    /// Get the URL for an asset by its ID.
     pub fn resolve_asset_url(&self, asset_id: &str) -> Option<&str> {
         self.assets.get(asset_id).map(|a| match a {
             AssetDef::Video { url } => url.as_str(),
             AssetDef::Image { url } => url.as_str(),
             AssetDef::Font { url } => url.as_str(),
             AssetDef::Audio { url } => url.as_str(),
+            AssetDef::Shader { url } => url.as_str(),
         })
     }
 
@@ -234,6 +234,63 @@ impl World {
             }
         }
 
+        self.rebuild_index();
+
+        // ── Topological Sort (Parents before Children) ──
+        let mut visited = std::collections::HashSet::new();
+        let mut roots = Vec::new();
+        let mut children_map: HashMap<String, Vec<String>> = HashMap::new();
+
+        // Build relationships
+        for ent in &self.entities {
+            let mut is_root = true;
+            if let Some(pid) = self.storages.get_component::<crate::ecs::components::meta::ParentId>(&ent.id) {
+                if self.id_index.contains_key(&pid.0) {
+                    is_root = false;
+                    children_map.entry(pid.0.clone()).or_default().push(ent.id.clone());
+                }
+            }
+            if is_root {
+                roots.push(ent.id.clone());
+            }
+        }
+
+        // Recursive flattening
+        fn visit(
+            id: &str, 
+            cmap: &HashMap<String, Vec<String>>, 
+            visited: &mut std::collections::HashSet<String>, 
+            sorted_ids: &mut Vec<String>
+        ) {
+            if visited.insert(id.to_string()) {
+                sorted_ids.push(id.to_string());
+                if let Some(children) = cmap.get(id) {
+                    for child in children {
+                        visit(child, cmap, visited, sorted_ids);
+                    }
+                }
+            }
+        }
+
+        let mut sorted_ids = Vec::with_capacity(self.entities.len());
+        for root in roots {
+            visit(&root, &children_map, &mut visited, &mut sorted_ids);
+        }
+        
+        // Add any disconnected cycles
+        for ent in &self.entities {
+            if !visited.contains(&ent.id) {
+                visit(&ent.id.clone(), &children_map, &mut visited, &mut sorted_ids);
+            }
+        }
+
+        // Apply new order
+        let mut id_to_entity: HashMap<String, Entity> = self.entities.drain(..).map(|e| (e.id.clone(), e)).collect();
+        for id in sorted_ids {
+            if let Some(ent) = id_to_entity.remove(&id) {
+                self.entities.push(ent);
+            }
+        }
         self.rebuild_index();
     }
 }

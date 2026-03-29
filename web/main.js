@@ -1,4 +1,5 @@
-import init, { IfolRenderWeb } from '../crates/wasm/pkg/ifol_render_wasm.js';
+import init, { IfolRenderWeb } from 'ifol-render-wasm';
+import { createTC19Json } from './tc19_super_stress.js';
 
 let engine = null;
 let playing = false;
@@ -288,7 +289,7 @@ function detectDuration(scene) {
             }
         }
     }
-    return Math.min(maxEnd, 100); // Cap at 100s
+    return maxEnd; // Uncapped duration representing true maximum lifespan of entities.
 }
 
 // ─── RENDER LOOP ───
@@ -716,7 +717,7 @@ function renderTimeline() {
             ctx.fillText('⟳', barX + 3, barY + barH - 2);
         }
         
-        // Keyframe diamonds
+        // Keyframe diamonds (Animation Component)
         if (ent.animation && ent.animation.floatTracks) {
             for (const ft of ent.animation.floatTracks) {
                 if (ft.track && ft.track.keyframes) {
@@ -724,6 +725,25 @@ function renderTimeline() {
                         const kx = timeToX(kf.time);
                         if (kx >= barX && kx <= barX + barW) {
                             drawKeyframeDiamond(ctx, kx, y + TRACK_HEIGHT / 2, 4);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Keyframe diamonds (Material Uniforms)
+        if (ent.materials) {
+            for (const mat of ent.materials) {
+                if (mat.float_uniforms) {
+                    for (const key in mat.float_uniforms) {
+                        const track = mat.float_uniforms[key];
+                        if (track && track.keyframes) {
+                            for (const kf of track.keyframes) {
+                                const kx = timeToX(kf.time);
+                                if (kx >= barX && kx <= barX + barW) {
+                                    drawKeyframeDiamond(ctx, kx, y + TRACK_HEIGHT / 2, 4);
+                                }
+                            }
                         }
                     }
                 }
@@ -1614,6 +1634,204 @@ $('btnTestCase13').onclick = () => {
     if(engine) applyJson();
 };
 
+// ─── TC14: Blur and Glow Effects ───
+$('btnTestCase14').onclick = () => {
+    // Requires Blur and Glow shaders
+    const webImgUrl = "https://picsum.photos/400";
+    $('jsonEditor').value = JSON.stringify({
+        assets: {
+            "blur_shader": { type: "shader", url: "./examples/blur.wgsl" }, // uses built-in or loaded blur
+            "glow_shader": { type: "shader", url: "./examples/glow.wgsl" },
+            "photo": { type: "image", url: webImgUrl },
+            "inter": { type: "font", url: "https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuGKYMZhrib2Bg-4.ttf" }
+        },
+        entities: [
+            BASE_CAM,
+            { id: "bg", shapeSource: { kind: "rectangle", fillColor: [0.1, 0.1, 0.1, 1.0] }, rect: {width:1280,height:720}, transform: {x:0,y:0,rotation:0,scaleX:1,scaleY:1,anchorX:0,anchorY:0}, layer: 0 },
+            
+            // 1. Text with Glow (Padded - defaults to bleeding outside original rect)
+            {
+                id: "text_glow_padded",
+                textSource: { content: "PADDED GLOW", fontSize: 60, color: [1, 1, 1, 1], font: "inter" },
+                rect: { width: 500, height: 200, fitMode: "contain" },
+                transform: {x:320, y:200, rotation:0, scaleX:1, scaleY:1, anchorX:0.5, anchorY:0.5},
+                materials: [
+                    {
+                        shader_id: "glow",
+                        scope: "padded",
+                        float_uniforms: {
+                            u0_r: { keyframes: [{time: 0, value: 0.0}] },
+                            u1_g: { keyframes: [{time: 0, value: 0.8}] },
+                            u2_b: { keyframes: [{time: 0, value: 1.0}] },
+                            u3_a: { keyframes: [{time: 0, value: 1.0}] },
+                            u4_size: { keyframes: [{time: 0, value: 15.0}] },
+                            u5_intensity: { keyframes: [{time: 0, value: 2.0}] },
+                            u6_pad1: { keyframes: [{time: 0, value: 0.0}] },
+                            u7_pad2: { keyframes: [{time: 0, value: 0.0}] }
+                        }
+                    }
+                ],
+                lifespan: {start:0, end:10},
+                layer: 1
+            },
+            
+            // 2. Text with Glow (Masked - Inner glow, does not bleed)
+            {
+                id: "text_glow_masked",
+                textSource: { content: "MASKED GLOW", fontSize: 60, color: [1, 1, 1, 1], font: "inter" },
+                rect: { width: 500, height: 200, fitMode: "contain" },
+                transform: {x:320, y:520, rotation:0, scaleX:1, scaleY:1, anchorX:0.5, anchorY:0.5},
+                materials: [
+                    {
+                        shader_id: "glow",
+                        scope: "masked", // Output is multiplied by the original alpha mask!
+                        float_uniforms: {
+                            u0_r: { keyframes: [{time: 0, value: 1.0}] },
+                            u1_g: { keyframes: [{time: 0, value: 0.8}] },
+                            u2_b: { keyframes: [{time: 0, value: 0.0}] },
+                            u3_a: { keyframes: [{time: 0, value: 1.0}] },
+                            u4_size: { keyframes: [{time: 0, value: 30.0}] },
+                            u5_intensity: { keyframes: [{time: 0, value: 4.0}] },
+                            u6_pad1: { keyframes: [{time: 0, value: 0.0}] },
+                            u7_pad2: { keyframes: [{time: 0, value: 0.0}] }
+                        }
+                    }
+                ],
+                lifespan: {start:0, end:10},
+                layer: 1
+            },
+
+            // 3. Image with Blur
+            {
+                id: "img_blur",
+                imageSource: { assetId: "photo" },
+                rect: {width: 300, height: 300, fitMode: "stretch"},
+                transform: {x:960, y:360, rotation:0, scaleX:1, scaleY:1, anchorX:0.5, anchorY:0.5},
+                materials: [
+                    {
+                        shader_id: "blur",
+                        scope: "padded", // Let the blur bleed outside
+                        float_uniforms: {
+                            u0_dx: { keyframes: [{time: 0, value: 1.0}] },
+                            u1_dy: { keyframes: [{time: 0, value: 1.0}] },
+                            u2_radius: { keyframes: [{time: 0, value: 0}, {time: 2, value: 20}, {time: 4, value: 0}] },
+                            u3_texel: { keyframes: [{time: 0, value: 0.003}] }
+                        }
+                    }
+                ],
+                lifespan: {start:0, end:10},
+                layer: 1
+            }
+        ]
+    }, null, 2);
+    if(engine) applyJson();
+};
+
+// ─── TC15: Drop Shadow Matrix ───
+$('btnTestCase15').onclick = () => {
+    $('jsonEditor').value = JSON.stringify({
+        assets: {
+            "shadow_shader": { type: "shader", url: "./examples/drop_shadow.wgsl" },
+            "inter": { type: "font", url: "https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuGKYMZhrib2Bg-4.ttf" }
+        },
+        entities: [
+            BASE_CAM,
+            { id: "bg", shapeSource: { kind: "rectangle", fillColor: [0.9, 0.9, 0.9, 1.0] }, rect: {width:1280,height:720}, transform: {x:0,y:0,rotation:0,scaleX:1,scaleY:1,anchorX:0,anchorY:0}, layer: 0 },
+            
+            {
+                id: "rect_shadow",
+                shapeSource: { kind: "rectangle", fillColor: [0.9, 0.2, 0.2, 1] },
+                rect: { width: 200, height: 200 },
+                transform: {x:640, y:360, rotation: 0.5, scaleX:1, scaleY:1, anchorX:0.5, anchorY:0.5},
+                materials: [
+                    {
+                        shader_id: "drop_shadow",
+                        float_uniforms: {
+                            u0_r: { keyframes: [{time: 0, value: 0.0}] },
+                            u1_g: { keyframes: [{time: 0, value: 0.0}] },
+                            u2_b: { keyframes: [{time: 0, value: 0.0}] },
+                            u3_a: { keyframes: [{time: 0, value: 0.8}] },
+                            u4_offset_x: { keyframes: [{time: 0, value: 20.0}] },
+                            u5_offset_y: { keyframes: [{time: 0, value: 30.0}] },
+                            u6_blur: { keyframes: [{time: 0, value: 15.0}] },
+                            u7_pad: { keyframes: [{time: 0, value: 0.0}] }
+                        }
+                    }
+                ],
+                animation: {
+                    floatTracks: [
+                        {
+                            target: "transformRotation",
+                            track: {
+                                keyframes: [
+                                    {time: 0, value: 0},
+                                    {time: 5, value: 6.28}
+                                ]
+                            }
+                        }
+                    ]
+                },
+                lifespan: {start:0, end:10},
+                layer: 1
+            }
+        ]
+    }, null, 2);
+    if(engine) applyJson();
+};
+
+// ─── TC16: Multi Effect Chain ───
+$('btnTestCase16').onclick = () => {
+    $('jsonEditor').value = JSON.stringify({
+        assets: {
+            "shadow_shader": { type: "shader", url: "./examples/drop_shadow.wgsl" },
+            "glow_shader": { type: "shader", url: "./examples/glow.wgsl" },
+            "inter": { type: "font", url: "https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuGKYMZhrib2Bg-4.ttf" }
+        },
+        entities: [
+            BASE_CAM,
+            { id: "bg", shapeSource: { kind: "rectangle", fillColor: [0.1, 0.1, 0.15, 1.0] }, rect: {width:1280,height:720}, transform: {x:0,y:0,rotation:0,scaleX:1,scaleY:1,anchorX:0,anchorY:0}, layer: 0 },
+            
+            {
+                id: "text_chain",
+                textSource: { content: "CHAINED EFFECTS", fontSize: 80, color: [1, 1, 1, 1], font: "inter" },
+                rect: { width: 800, height: 200, fitMode: "contain" },
+                transform: {x:640, y:360, rotation:0, scaleX:1, scaleY:1, anchorX:0.5, anchorY:0.5},
+                materials: [
+                    {
+                        shader_id: "glow",
+                        float_uniforms: {
+                            u0_r: { keyframes: [{time: 0, value: 1.0}] },
+                            u1_g: { keyframes: [{time: 0, value: 0.2}] },
+                            u2_b: { keyframes: [{time: 0, value: 0.8}] },
+                            u3_a: { keyframes: [{time: 0, value: 1.0}] },
+                            u4_size: { keyframes: [{time: 0, value: 10.0}] },
+                            u5_intensity: { keyframes: [{time: 0, value: 1.5}] },
+                            u6_pad: { keyframes: [{time: 0, value: 0.0}] },
+                            u7_pad: { keyframes: [{time: 0, value: 0.0}] }
+                        }
+                    },
+                    {
+                        shader_id: "drop_shadow",
+                        float_uniforms: {
+                            u0_r: { keyframes: [{time: 0, value: 0.0}] },
+                            u1_g: { keyframes: [{time: 0, value: 0.0}] },
+                            u2_b: { keyframes: [{time: 0, value: 0.0}] },
+                            u3_a: { keyframes: [{time: 0, value: 0.9}] },
+                            u4_offset_x: { keyframes: [{time: 0, value: 10.0}] },
+                            u5_offset_y: { keyframes: [{time: 0, value: 10.0}] },
+                            u6_blur: { keyframes: [{time: 0, value: 8.0}] },
+                            u7_pad: { keyframes: [{time: 0, value: 0.0}] }
+                        }
+                    }
+                ],
+                lifespan: {start:0, end:10},
+                layer: 1
+            }
+        ]
+    }, null, 2);
+    if(engine) applyJson();
+};
+
 // ─── TC17: Explicit Audio/Video Keyframe Sync ───
 $('btnTestCase17').onclick = () => {
     $('jsonEditor').value = JSON.stringify({
@@ -1679,7 +1897,7 @@ $('btnTestCase17').onclick = () => {
 };
 
 // ─── TC13: Text Rendering via ab_glyph TTF ArrayBuffer ───
-$('btnTestCase13').onclick = () => {
+$('btnTestCase13b').onclick = () => {
     $('jsonEditor').value = JSON.stringify({
         assets: {
             "font_anton": { type: "font", url: "http://localhost:5173/examples/Anton-Regular.ttf" }
@@ -1710,6 +1928,245 @@ $('btnTestCase13').onclick = () => {
         ]
     }, null, 2);
     if(engine) applyJson();
+};
+
+// ─── TC18: Comprehensive Blur Test ───
+$('btnTestCase18').onclick = () => {
+    $('jsonEditor').value = JSON.stringify({
+        assets: {
+            "blur_shader": { type: "shader", url: "./examples/blur.wgsl" },
+            "photo": { type: "image", url: "https://picsum.photos/400" },
+            "inter": { type: "font", url: "https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuGKYMZhrib2Bg-4.ttf" }
+        },
+        entities: [
+            BASE_CAM,
+            { id: "bg", shapeSource: { kind: "rectangle", fillColor: [0.1, 0.1, 0.15, 1.0] }, rect: {width:1280,height:720}, transform: {x:0,y:0,rotation:0,scaleX:1,scaleY:1,anchorX:0,anchorY:0}, layer: 0 },
+            
+            // 1. Text Blur: Padded (bleeds soft light outward)
+            {
+                id: "padded_text",
+                textSource: { content: "PADDED TEXT", fontSize: 50, color: [1, 1, 1, 1], font: "inter" },
+                rect: { width: 400, height: 100, fitMode: "contain" },
+                transform: {x:320, y:200, rotation:0, scaleX:1, scaleY:1, anchorX:0.5, anchorY:0.5},
+                materials: [{
+                    shader_id: "blur", scope: "padded",
+                    float_uniforms: {
+                        u0_dx: { keyframes: [{time:0, value:1.0}] },
+                        u1_dy: { keyframes: [{time:0, value:1.0}] },
+                        u2_radius: { keyframes: [{time:0, value:25.0}] },
+                        u3_texel: { keyframes: [{time:0, value:0.003}] }
+                    }
+                }],
+                lifespan: {start:0, end:10},
+                layer: 1
+            },
+            
+            // 2. Shape Blur: Masked (keeps exact original solid silhouette)
+            {
+                id: "masked_shape",
+                shapeSource: { kind: "solid_ellipse", fillColor: [0.3, 0.8, 0.4, 1.0] },
+                rect: { width: 150, height: 150 },
+                transform: {x:960, y:200, rotation:0, scaleX:1, scaleY:1, anchorX:0.5, anchorY:0.5},
+                materials: [{
+                    shader_id: "blur", scope: "masked", // Output is multiplied by original alpha !
+                    float_uniforms: {
+                        u0_dx: { keyframes: [{time:0, value:1.0}] },
+                        u1_dy: { keyframes: [{time:0, value:1.0}] },
+                        u2_radius: { keyframes: [{time:0, value:15.0}] },
+                        u3_texel: { keyframes: [{time:0, value:0.01}] } // Coarse blur
+                    }
+                }],
+                lifespan: {start:0, end:10},
+                layer: 1
+            },
+            
+            // 3. Image Blur: Clipped (sharp boundary at the rect box)
+            {
+                id: "clipped_img",
+                imageSource: { assetId: "photo" },
+                rect: { width: 250, height: 250, fitMode: "stretch" },
+                transform: {x:320, y:500, rotation:0, scaleX:1, scaleY:1, anchorX:0.5, anchorY:0.5},
+                materials: [{
+                    shader_id: "blur", scope: "clipped", // Clamped at 250x250, no bleed outside
+                    float_uniforms: {
+                        u0_dx: { keyframes: [{time:0, value:1.0}] },
+                        u1_dy: { keyframes: [{time:0, value:1.0}] },
+                        u2_radius: { keyframes: [{time:0, value:20.0}] },
+                        u3_texel: { keyframes: [{time:0, value:0.003}] }
+                    }
+                }],
+                lifespan: {start:0, end:10},
+                layer: 1
+            },
+            
+            // 4. Base Image underneath Adjustment Layer
+            {
+                id: "base_img",
+                imageSource: { assetId: "photo" },
+                rect: { width: 400, height: 300, fitMode: "stretch" },
+                transform: {x:960, y:500, rotation:0, scaleX:1, scaleY:1, anchorX:0.5, anchorY:0.5},
+                lifespan: {start:0, end:10},
+                layer: 1
+            },
+            
+            // 5. Adjustment Layer Blur: Layer (blurs everything physically under this rect)
+            {
+                id: "layer_blur",
+                shapeSource: { kind: "rectangle", fillColor: [1, 1, 1, 0.0] }, // Invisible bounds
+                rect: { width: 350, height: 150 }, // Half height to show bottom half sharp
+                transform: {x:960, y:500, rotation:0, scaleX:1, scaleY:1, anchorX:0.5, anchorY:0.5},
+                materials: [{
+                    shader_id: "blur", scope: "layer", // Screenspace effect applying to anything under the 400x150 box
+                    float_uniforms: {
+                        u0_dx: { keyframes: [{time:0, value:1.0}] },
+                        u1_dy: { keyframes: [{time:0, value:1.0}] },
+                        u2_radius: { keyframes: [{time:0, value:0.0}, {time:2, value:30.0}, {time:4, value:0.0}] },
+                        u3_texel: { keyframes: [{time:0, value:0.003}] }
+                    }
+                }],
+                lifespan: {start:0, end:10},
+                layer: 5 // Must be higher than the target
+            }
+        ]
+    }, null, 2);
+    if(engine) applyJson();
+};
+
+// ─── TC19: Backend Export Heavy TC (Super Stress Test) ───
+// Tests everything from TC1 to TC18 inside a ~6 minute composition matching exact video length
+// Extracted to tc19_super_stress.js to keep main.js readable
+$('btnTestCase19').onclick = () => {
+    // Exact duration extracted from ffprobe (353.639683 seconds)
+    const v_dur = 353.639683;
+    
+    // Generate the big JSON representing the stress test
+    const jsonObj = createTC19Json(v_dur);
+    
+    $('jsonEditor').value = JSON.stringify(jsonObj, null, 2);
+    if(engine) applyJson();
+};
+
+// ════════════════════════════════════════════════════════════════════
+// ─── EXPORT MODAL LOGIC ───
+// ════════════════════════════════════════════════════════════════════
+
+const exportModal = $('exportModal');
+
+$('btnExport').onclick = () => {
+    exportModal.style.display = 'flex';
+};
+
+$('btnCancelExport').onclick = () => {
+    exportModal.style.display = 'none';
+};
+
+$('btnConfirmExport').onclick = async () => {
+    const dir = $('exportDir').value || 'C:\\Users\\abc\\Desktop';
+    const filename = $('exportFilename').value || 'output.mp4';
+    const codec = $('exportCodec').value || 'h264';
+    const preset = $('exportPreset').value || 'medium';
+    const crf = parseInt($('exportCRF').value, 10) || 23;
+    const fpsOverride = parseInt($('exportFPS').value, 10) || 60;
+    const ffmpeg_path = $('exportFFmpeg').value || '';
+    
+    // Combine path
+    const fullPath = dir.replace(/\\/g, '/') + '/' + filename;
+
+    // Parse current JSON from the Editor
+    let sceneJson;
+    try {
+        sceneJson = JSON.parse($('jsonEditor').value);
+    } catch(e) {
+        alert("Invalid Scene JSON. Cannot export.");
+        return;
+    }
+    
+    // 1. UI Loading state
+    $('btnConfirmExport').disabled = true;
+    $('btnCancelExport').disabled = true;
+    $('exportModalActions').style.display = 'none';
+    $('exportProgressContainer').style.display = 'block';
+    $('exportProgressBar').style.width = '0%';
+    $('exportProgressText').textContent = 'Starting Backend Parser...';
+    $('exportProgressEta').textContent = 'ETA: --';
+    
+    $('lblStatus').textContent = "Exporting via Backend...";
+    $('lblStatus').style.color = "#f59e0b";
+    
+    let pollInterval;
+    const cleanup = () => {
+        clearInterval(pollInterval);
+        exportModal.style.display = 'none';
+        $('btnConfirmExport').disabled = false;
+        $('btnCancelExport').disabled = false;
+        $('exportModalActions').style.display = 'flex';
+        $('exportProgressContainer').style.display = 'none';
+    };
+
+    try {
+        // Send request to Vite Dev Server internal proxy
+        const res = await fetch('/api/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                scene: sceneJson,
+                filename: fullPath,
+                codec: codec,
+                preset: preset,
+                crf: crf,
+                fps: fpsOverride,
+                ffmpeg: ffmpeg_path || undefined
+            })
+        });
+        
+        if(res.ok) {
+            // Start Polling Loop Every 500ms
+            pollInterval = setInterval(async () => {
+                try {
+                    const statusRes = await fetch('/api/export/progress');
+                    if (statusRes.ok) {
+                        const state = await statusRes.json();
+                        
+                        // Update Progress UI
+                        if (state.status === 'exporting') {
+                            $('exportProgressBar').style.width = `${state.percent}%`;
+                            $('exportProgressText').textContent = `Rendering: ${state.frame} / ${state.total} frames (${state.percent.toFixed(1)}%) | ${state.fps.toFixed(1)} fps`;
+                            $('exportProgressEta').textContent = `ETA: ${state.eta}s`;
+                        } else if (state.status === 'completed') {
+                            $('exportProgressBar').style.width = `100%`;
+                            $('exportProgressText').textContent = `Done! Video encoded successfully.`;
+                            $('exportProgressEta').textContent = `ETA: 0s`;
+                            
+                            clearInterval(pollInterval);
+                            setTimeout(() => {
+                                cleanup();
+                                alert(`✅ Export successfully completed in ${state.elapsed}s!\nFile saved to:\n${fullPath}`);
+                                $('lblStatus').textContent = "V4 ECS Ready";
+                                $('lblStatus').style.color = "#10b981";
+                            }, 500);
+                        } else if (state.status === 'error') {
+                            clearInterval(pollInterval);
+                            cleanup();
+                            alert(`❌ Export Failed!\nReason: ${state.error}`);
+                            $('lblStatus').textContent = "V4 ECS Ready";
+                            $('lblStatus').style.color = "#10b981";
+                        }
+                    }
+                } catch(e) {
+                    console.error("Progress poll fetch failed:", e);
+                }
+            }, 500);
+            
+            $('lblStatus').textContent = "Backend Render Active";
+        } else {
+            alert("Export proxy failed: " + res.statusText);
+            cleanup();
+        }
+    } catch(err) {
+        console.error(err);
+        alert("Failed to connect to export proxy. Is the Vite server running via 'npm run dev'?");
+        cleanup();
+    }
 };
 
 // ════════════════════════════════════════════════════════════════════

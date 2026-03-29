@@ -44,7 +44,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
         let theta = i * golden_angle;
         let offset = vec2f(cos(theta), sin(theta)) * r;
         
-        result += textureSample(t_input, t_sampler, in.uv + offset);
+        let sample_uv = in.uv + offset;
+        let c = textureSample(t_input, t_sampler, sample_uv);
+        
+        let mask_x = step(0.0, sample_uv.x) * step(sample_uv.x, 1.0);
+        let mask_y = step(0.0, sample_uv.y) * step(sample_uv.y, 1.0);
+        
+        result += c * (mask_x * mask_y);
         total_weight += 1.0;
     }
 

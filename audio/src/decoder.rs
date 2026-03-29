@@ -16,6 +16,7 @@ pub fn decode_audio(
     path: &str,
     offset: f64,
     duration: Option<f64>,
+    speed: f32,
     config: &AudioConfig,
     ffmpeg_bin: Option<&str>,
 ) -> Result<Vec<f32>, String> {
@@ -36,6 +37,28 @@ pub fn decode_audio(
     cmd.args(["-vn"]); // disable video decoding (audio-only, faster)
     cmd.args(["-f", "f32le"]); // raw 32-bit float PCM
     cmd.args(["-acodec", "pcm_f32le"]);
+    
+    // Build atempo chain for speeds other than 1.0
+    if (speed - 1.0).abs() > 0.001 {
+        let mut cur_speed = speed as f64;
+        let mut filters = Vec::new();
+        // Stack atempo >= 100.0 (max allowed usually 100.0, but to be safe we use 2.0 or 100.0, modern ffmpeg handles 100.0)
+        while cur_speed > 100.0 {
+            filters.push("atempo=100.0".to_string());
+            cur_speed /= 100.0;
+        }
+        // Min allowed is 0.5
+        while cur_speed < 0.5 && cur_speed > 0.0 {
+            filters.push("atempo=0.5".to_string());
+            cur_speed /= 0.5;
+        }
+        if (cur_speed - 1.0).abs() > 0.001 && cur_speed > 0.0 {
+            filters.push(format!("atempo={:.4}", cur_speed));
+        }
+        if !filters.is_empty() {
+            cmd.args(["-af", &filters.join(",")]);
+        }
+    }
     cmd.args(["-ar", &config.sample_rate.to_string()]);
     cmd.args(["-ac", &config.channels.to_string()]);
     cmd.arg("-v").arg("quiet");

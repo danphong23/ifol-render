@@ -105,7 +105,7 @@ pub fn animation_system(world: &mut World) {
                 if track.track.keyframes.is_empty() {
                     continue;
                 }
-                let val = track.track.evaluate(local_time, "");
+                let _val = track.track.evaluate(local_time, "");
                 match track.target {
                     AnimTarget::BlendMode => {
                         // TODO: Map string back to BlendMode enum

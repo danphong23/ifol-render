@@ -3,7 +3,7 @@ use ifol_render_core::frame::{Frame, RenderSettings};
 use ifol_render_core::PipelineConfig;
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
-use ifol_render_core::backend::media::MediaBackend;
+
 
 mod web_backend;
 use web_backend::WebMediaBackend;
@@ -232,6 +232,14 @@ impl IfolRenderWeb {
         Ok(())
     }
 
+    #[wasm_bindgen]
+    pub fn parse_v2_json(scene_json: &str) -> String {
+        match serde_json::from_str::<ifol_render_ecs::scene::SceneV2>(scene_json) {
+            Ok(scene) => format!("Success. Parsed {} assets.", scene.assets.len()),
+            Err(e) => format!("Error parsing: {}", e)
+        }
+    }
+
     /// Render exactly one frame evaluated at `time_sec` from the given `camera_id` perspective.
     pub fn render_frame_v2(
         &mut self,
@@ -309,7 +317,7 @@ impl IfolRenderWeb {
                     }
                     
                     if let Some((el, w, h)) = self.media_manager.get_video_frame(&entity.id, url, seek_time, self.is_playing) {
-                        self.engine.renderer_mut().load_video_texture_web(url, &el, w, h);
+                        self.engine.load_video_texture_web(url, &el, w, h);
                         if video_source.intrinsic_width <= 0.0 || video_source.intrinsic_height <= 0.0 {
                             intrinsic_updates.push((entity.id.clone(), w as f32, h as f32));
                         }
@@ -348,13 +356,34 @@ impl IfolRenderWeb {
         // 3. Compile World to Frame
         let w = self.engine.settings().width;
         let h = self.engine.settings().height;
-        let frame = ifol_render_ecs::ecs::systems::render_to_frame(
-            &world, camera_id, is_editor_mode, w, h, time_sec,
+        
+        // 3.1. Editor Phase (Gizmos)
+        let selected_refs: Vec<&str> = self.selected_entity_ids.iter().map(|s| s.as_str()).collect();
+        // Wait, editor_gizmo_system MUST run AFTER render_to_frame because it appends to the Frame!
+
+
+        // 3.2. Core Render Phase
+        let mut frame = ifol_render_ecs::ecs::systems::render_to_frame(
+            &world, camera_id, w, h, time_sec,
             custom_cam_x, custom_cam_y, custom_cam_w, custom_cam_h,
-            self.selected_entity_ids.iter().map(|s| s.as_str()).collect::<Vec<_>>().as_slice(),
             self.render_scope.as_deref(),
-            &self.select_mode,
         );
+        
+        if is_editor_mode {
+            let cam = world.find_camera(camera_id);
+            let cam_x = custom_cam_x.unwrap_or_else(|| cam.map(|c| c.resolved.x).unwrap_or(0.0));
+            let cam_y = custom_cam_y.unwrap_or_else(|| cam.map(|c| c.resolved.y).unwrap_or(0.0));
+            let cam_w = custom_cam_w.unwrap_or_else(|| cam.map(|c| c.resolved.width).unwrap_or(1280.0)).max(1.0);
+            let cam_h = custom_cam_h.unwrap_or_else(|| cam.map(|c| c.resolved.height).unwrap_or(720.0)).max(1.0);
+            
+            let sx = w as f32 / cam_w;
+            let sy = h as f32 / cam_h;
+
+            ifol_render_ecs::ecs::systems::editor_gizmo_system(
+                &world, &mut frame, &selected_refs, &self.select_mode,
+                cam_x, cam_y, sx, sy, w, h
+            );
+        }
         
         self.v2_world = Some(world);
         

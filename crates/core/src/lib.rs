@@ -7,6 +7,7 @@
 //! - **Color Management**: sRGB, Linear, ACEScg, Rec709 color space conversions
 //! - **Datatypes**: Vec2, Vec3, Color4, Curve, TimeRange
 
+pub mod schema;
 pub mod assets;
 pub mod color;
 pub mod ecs;

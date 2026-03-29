@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --open --force",
+    "dev": "vite",
     "build": "vite build"
   },
   "dependencies": {

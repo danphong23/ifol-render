@@ -1,0 +1,66 @@
+{
+  "settings": {
+    "width": 1280,
+    "height": 720,
+    "fps": 60
+  },
+  "assets": {
+    "inter": {
+      "type": "font",
+      "url": "https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuGKYMZhrib2Bg-4.ttf"
+    }
+  },
+  "entities": [
+    {
+      "id": "main_cam",
+      "camera": { "postEffects": [] },
+      "rect": { "width": 1280, "height": 720 },
+      "transform": { "x": 0, "y": 0, "rotation": 0, "scaleX": 1, "scaleY": 1, "anchorX": 0, "anchorY": 0 },
+      "lifespan": { "start": 0, "end": 2.0 }
+    },
+    {
+      "id": "bg",
+      "shapeSource": {
+        "kind": "rectangle",
+        "fillColor": [0.1, 0.1, 0.15, 1.0]
+      },
+      "rect": { "width": 1280, "height": 720 },
+      "transform": { "x": 0, "y": 0, "rotation": 0, "scaleX": 1, "scaleY": 1, "anchorX": 0, "anchorY": 0 },
+      "lifespan": { "start": 0, "end": 2.0 }
+    },
+    {
+      "id": "text_blur",
+      "textSource": {
+        "content": "ENTITY BLUR TEST",
+        "fontSize": 80,
+        "color": [1, 1, 1, 1],
+        "font": "inter"
+      },
+      "rect": { "width": 800, "height": 200, "fitMode": "contain" },
+      "transform": { "x": 640, "y": 360, "rotation": 0, "scaleX": 1, "scaleY": 1, "anchorX": 0.5, "anchorY": 0.5 },
+      "lifespan": { "start": 0, "end": 2.0 },
+      "materials": [
+        {
+          "shader_id": "blur",
+          "scope": "padded",
+          "float_uniforms": {
+            "u0_dirX": { "keyframes": [{ "time": 0, "value": 1.0 }] },
+            "u1_dirY": { "keyframes": [{ "time": 0, "value": 0.0 }] },
+            "u2_rad": { "keyframes": [{ "time": 0, "value": 20.0 }] },
+            "u3_scale": { "keyframes": [{ "time": 0, "value": 1.0 }] }
+          }
+        },
+        {
+          "shader_id": "blur",
+          "scope": "padded",
+          "float_uniforms": {
+            "u0_dirX": { "keyframes": [{ "time": 0, "value": 0.0 }] },
+            "u1_dirY": { "keyframes": [{ "time": 0, "value": 1.0 }] },
+            "u2_rad": { "keyframes": [{ "time": 0, "value": 20.0 }] },
+            "u3_scale": { "keyframes": [{ "time": 0, "value": 1.0 }] }
+          }
+        }
+      ]
+    }
+  ]
+}

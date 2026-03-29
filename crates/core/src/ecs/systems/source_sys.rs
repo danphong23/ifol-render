@@ -46,6 +46,7 @@ pub fn source_system(world: &mut World) {
                 crate::scene::AssetDef::Image { url } => url.clone(),
                 crate::scene::AssetDef::Font { url } => url.clone(),
                 crate::scene::AssetDef::Audio { url } => url.clone(),
+                crate::scene::AssetDef::Shader { url } => url.clone(),
             }).unwrap_or_else(|| asset_id.clone())
         };
 
@@ -81,6 +82,10 @@ pub fn source_system(world: &mut World) {
         } else if let Some(image) = storages.get_component::<crate::ecs::components::ImageSource>(&entity.id) {
             base_call.kind = DrawKind::Texture;
             let url = resolve_url(&image.asset_id);
+            entity.draw.texture_requests.push(TextureRequest::LoadImage {
+                key: url.clone(),
+                asset_url: url.clone(),
+            });
             base_call.texture_key = Some(url.clone());
             apply_fit_mode(&mut base_call);
             entity.draw.draw_calls.push(base_call);
@@ -109,7 +114,15 @@ pub fn source_system(world: &mut World) {
             
             // Map the font URL using resolve_url if it's an asset, otherwise use raw string
             let font_key = resolve_url(&text.font);
-            let font_opt = if font_key.is_empty() { None } else { Some(font_key) };
+            let font_opt = if font_key.is_empty() { 
+                None 
+            } else { 
+                entity.draw.texture_requests.push(TextureRequest::LoadFont {
+                    key: font_key.clone(),
+                    asset_url: font_key.clone(),
+                });
+                Some(font_key) 
+            };
 
             entity.draw.texture_requests.push(TextureRequest::RasterizeText {
                 key: cache_key,

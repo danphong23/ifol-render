@@ -103,7 +103,9 @@ fn apply_blend(base: vec3f, blend: vec3f, mode: f32) -> vec3f {
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     var src: vec4f;
     if (uniforms.use_texture > 0.5) {
-        src = textureSample(t_texture, t_sampler, in.uv);
+        let tex_color = textureSample(t_texture, t_sampler, in.uv);
+        let out_of_bounds = in.uv.x < 0.0 || in.uv.x > 1.0 || in.uv.y < 0.0 || in.uv.y > 1.0;
+        src = select(tex_color, vec4f(0.0, 0.0, 0.0, 0.0), out_of_bounds);
     } else {
         src = uniforms.color;
     }

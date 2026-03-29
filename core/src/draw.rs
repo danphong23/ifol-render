@@ -21,7 +21,7 @@ use std::collections::HashMap;
 ///     uv_scale: vec2f,       //  2 floats — UV scale for fit mode
 /// }
 /// ```
-const COMPOSITE_UNIFORM_FLOATS: usize = 28;
+
 
 /// Convert a FlatEntity to a clip-space transform matrix.
 ///

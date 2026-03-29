@@ -95,6 +95,14 @@ pub fn setup_builtins(renderer: &mut Renderer) {
         );
     }
 
+    if !renderer.has_pipeline("mask_composite") {
+        renderer.register_pipeline(
+            "mask_composite",
+            include_str!("../../shaders/effects/mask_composite.wgsl"),
+            PipelineConfig::fullscreen_two_textures(),
+        );
+    }
+
     // ── Fullscreen effects ──
 
     if !renderer.has_pipeline("blur") {
@@ -107,7 +115,7 @@ pub fn setup_builtins(renderer: &mut Renderer) {
                 ("radius".into(), 4.0),
                 ("texel_size".into(), 0.001),
             ],
-            2,
+            1,
         );
     }
 
@@ -134,6 +142,44 @@ pub fn setup_builtins(renderer: &mut Renderer) {
                 ("smoothness".into(), 0.5),
                 ("_pad0".into(), 0.0),
                 ("_pad1".into(), 0.0),
+            ],
+            1,
+        );
+    }
+
+    // ── Newly added material effects ──
+
+    if !renderer.has_pipeline("glow") {
+        renderer.register_effect(
+            "glow",
+            include_str!("../../web/examples/glow.wgsl"),
+            vec![
+                ("color_r".into(), 1.0),
+                ("color_g".into(), 1.0),
+                ("color_b".into(), 1.0),
+                ("color_a".into(), 1.0),
+                ("size".into(), 10.0),
+                ("intensity".into(), 1.0),
+                ("pad1".into(), 0.0),
+                ("pad2".into(), 0.0),
+            ],
+            1,
+        );
+    }
+
+    if !renderer.has_pipeline("drop_shadow") {
+        renderer.register_effect(
+            "drop_shadow",
+            include_str!("../../web/examples/drop_shadow.wgsl"),
+            vec![
+                ("color_r".into(), 0.0),
+                ("color_g".into(), 0.0),
+                ("color_b".into(), 0.0),
+                ("color_a".into(), 1.0),
+                ("offset_x".into(), 10.0),
+                ("offset_y".into(), 10.0),
+                ("blur".into(), 10.0),
+                ("pad1".into(), 0.0),
             ],
             1,
         );

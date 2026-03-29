@@ -34,8 +34,14 @@ pub fn run(
     systems::hierarchy_system(world, time);
     
     // Phase 5: Culling (skip invisible bounds)
-    // systems::culling_system(world, time);
+    systems::culling_system(world, time);
 
     // Phase 6: Source mapping (populate primitive DrawCalls)
     systems::source_system(world);
+
+    // Phase 7: Material system (generate effect chains)
+    systems::material_system(world);
+
+    // Phase 8: Audio Streaming
+    systems::audio_system(world);
 }

@@ -4,6 +4,7 @@
 //! borrows device/queue from here.
 
 pub mod gpu;
+pub mod texture_cache;
 
 /// Core GPU engine — owns the wgpu instance, adapter, device, and queue.
 pub struct GpuEngine {

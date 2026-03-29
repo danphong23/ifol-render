@@ -6,6 +6,9 @@ pub mod culling_sys;
 pub mod source_sys;
 pub mod render_sys;
 pub mod hit_test;
+pub mod material_sys;
+pub mod editor_gizmo_sys;
+pub mod audio_sys;
 
 pub use time_sys::*;
 pub use animation_sys::*;
@@ -14,3 +17,6 @@ pub use hierarchy_sys::*;
 pub use culling_sys::*;
 pub use source_sys::*;
 pub use render_sys::*;
+pub use material_sys::*;
+pub use editor_gizmo_sys::*;
+pub use audio_sys::*;

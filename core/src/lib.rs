@@ -31,7 +31,6 @@
 pub mod audio;
 pub mod backend;
 pub mod color;
-pub mod compiler;
 pub mod draw;
 pub mod engine;
 pub mod export;

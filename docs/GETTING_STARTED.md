@@ -148,5 +148,7 @@ When an image/video is inside a Rect, FitMode controls scaling:
 ## Further Reading
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — Full ECS pipeline, 6 systems, components, asset pipeline
+- [ASSET_MANAGEMENT.md](ASSET_MANAGEMENT.md) — Quy cách và ranh giới trách nhiệm khi nạp Asset cho Frontend/Backend
+- [TEST_CASES.md](TEST_CASES.md) — Danh sách và giải nghĩa các tính năng lõi (TC1 - TC19) để test
 - [ROADMAP.md](ROADMAP.md) — Bottom-up rebuild roadmap with completion status
 - [CLI_GUIDE.md](CLI_GUIDE.md) — Server-side export commands
