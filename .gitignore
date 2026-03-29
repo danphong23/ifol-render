@@ -40,6 +40,10 @@ crates/wasm/pkg/
 /output.png
 /preview.png
 test_save.json
+temp_export.json
+test_*.png
+test_*.mp4
+ifol_temp_*
 
 # Web tooling
 web/node_modules/

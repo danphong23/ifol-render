@@ -27,6 +27,9 @@ pub struct ExportConfig {
     pub height: Option<u32>,
     /// Path to the FFmpeg binary. If None, searches system PATH.
     pub ffmpeg_path: Option<String>,
+    /// Input pixel format from GPU readback ("rgba" or "bgra").
+    /// Set automatically by CoreEngine based on GPU texture format.
+    pub input_pixel_format: String,
 }
 
 impl Default for ExportConfig {
@@ -41,6 +44,7 @@ impl Default for ExportConfig {
             width: None,
             height: None,
             ffmpeg_path: None,
+            input_pixel_format: "rgba".into(),
         }
     }
 }

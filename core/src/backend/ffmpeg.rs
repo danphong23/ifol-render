@@ -71,7 +71,7 @@ impl MediaBackend for FfmpegMediaBackend {
             .args(["-f", "rawvideo"])
             .args(["-vcodec", "rawvideo"])
             .args(["-s", &format!("{}x{}", width, height)])
-            .args(["-pix_fmt", "rgba"])
+            .args(["-pix_fmt", &config.input_pixel_format])
             .args(["-r", &format!("{}", fps)])
             .args(["-i", "pipe:0"]) // input from stdin
             .args(["-c:v", encoder]);
@@ -88,7 +88,11 @@ impl MediaBackend for FfmpegMediaBackend {
             }
             _ => {
                 // libx264 fallback
-                cmd.args(["-preset", "ultrafast"]);
+                if let Some(p) = &config.preset {
+                    cmd.args(["-preset", p]);
+                } else {
+                    cmd.args(["-preset", "medium"]); // Default to medium instead of ultrafast
+                }
                 cmd.args(["-crf", &config.crf.to_string()]);
             }
         }

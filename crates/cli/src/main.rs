@@ -56,6 +56,9 @@ enum Commands {
         /// Override output frame rate (default: from scene settings).
         #[arg(long)]
         fps: Option<f64>,
+        /// Camera entity ID to render from. If omitted, uses first camera found.
+        #[arg(long)]
+        camera: Option<String>,
     },
 
     /// Validate a scene JSON without rendering to check if its ECS structure is valid.
@@ -82,6 +85,9 @@ enum Commands {
         /// Override output height.
         #[arg(long)]
         height: Option<u32>,
+        /// Camera entity ID to render from. If omitted, uses first camera found.
+        #[arg(long)]
+        camera: Option<String>,
     },
 
     /// Render a Frame JSON file to PNG using CoreEngine.
@@ -127,6 +133,7 @@ fn main() {
             width,
             height,
             fps,
+            camera,
         } => {
             eprintln!("ifol-render export: {:?} → {}", scene, output);
 
@@ -184,10 +191,14 @@ fn main() {
             };
             ifol_render_ecs::ecs::pipeline::run(&mut world, &init_time, None, None);
             
-            // Find camera using ECS-native lookup (supports any camera ID like "main_cam")
-            let camera_id = world.find_camera("")
-                .map(|e| e.id.clone())
-                .unwrap_or_else(|| "cam".to_string());
+            // Find camera: use --camera arg if provided, otherwise auto-detect first visible camera
+            let camera_id = if let Some(ref cam_arg) = camera {
+                cam_arg.clone()
+            } else {
+                world.find_camera("")
+                    .map(|e| e.id.clone())
+                    .unwrap_or_else(|| "cam".to_string())
+            };
             
             let total_frames = (max_end * fps_val).ceil() as usize;
             eprintln!("V2 Scene: {} entities, cam={}, duration={:.1}s, {} frames", 
@@ -267,6 +278,14 @@ fn main() {
             eprintln!(
                 "Export: codec={}, crf={}, preset={}, pix_fmt={}",
                 video_codec.encoder_name(), crf, preset, pixel_format
+            );
+
+            // Detect hardware encoder before creating the engine
+            let ffmpeg_bin = ffmpeg.as_deref().unwrap_or("ffmpeg");
+            let sys_info = ifol_render_core::sysinfo::SysInfo::probe(ffmpeg_bin);
+            eprintln!(
+                "Encoder: {} (hw: {})",
+                sys_info.best_h264_encoder(), sys_info.vendor_name
             );
 
             // Create headless CoreEngine
@@ -376,6 +395,7 @@ fn main() {
                 width: Some(out_w),
                 height: Some(out_h),
                 ffmpeg_path: ffmpeg.clone(),
+                input_pixel_format: "rgba".to_string(), // Engine overrides based on GPU format
             };
 
             let start = std::time::Instant::now();
@@ -556,7 +576,7 @@ fn main() {
             }
         }
 
-        Commands::Preview { scene, time, output, width, height } => {
+        Commands::Preview { scene, time, output, width, height, camera } => {
             let json = std::fs::read_to_string(&scene).unwrap_or_else(|e| {
                 eprintln!("Failed to read {:?}: {}", scene, e);
                 std::process::exit(1);
@@ -591,10 +611,14 @@ fn main() {
             };
             ifol_render_ecs::ecs::pipeline::run(&mut world, &time_state, None, None);
 
-            // Find camera using ECS-native lookup (supports any camera ID)
-            let cam_id = world.find_camera("")
-                .map(|e| e.id.clone())
-                .unwrap_or_else(|| "cam".to_string());
+            // Find camera: use --camera arg if provided, otherwise auto-detect
+            let cam_id = if let Some(ref cam_arg) = camera {
+                cam_arg.clone()
+            } else {
+                world.find_camera("")
+                    .map(|e| e.id.clone())
+                    .unwrap_or_else(|| "cam".to_string())
+            };
 
             // Sync assets before render (using bare fallback to disk)
             for ent in &world.entities {

@@ -124,6 +124,11 @@ impl CoreEngine {
         self.settings.height = height;
         self.renderer.resize(width, height);
     }
+    
+    /// Set the maximum size of the GPU texture cache in bytes. 0 = unlimited.
+    pub fn set_vram_limit(&mut self, bytes: u64) {
+        self.renderer.set_max_cache_size(bytes);
+    }
 
     /// Get current render settings.
     pub fn settings(&self) -> &RenderSettings {
@@ -138,6 +143,11 @@ impl CoreEngine {
     /// Access the underlying Renderer directly (useful for bypassing CPU-side queues on Web)
     pub fn renderer_mut(&mut self) -> &mut Renderer {
         &mut self.renderer
+    }
+    
+    /// Get GPU cache VRAM stats
+    pub fn vram_usage(&self) -> ifol_render::VramStats {
+        self.renderer.vram_usage()
     }
 
     // ── Shaders ──
@@ -487,10 +497,21 @@ impl CoreEngine {
         let sys_info = SysInfo::probe(self.ffmpeg_bin());
         log::info!("Export Hardware detected: {:?}", sys_info);
 
+        // Set input pixel format based on GPU texture format (skip CPU BGRA→RGBA swap)
+        let mut config = config.clone();
+        if matches!(
+            self.renderer.engine.texture_format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        ) {
+            config.input_pixel_format = "bgra".to_string();
+        } else {
+            config.input_pixel_format = "rgba".to_string();
+        }
+
         let output_path = config.output_path.clone();
         let mut encoder = self
             .backend
-            .start_export(width, height, fps, config, &sys_info)?;
+            .start_export(width, height, fps, &config, &sys_info)?;
 
         let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(3);
 
@@ -646,15 +667,8 @@ impl CoreEngine {
                     drop(data);
                     staging.unmap();
 
-                    // Convert BGRA to RGBA if required
-                    if matches!(
-                        self.renderer.engine.texture_format,
-                        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
-                    ) {
-                        for chunk in pixels.chunks_exact_mut(4) {
-                            chunk.swap(0, 2);
-                        }
-                    }
+                    // No BGRA→RGBA swap needed: input_pixel_format already set correctly
+                    // FFmpeg receives raw GPU pixel data directly
 
                     // Push to encode thread
                     if tx.send(pixels).is_err() {

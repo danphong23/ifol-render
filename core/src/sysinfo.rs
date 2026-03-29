@@ -9,7 +9,7 @@ fn test_encoder(ffmpeg_bin: &str, encoder: &str) -> bool {
     if let Ok(output) = Command::new(ffmpeg_bin)
         .arg("-y")
         .args(["-f", "lavfi"])
-        .args(["-i", "color=c=black:s=16x16:r=1"])
+        .args(["-i", "color=c=black:s=128x128:r=1"])
         .args(["-vframes", "1"])
         .args(["-c:v", encoder])
         .args(["-f", "null"])
