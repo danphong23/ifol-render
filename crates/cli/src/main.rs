@@ -58,6 +58,32 @@ enum Commands {
         fps: Option<f64>,
     },
 
+    /// Validate a scene JSON without rendering to check if its ECS structure is valid.
+    Validate {
+        /// Path to scene JSON file.
+        #[arg(short, long)]
+        scene: PathBuf,
+    },
+
+    /// Render a single frame of a scene directly to an image (PNG/JPEG) for fast previews.
+    Preview {
+        /// Path to scene JSON file.
+        #[arg(short, long)]
+        scene: PathBuf,
+        /// Timestamp in seconds to capture.
+        #[arg(short = 't', long, default_value = "0.0")]
+        time: f64,
+        /// Output image file path.
+        #[arg(short, long, default_value = "preview.png")]
+        output: String,
+        /// Override output width.
+        #[arg(long)]
+        width: Option<u32>,
+        /// Override output height.
+        #[arg(long)]
+        height: Option<u32>,
+    },
+
     /// Render a Frame JSON file to PNG using CoreEngine.
     FrameRender {
         /// Path to Frame JSON file.
@@ -141,19 +167,28 @@ fn main() {
             let mut world = ifol_render_ecs::ecs::World::new();
             world.load_scene(&scene_v2);
             
-            let mut camera_id = "cam".to_string();
+            // Compute max duration from lifespans
             let mut max_end: f64 = 10.0;
             let storages = &world.storages;
             for ent in &world.entities {
-                if ent.id.starts_with("cam") && storages.get_component::<ifol_render_ecs::ecs::components::Transform>(&ent.id).is_some() {
-                    camera_id = ent.id.clone();
-                }
                 if let Some(tl) = storages.get_component::<ifol_render_ecs::scene::Lifespan>(&ent.id) {
                     if tl.end > max_end && tl.end < 1_000_000.0 { max_end = tl.end; }
                 }
             }
             
             let fps_val = settings.fps;
+            
+            // Run ECS pipeline once at t=0 to resolve visibility (needed for find_camera)
+            let init_time = ifol_render_ecs::time::TimeState {
+                global_time: 0.0, delta_time: 1.0 / fps_val, frame_index: 0, fps: fps_val,
+            };
+            ifol_render_ecs::ecs::pipeline::run(&mut world, &init_time, None, None);
+            
+            // Find camera using ECS-native lookup (supports any camera ID like "main_cam")
+            let camera_id = world.find_camera("")
+                .map(|e| e.id.clone())
+                .unwrap_or_else(|| "cam".to_string());
+            
             let total_frames = (max_end * fps_val).ceil() as usize;
             eprintln!("V2 Scene: {} entities, cam={}, duration={:.1}s, {} frames", 
                 world.entities.len(), camera_id, max_end, total_frames);
@@ -389,18 +424,18 @@ fn main() {
                 Some(frame)
             }));
 
-            // Step 1: Render video (GPU + FFmpeg encoder)
             match engine.export_video(frame_iter, total, &export_config, |prog| {
-                // Use eprintln with \n so server can capture line by line
+                // Return progress as JSON to stdout for easy parsing by Backend Servers
                 if prog.current_frame % 30 == 0 || prog.current_frame == prog.total_frames {
-                    eprintln!(
-                        "Frame {}/{} ({:.1}%) | {:.1} fps | ETA: {:.0}s",
-                        prog.current_frame,
-                        prog.total_frames,
-                        prog.percent(),
-                        prog.export_fps,
-                        prog.eta_seconds
-                    );
+                    let log_json = serde_json::json!({
+                        "type": "progress",
+                        "frame": prog.current_frame,
+                        "total_frames": prog.total_frames,
+                        "percent": prog.percent(),
+                        "fps": prog.export_fps,
+                        "eta_seconds": prog.eta_seconds
+                    });
+                    println!("{}", log_json.to_string());
                 }
                 true
             }) {
@@ -462,6 +497,137 @@ fn main() {
                 }
                 Err(err) => {
                     eprintln!("\nExport failed: {}", err);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Commands::Validate { scene } => {
+            let json = std::fs::read_to_string(&scene).unwrap_or_else(|e| {
+                eprintln!("Failed to read {:?}: {}", scene, e);
+                std::process::exit(1);
+            });
+            let doc: serde_json::Value = serde_json::from_str(&json).unwrap_or_else(|e| {
+                eprintln!("Invalid JSON syntax: {}", e);
+                std::process::exit(1);
+            });
+            
+            let mut settings: ifol_render_core::RenderSettings = doc
+                .get("settings")
+                .map(|s| serde_json::from_value(s.clone()).unwrap_or_default())
+                .unwrap_or_default();
+
+            // Try parsing into V2
+            match serde_json::from_value::<ifol_render_ecs::scene::SceneV2>(doc.clone()) {
+                Ok(scene_v2) => {
+                    let mut world = ifol_render_ecs::ecs::World::new();
+                    world.load_scene(&scene_v2);
+
+                    let mut max_end: f64 = 0.0;
+                    for ent in &world.entities {
+                        if let Some(lifespan) = world.storages.get_component::<ifol_render_ecs::scene::Lifespan>(&ent.id) {
+                            if lifespan.end > max_end && lifespan.end < 1000000.0 {
+                                max_end = lifespan.end;
+                            }
+                        }
+                    }
+                    
+                    let total_frames = (max_end * settings.fps).ceil() as u32;
+                    let log_json = serde_json::json!({
+                        "valid": true,
+                        "format": "v2",
+                        "entity_count": scene_v2.entities.len(),
+                        "duration_sec": max_end,
+                        "fps": settings.fps,
+                        "width": settings.width,
+                        "height": settings.height,
+                        "total_frames": total_frames
+                    });
+                    println!("{}", log_json.to_string());
+                }
+                Err(e) => {
+                    let log_json = serde_json::json!({
+                        "valid": false,
+                        "error": e.to_string()
+                    });
+                    println!("{}", log_json.to_string());
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Commands::Preview { scene, time, output, width, height } => {
+            let json = std::fs::read_to_string(&scene).unwrap_or_else(|e| {
+                eprintln!("Failed to read {:?}: {}", scene, e);
+                std::process::exit(1);
+            });
+            let doc: serde_json::Value = serde_json::from_str(&json).unwrap_or_else(|e| {
+                eprintln!("Invalid JSON syntax: {}", e);
+                std::process::exit(1);
+            });
+            
+            let mut settings: ifol_render_core::RenderSettings = doc
+                .get("settings")
+                .map(|s| serde_json::from_value(s.clone()).unwrap_or_default())
+                .unwrap_or_default();
+                
+            let scene_v2: ifol_render_ecs::scene::SceneV2 = serde_json::from_value(doc).unwrap_or_else(|e| {
+                eprintln!("Invalid ECS Scene structure: {}", e);
+                std::process::exit(1);
+            });
+            
+            if let Some(w) = width { settings.width = w; }
+            if let Some(h) = height { settings.height = h; }
+
+            let mut world = ifol_render_ecs::ecs::World::new();
+            world.load_scene(&scene_v2);
+
+            let mut engine = ifol_render_core::CoreEngine::new(settings.clone());
+            engine.setup_builtins();
+
+            // Run ECS pipeline to evaluate time, animation, and visibility at the target timestamp
+            let time_state = ifol_render_ecs::time::TimeState {
+                global_time: time, delta_time: 1.0 / settings.fps, frame_index: 0, fps: settings.fps,
+            };
+            ifol_render_ecs::ecs::pipeline::run(&mut world, &time_state, None, None);
+
+            // Find camera using ECS-native lookup (supports any camera ID)
+            let cam_id = world.find_camera("")
+                .map(|e| e.id.clone())
+                .unwrap_or_else(|| "cam".to_string());
+
+            // Sync assets before render (using bare fallback to disk)
+            for ent in &world.entities {
+                if let Some(img) = world.storages.get_component::<ifol_render_ecs::ecs::components::ImageSource>(&ent.id) {
+                    let path = world.resolve_asset_url(&img.asset_id).unwrap_or(&img.asset_id);
+                    let _ = engine.load_image(path, path);
+                }
+                if let Some(txt) = world.storages.get_component::<ifol_render_ecs::ecs::components::TextSource>(&ent.id) {
+                    let path = world.resolve_asset_url(&txt.font).unwrap_or(&txt.font);
+                    let _ = engine.load_font(path, path);
+                }
+            }
+
+            let frame = ifol_render_ecs::ecs::systems::render_to_frame(&world, &cam_id, settings.width, settings.height, time, None, None, None, None, None);
+            let bytes = engine.render_frame(&frame);
+            
+            match ifol_render_core::engine::CoreEngine::save_png(&bytes, settings.width, settings.height, &output) {
+                Ok(_) => {
+                    let log_json = serde_json::json!({
+                        "valid": true,
+                        "status": "success",
+                        "output": output,
+                        "time": time
+                    });
+                    println!("{}", log_json.to_string());
+                }
+                Err(e) => {
+                    let log_json = serde_json::json!({
+                        "valid": false,
+                        "status": "error",
+                        "error": e
+                    });
+                    println!("{}", log_json.to_string());
                     std::process::exit(1);
                 }
             }
