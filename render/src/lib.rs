@@ -682,18 +682,21 @@ impl Renderer {
         }
     }
 
-    /// Evict LRU textures until we're under budget.
+    /// Evict LRU textures until we're under budget or no old textures remain.
     fn evict_if_needed(&mut self, incoming_bytes: u64) {
         if self.max_cache_bytes == 0 {
             return; // unlimited
         }
 
         let target = self.max_cache_bytes;
+        let current_frame = self.frame_number;
+        
         while self.texture_cache_bytes + incoming_bytes > target && !self.texture_cache.is_empty() {
-            // Find LRU (oldest last_used_frame)
+            // Find LRU among textures NOT used in the current frame
             let oldest_key = self
                 .texture_cache
                 .iter()
+                .filter(|(_, v)| v.last_used_frame < current_frame)
                 .min_by_key(|(_, v)| v.last_used_frame)
                 .map(|(k, _)| k.clone());
 
@@ -705,6 +708,9 @@ impl Renderer {
                 );
                 self.evict_texture(&key);
             } else {
+                // No more textures eligible for eviction (all active this frame).
+                // We must exceed the budget temporarily to prevent rendering artifacts.
+                log::warn!("VRAM budget exceeded! All cached textures are active this frame.");
                 break;
             }
         }
@@ -1049,7 +1055,6 @@ impl Renderer {
         struct PreparedDraw {
             pipeline_name: String,
             uniform_offset: u32,
-            texture_view_key: Option<String>, // None = white fallback
         }
 
         let mut prepared: Vec<PreparedDraw> = Vec::with_capacity(commands.len());
@@ -1086,15 +1091,13 @@ impl Renderer {
             prepared.push(PreparedDraw {
                 pipeline_name: cmd.pipeline.clone(),
                 uniform_offset: offset as u32,
-                texture_view_key: tex_key,
             });
         }
 
         // Phase 2: Create bind groups, batched by texture
         // We need one bind group per (pipeline, texture) combination
-        struct DrawCall<'a> {
+        struct DrawCall {
             pipeline_name: String,
-            textures: Vec<&'a String>, // Store refs to textures attached to the command
             uniform_offset: u32,
             bind_group: Option<wgpu::BindGroup>, // Generated below
         }
@@ -1177,7 +1180,6 @@ impl Renderer {
 
             draw_calls.push(DrawCall {
                 pipeline_name: prep.pipeline_name.clone(),
-                textures: cmd.textures.iter().collect(),
                 uniform_offset: prep.uniform_offset,
                 bind_group: Some(bg),
             });

@@ -470,12 +470,16 @@ impl CoreEngine {
     /// then `ifol_audio::mux_video_audio()` to combine.
     ///
     /// `frames` is an Iterator, allowing infinite-length batch generation to save memory.
+    ///
+    /// If `sys_info` is None, hardware detection will be performed (adds ~2-4s startup).
+    /// Pass a pre-computed `SysInfo` to skip the probe and reduce startup latency.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn export_video<I>(
         &mut self,
         frames: I,
         total_frames: usize,
         config: &ExportConfig,
+        sys_info: Option<&SysInfo>,
         mut on_progress: impl FnMut(ExportProgress) -> bool,
     ) -> Result<String, String>
     where
@@ -494,8 +498,16 @@ impl CoreEngine {
             self.resize(width, height);
         }
 
-        let sys_info = SysInfo::probe(self.ffmpeg_bin());
-        log::info!("Export Hardware detected: {:?}", sys_info);
+        // Use pre-computed SysInfo or probe now (avoids double-probe when CLI already probed)
+        let owned_sys_info;
+        let sys = match sys_info {
+            Some(si) => si,
+            None => {
+                owned_sys_info = SysInfo::probe(self.ffmpeg_bin());
+                log::info!("Export Hardware detected: {:?}", owned_sys_info);
+                &owned_sys_info
+            }
+        };
 
         // Set input pixel format based on GPU texture format (skip CPU BGRA→RGBA swap)
         let mut config = config.clone();
@@ -511,9 +523,30 @@ impl CoreEngine {
         let output_path = config.output_path.clone();
         let mut encoder = self
             .backend
-            .start_export(width, height, fps, &config, &sys_info)?;
+            .start_export(width, height, fps, &config, sys)?;
 
-        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(3);
+        // ── Pre-compute row layout ──
+        let unpadded_bytes_per_row = width * 4;
+        let padded_bytes_per_row = {
+            let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+            (unpadded_bytes_per_row).div_ceil(align) * align
+        };
+        let no_padding = padded_bytes_per_row == unpadded_bytes_per_row;
+        let pixel_buf_size = (unpadded_bytes_per_row * height) as usize;
+
+        // ── Buffer recycling: pre-allocate pixel buffers to avoid per-frame malloc ──
+        let max_in_flight = 4; // Increased from 3 for better GPU/CPU overlap
+        let channel_depth = max_in_flight + 1; // encode thread may hold 1 extra
+
+        // Pixel data channel to encode thread
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(channel_depth);
+        // Recycling channel: encode thread returns used buffers
+        let (tx_recycle, rx_recycle) = std::sync::mpsc::sync_channel::<Vec<u8>>(channel_depth);
+
+        // Pre-allocate pixel buffers
+        for _ in 0..channel_depth {
+            tx_recycle.send(vec![0u8; pixel_buf_size]).unwrap();
+        }
 
         let encode_thread = std::thread::spawn(move || {
             let mut result = Ok(());
@@ -522,6 +555,8 @@ impl CoreEngine {
                     result = Err(e);
                     break;
                 }
+                // Return used buffer for reuse (ignore error if channel is full or dropped)
+                let _ = tx_recycle.try_send(pixels);
             }
             if result.is_ok()
                 && let Err(e) = encoder.close()
@@ -530,12 +565,6 @@ impl CoreEngine {
             }
             result
         });
-
-        let max_in_flight = 3;
-        let padded_bytes_per_row = {
-            let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-            (width * 4).div_ceil(align) * align
-        };
 
         // Pre-allocate N staging buffers on GPU
         let mut staging_buffers = Vec::with_capacity(max_in_flight);
@@ -655,13 +684,22 @@ impl CoreEngine {
 
                     let staging = &staging_buffers[staging_idx];
                     let data = staging.slice(..).get_mapped_range();
-                    
-                    let unpadded_bytes_per_row = width * 4;
-                    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
-                    for row in 0..height {
-                        let start = (row * padded_bytes_per_row) as usize;
-                        let end = start + unpadded_bytes_per_row as usize;
-                        pixels.extend_from_slice(&data[start..end]);
+
+                    // Reuse a pre-allocated buffer instead of allocating 8MB per frame
+                    let mut pixels = rx_recycle.try_recv()
+                        .unwrap_or_else(|_| vec![0u8; pixel_buf_size]);
+
+                    if no_padding {
+                        // Fast path: no row padding, single bulk memcpy
+                        pixels[..pixel_buf_size].copy_from_slice(&data[..pixel_buf_size]);
+                    } else {
+                        // Slow path: strip row padding
+                        pixels.clear();
+                        for row in 0..height {
+                            let start = (row * padded_bytes_per_row) as usize;
+                            let end = start + unpadded_bytes_per_row as usize;
+                            pixels.extend_from_slice(&data[start..end]);
+                        }
                     }
 
                     drop(data);
@@ -670,7 +708,7 @@ impl CoreEngine {
                     // No BGRA→RGBA swap needed: input_pixel_format already set correctly
                     // FFmpeg receives raw GPU pixel data directly
 
-                    // Push to encode thread
+                    // Push to encode thread (buffer will be recycled back)
                     if tx.send(pixels).is_err() {
                         export_cancelled = true;
                     }

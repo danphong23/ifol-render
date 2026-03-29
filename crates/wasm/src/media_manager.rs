@@ -159,7 +159,7 @@ impl WasmMediaManager {
     }
 
     /// Check if a video has enough data loaded for a specific timestamp WITHOUT altering playback state.
-    pub fn is_video_ready(&mut self, entity_id: &str, url: &str, time: f64) -> bool {
+    pub fn is_video_ready(&mut self, entity_id: &str, url: &str, _time: f64) -> bool {
         let entry_rc = self.get_video(entity_id, url);
         let entry = entry_rc.borrow();
         

@@ -52,6 +52,12 @@ export default defineConfig({
                 if (data.fps) {
                     args.push('--fps', data.fps.toString());
                 }
+                if (data.width) {
+                    args.push('--width', data.width.toString());
+                }
+                if (data.height) {
+                    args.push('--height', data.height.toString());
+                }
 
                 // Set timer
                 const startTime = performance.now();

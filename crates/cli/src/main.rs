@@ -444,7 +444,7 @@ fn main() {
                 Some(frame)
             }));
 
-            match engine.export_video(frame_iter, total, &export_config, |prog| {
+            match engine.export_video(frame_iter, total, &export_config, Some(&sys_info), |prog| {
                 // Return progress as JSON to stdout for easy parsing by Backend Servers
                 if prog.current_frame % 30 == 0 || prog.current_frame == prog.total_frames {
                     let log_json = serde_json::json!({
@@ -532,7 +532,7 @@ fn main() {
                 std::process::exit(1);
             });
             
-            let mut settings: ifol_render_core::RenderSettings = doc
+            let settings: ifol_render_core::RenderSettings = doc
                 .get("settings")
                 .map(|s| serde_json::from_value(s.clone()).unwrap_or_default())
                 .unwrap_or_default();

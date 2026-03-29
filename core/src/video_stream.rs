@@ -194,10 +194,12 @@ impl VideoStream {
     /// Spawn FFmpeg subprocess for continuous raw frame output.
     ///
     /// Key flags:
+    /// - `-hwaccel auto`: use hardware-accelerated decoding (QSV/CUVID/DXVA2) if available
     /// - `-ss` before `-i`: fast input seeking
     /// - `-r fps`: force output frame rate to match scene fps
     /// - `-vf scale=WxH`: resize to target dimensions
     /// - `-an`: disable audio (video-only decode, faster)
+    /// - `-threads 0`: use all available CPU threads for decode
     fn spawn_ffmpeg(
         path: &str,
         start_secs: f64,
@@ -210,11 +212,13 @@ impl VideoStream {
         let fps_str = format!("{}", fps);
 
         let child = Command::new(ffmpeg_bin)
+            .args(["-hwaccel", "auto"])     // HW-accelerated decode (QSV/CUVID/DXVA2)
+            .args(["-threads", "0"])         // Use all CPU threads for decode
             .args(["-ss", &ts])
             .args(["-i", path])
-            .args(["-an"]) // disable audio decoding (faster)
+            .args(["-an"])                   // disable audio decoding (faster)
             .args(["-vf", &format!("scale={}:{}", width, height)])
-            .args(["-r", &fps_str]) // force output frame rate
+            .args(["-r", &fps_str])          // force output frame rate
             .args(["-f", "rawvideo"])
             .args(["-pix_fmt", "rgba"])
             .arg("-v")

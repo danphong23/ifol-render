@@ -37,6 +37,9 @@ pub struct IfolRenderWeb {
     scope_time: Option<f64>,
     /// Visual style for selected entities ("rect" or "content")
     select_mode: String,
+
+    /// JavaScript callback for events (progress, buffers, metrics, errors).
+    on_event_callback: Option<js_sys::Function>,
 }
 
 #[wasm_bindgen]
@@ -82,6 +85,7 @@ impl IfolRenderWeb {
             render_scope: None,
             scope_time: None,
             select_mode: "rect".to_string(),
+            on_event_callback: None,
         })
     }
 
@@ -96,7 +100,23 @@ impl IfolRenderWeb {
     /// Inject Font TTF Bytes directly into WASM RAM bypassing the FileSystem.
     pub fn cache_font(&mut self, key: &str, data: &[u8]) {
         self.engine.load_font_bytes(key, data.to_vec());
-        log::info!("Font '{}' cached in WASM memory.", key);
+        self.dispatch_event("asset_loaded", &format!("Font cached: {}", key));
+    }
+
+    /// Set an event listener callback function passed from Javascript
+    #[wasm_bindgen]
+    pub fn set_event_listener(&mut self, callback: js_sys::Function) {
+        self.on_event_callback = Some(callback);
+    }
+    
+    /// Internal method to dispatch events to Javascript
+    fn dispatch_event(&self, event_type: &str, payload_json: &str) {
+        if let Some(cb) = &self.on_event_callback {
+            let event = js_sys::Object::new();
+            let _ = js_sys::Reflect::set(&event, &"type".into(), &event_type.into());
+            let _ = js_sys::Reflect::set(&event, &"payload".into(), &payload_json.into());
+            let _ = cb.call1(&JsValue::NULL, &event);
+        }
     }
 
     /// Pre-inject a decoded video frame as raw RGBA pixels with dimensions.
@@ -129,6 +149,23 @@ impl IfolRenderWeb {
         self.engine.evict_texture(key);
     }
 
+    /// Set the maximum size of the GPU texture cache in Megabytes.
+    /// If actual usage exceeds this limit, LRU eviction runs automatically.
+    /// Defaults to 0 (Unlimited).
+    #[wasm_bindgen]
+    pub fn set_vram_limit_mb(&mut self, mb: f64) {
+        let max_bytes = (mb * 1024.0 * 1024.0) as u64;
+        self.engine.set_vram_limit(max_bytes);
+        self.dispatch_event("info", &format!("VRAM Limit set to: {} MB", mb));
+    }
+
+    /// Explicitly clear all cached textures and GPU buffers (forces reload of assets).
+    #[wasm_bindgen]
+    pub fn clear_textures(&mut self) {
+        self.engine.renderer_mut().clear_textures();
+        self.dispatch_event("info", "VRAM textures cleared.");
+    }
+    
     // ── Setup ────────────────────────────────
 
     /// Setup the pipeline standard builtins (Call this AFTER caching the fonts!)
@@ -264,6 +301,13 @@ impl IfolRenderWeb {
         };
         
         let mut world = self.v2_world.take().unwrap();
+        
+        // Reset transient Editor Overrides when time jumps (scrubbing/playing)
+        if world.override_time != Some(time_sec) {
+            world.editor_overrides.clear();
+            world.override_time = Some(time_sec);
+        }
+
         ifol_render_ecs::ecs::pipeline::run(
             &mut world,
             &time_state,
@@ -402,7 +446,13 @@ impl IfolRenderWeb {
         let pre_join = preload_assets.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<_>>().join(",");
         json.push_str(&format!("\"preload_assets\":[{}]", pre_join));
         
+        // VRAM Stats
+        let vram = self.engine.vram_usage();
+        json.push_str(&format!(",\"vram_bytes\":{},\"vram_count\":{}", vram.texture_cache_bytes, vram.texture_count));
+        
         json.push('}');
+        
+        self.dispatch_event("render_metrics", &json);
 
         Ok(JsValue::from_str(&json))
     }
@@ -546,8 +596,30 @@ impl IfolRenderWeb {
             let local_dx = (world_dx * cos_r - world_dy * sin_r) / parent_sx.max(0.001);
             let local_dy = (world_dx * sin_r + world_dy * cos_r) / parent_sy.max(0.001);
 
-            if let Some(t) = world.storages.get_component_mut::<ifol_render_ecs::ecs::components::Transform>(entity_id) {
+            let has_anim_x = world.get_component::<ifol_render_ecs::ecs::components::AnimationComponent>(entity_id)
+                .map(|a| a.float_tracks.iter().any(|t| t.target == ifol_render_ecs::ecs::components::animation::AnimTarget::TransformX && !t.track.keyframes.is_empty()))
+                .unwrap_or(false);
+
+            let has_anim_y = world.get_component::<ifol_render_ecs::ecs::components::AnimationComponent>(entity_id)
+                .map(|a| a.float_tracks.iter().any(|t| t.target == ifol_render_ecs::ecs::components::animation::AnimTarget::TransformY && !t.track.keyframes.is_empty()))
+                .unwrap_or(false);
+
+            let mut resolved_x = 0.0;
+            let mut resolved_y = 0.0;
+            if let Some(entity) = world.entities.iter().find(|e| e.id == entity_id) {
+                resolved_x = entity.resolved.x;
+                resolved_y = entity.resolved.y;
+            }
+
+            if has_anim_x {
+                world.set_transient_override(entity_id, ifol_render_ecs::ecs::components::animation::AnimTarget::TransformX, ifol_render_ecs::ecs::OverrideValue::Float(resolved_x + local_dx));
+            } else if let Some(t) = world.storages.get_component_mut::<ifol_render_ecs::ecs::components::Transform>(entity_id) {
                 t.x += local_dx;
+            }
+
+            if has_anim_y {
+                world.set_transient_override(entity_id, ifol_render_ecs::ecs::components::animation::AnimTarget::TransformY, ifol_render_ecs::ecs::OverrideValue::Float(resolved_y + local_dy));
+            } else if let Some(t) = world.storages.get_component_mut::<ifol_render_ecs::ecs::components::Transform>(entity_id) {
                 t.y += local_dy;
             }
         }

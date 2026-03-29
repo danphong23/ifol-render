@@ -210,33 +210,29 @@ pub fn editor_gizmo_system(
     }
 
     if !sel_mask_entities.is_empty() {
-        // Wait, texture updates for rendertarget shouldn't recreate it every frame unless size changed.
-        // It's fine for now. We skip it, since the engine handles non-existent render targets lazily.
-        
-        frame.passes.push(RenderPass {
-            output: "_sel_mask".to_string(),
-            pass_type: crate::frame::PassType::Entities {
-                entities: sel_mask_entities,
-                clear_color: [0.0, 0.0, 0.0, 0.0],
-            },
-            target_width: Some(screen_width),
-            target_height: Some(screen_height),
-        });
+        if let Some(main_idx) = frame.passes.iter().position(|p| p.output == "main" || p.output == "final") {
+            frame.passes.insert(main_idx, RenderPass {
+                output: "_sel_mask".to_string(),
+                pass_type: crate::frame::PassType::Entities {
+                    entities: sel_mask_entities,
+                    clear_color: [0.0, 0.0, 0.0, 0.0],
+                },
+                target_width: Some(screen_width),
+                target_height: Some(screen_height),
+            });
 
-        frame.passes.push(RenderPass {
-            output: "_sel_outline".to_string(),
-            pass_type: crate::frame::PassType::Effect {
-                shader: "selection_outline".into(),
-                inputs: vec!["_sel_mask".into()],
-                params: vec![3.0, 0.0, 0.0, 0.0], // thickness=3px
-            },
-            target_width: Some(screen_width),
-            target_height: Some(screen_height),
-        });
+            frame.passes.insert(main_idx + 1, RenderPass {
+                output: "_sel_outline".to_string(),
+                pass_type: crate::frame::PassType::Effect {
+                    shader: "selection_outline".into(),
+                    inputs: vec!["_sel_mask".into()],
+                    params: vec![3.0, 0.0, 0.0, 0.0], // thickness=3px
+                },
+                target_width: Some(screen_width),
+                target_height: Some(screen_height),
+            });
 
-        // Ensure "final" exists or composite it
-        if let Some(main_pass) = frame.passes.iter_mut().find(|p| p.output == "main" || p.output == "final") {
-            if let crate::frame::PassType::Entities { ref mut entities, .. } = main_pass.pass_type {
+            if let crate::frame::PassType::Entities { ref mut entities, .. } = frame.passes[main_idx + 2].pass_type {
                 entities.push(FlatEntity {
                     id: 0,
                     x: 0.0,

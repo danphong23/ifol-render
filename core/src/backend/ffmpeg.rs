@@ -30,6 +30,10 @@ impl MediaBackend for FfmpegMediaBackend {
     ) -> Result<Box<dyn MediaDecoder>, String> {
         let mut cmd = Command::new(&self.ffmpeg_bin);
 
+        // Enable hardware-accelerated decode and multi-threaded CPU decode
+        cmd.args(["-hwaccel", "auto"]);
+        cmd.args(["-threads", "0"]);
+
         if start_secs > 0.0 {
             cmd.args(["-ss", &format!("{:.4}", start_secs)]);
         }
@@ -99,12 +103,13 @@ impl MediaBackend for FfmpegMediaBackend {
 
         // Output pixel format (crucial for web/player compatibility and speed)
         cmd.args(["-pix_fmt", &config.pixel_format]);
+        cmd.args(["-loglevel", "error"]); // Prevent stderr buffer from filling up and hanging the process
         cmd.arg(&config.output_path);
 
         let child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped()) // pipe stderr to read progress
+            .stderr(Stdio::piped()) // pipe stderr to read errors at the end
             .spawn()
             .map_err(|e| format!("Failed to spawn FFmpeg video encoder: {e}"))?;
 

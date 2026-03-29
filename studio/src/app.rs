@@ -644,9 +644,10 @@ impl StudioApp {
                 width: Some(out_w),
                 height: Some(out_h),
                 ffmpeg_path: export_ffmpeg.clone(),
+                input_pixel_format: "rgba".to_string(), // Engine overrides based on GPU format
             };
 
-            match engine.export_video(frames.into_iter(), total, &export_config, |prog| {
+            match engine.export_video(frames.into_iter(), total, &export_config, None, |prog| {
                 if c.load(Ordering::Relaxed) {
                     return false;
                 }

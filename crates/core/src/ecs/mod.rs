@@ -14,9 +14,16 @@ mod tests;
 
 use crate::schema::v2::AssetDef;
 use crate::time::EntityTime;
+use crate::ecs::components::animation::AnimTarget;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum OverrideValue {
+    Float(f32),
+    String(String),
+}
 
 /// Unique identifier for an entity.
 pub type EntityId = String;
@@ -121,6 +128,14 @@ pub struct World {
     pub storages: typemap::TypeMap,
     #[serde(skip)]
     pub registry: registry::ComponentRegistry,
+
+    // ── Editor Transients ──
+    /// Ephemeral overrides for animated tracks. Keyed by Entity ID -> (AnimTarget -> Value)
+    #[serde(skip)]
+    pub editor_overrides: HashMap<EntityId, HashMap<AnimTarget, OverrideValue>>,
+    /// The timestamp of the current active overrides. Changing global time clears everything.
+    #[serde(skip)]
+    pub override_time: Option<f64>,
 }
 
 impl World {
@@ -201,6 +216,13 @@ impl World {
     pub fn get_component_mut<T: 'static>(&mut self, entity_id: &str) -> Option<&mut T> {
         self.storages.get_mut::<HashMap<EntityId, T>>()
             .and_then(|map| map.get_mut(entity_id))
+    }
+
+    /// Set an ephemeral override for a specific animation target.
+    pub fn set_transient_override(&mut self, entity_id: &str, target: AnimTarget, value: OverrideValue) {
+        self.editor_overrides.entry(entity_id.to_string())
+            .or_default()
+            .insert(target, value);
     }
 
     /// Build ECS World from a SceneV2 definition.

@@ -78,26 +78,30 @@
     <button id="btnInit" style="background:#55f; font-weight:bold">🚀 Init V4 Pipeline</button>
     <div style="width:1px; height:20px; background:#555"></div>
     <div class="test-group">
-        <button id="btnTestCase1">1. Shapes</button>
-        <button id="btnTestCase2">2. Hierarchy</button>
-        <button id="btnTestCase3">3. Keyframe</button>
-        <button id="btnTestCase4">4. Loop</button>
-        <button id="btnTestCase5">5. Opacity</button>
-        <button id="btnTestCase6">6. Camera</button>
-        <button id="btnTestCase7">7. Morph</button>
-        <button id="btnTestCase8">8. Lifespan</button>
-        <button id="btnTestCase9">9. Comp Timeline</button>
-        <button id="btnTestCase10">10. Nested Comp</button>
-        <button id="btnTestCase11">11. Easings</button>
-        <button id="btnTestCase12">12. Image</button>
-        <button id="btnTestCase13">13. Alignment</button>
-        <button id="btnTestCase13b">13b. Text</button>
-        <button id="btnTestCase14">14. Blur / Glow</button>
-        <button id="btnTestCase15">15. Drop Shadow</button>
-        <button id="btnTestCase16">16. Multi Effect</button>
-        <button id="btnTestCase17">17. AV Sync</button>
-        <button id="btnTestCase18">18. Blur Cases</button>
+        <select id="selTestCase" style="background:#222; color:#4ade80; border:1px solid #4ade80; border-radius:4px; font-weight:bold; font-size:12px; padding:4px 8px; outline:none; cursor:pointer;">
+            <option value="" disabled selected>-- Select Test Case --</option>
+            <option value="btnTestCase1">1. Shapes</option>
+            <option value="btnTestCase2">2. Hierarchy</option>
+            <option value="btnTestCase3">3. Keyframe</option>
+            <option value="btnTestCase4">4. Loop</option>
+            <option value="btnTestCase5">5. Opacity</option>
+            <option value="btnTestCase6">6. Camera</option>
+            <option value="btnTestCase7">7. Morph</option>
+            <option value="btnTestCase8">8. Lifespan</option>
+            <option value="btnTestCase9">9. Comp Timeline</option>
+            <option value="btnTestCase10">10. Nested Comp</option>
+            <option value="btnTestCase11">11. Easings</option>
+            <option value="btnTestCase12">12. Image</option>
+            <option value="btnTestCase13">13. Alignment</option>
+            <option value="btnTestCase13b">13b. Text</option>
+            <option value="btnTestCase14">14. Blur / Glow</option>
+            <option value="btnTestCase15">15. Drop Shadow</option>
+            <option value="btnTestCase16">16. Multi Effect</option>
+            <option value="btnTestCase17">17. AV Sync</option>
+            <option value="btnTestCase18">18. Blur Cases</option>
+        </select>
         <button id="btnTestCase19" style="background:#f97316; color:white">19. Backend TC</button>
+        <button id="btnTestCase20" style="background:#eab308; color:black; font-weight:bold">20. Event Callbacks</button>
     </div>
     <div style="width:1px; height:20px; background:#555"></div>
     <button id="btnUpdateJson" style="background:#059669; font-weight:bold">Apply JSON ➔ ECS</button>
@@ -105,11 +109,20 @@
         <input type="checkbox" id="chkEditorMode" checked style="margin-right:4px">
         [Editor]
     </label>
+    <label style="display:flex; align-items:center; cursor:pointer; font-size:12px; color:#c084fc; margin-left:8px;">
+        <input type="checkbox" id="chkDualViewport" style="margin-right:4px">
+        [Dual View]
+    </label>
     <select id="selSelectMode" style="background:#333; color:white; border:1px solid #555; border-radius:4px; font-size:12px; margin-left:8px; padding:2px 4px; outline:none;">
         <option value="rect">Select Mode: Rect (Layer Bounds)</option>
         <option value="content">Select Mode: Content (Visual Pixels)</option>
     </select>
-    <button id="btnExport" style="background:#f59e0b; font-weight:bold; margin-left:16px;">📥 Export Video</button>
+    <select id="selQuality" style="background:#333; color:#f59e0b; font-weight:bold; border:1px solid #555; border-radius:4px; font-size:12px; margin-left:8px; padding:2px 4px; outline:none;">
+        <option value="1">Quality: 100%</option>
+        <option value="0.5">Quality: 50%</option>
+        <option value="0.25">Quality: 25%</option>
+    </select>
+    <button id="btnExport" style="background:#f59e0b; font-weight:bold; margin-left:8px;">📥 Export Video</button>
     <span id="lblStatus" style="font-size:11px; color:#aaa; margin-left:auto">Waiting for Init...</span>
   </div>
 
@@ -124,12 +137,23 @@
     <div class="resize-h" id="resizeH"></div>
     <div class="viewport editor-mode" id="viewportArea">
       <div style="position: absolute; top:8px; left:8px; color:#fff; font-size:11px; background:rgba(0,0,0,0.6); padding:4px 8px; border-radius:4px; pointer-events:none; z-index:10;">
-        <span style="color:#60a5fa; font-weight:bold">V4 Pure ECS WASM</span><br>
-        <span id="lblRenderMs">0.0</span>ms | <span id="lblCanvasSize">1280x720</span>
+        <span style="color:#60a5fa; font-weight:bold">Viewport 1</span><br>
+        <span id="lblRenderMs">0.0</span>ms | <span id="lblCanvasSize">1280x720</span><br>
+        <span id="lblVram">VRAM: 0 MB (0 Tex)</span>
       </div>
       <canvas id="canvasMain" width="1280" height="720"></canvas>
     </div>
+    <div class="viewport camera-mode" id="viewportArea2" style="display:none; border-left:1px solid #444; position:relative;">
+      <div style="position: absolute; top:8px; left:8px; color:#fff; font-size:11px; background:rgba(0,0,0,0.6); padding:4px 8px; border-radius:4px; pointer-events:none; z-index:10;">
+        <span style="color:#c084fc; font-weight:bold">Viewport 2</span><br>
+        <span id="lblCanvasSize2">1280x720</span><br>
+        <span id="lblVram2">VRAM: 0 MB (0 Tex)</span>
+      </div>
+      <canvas id="canvasMain2" width="1280" height="720"></canvas>
+    </div>
   </div>
+  
+  <canvas id="gpuCanvas" style="display:none;" width="1280" height="720"></canvas>
 
   <!-- Vertical resize handle -->
   <div class="resize-v" id="resizeV"></div>
@@ -193,7 +217,17 @@
         </div>
         <div style="flex:0.5;">
           <label>FPS</label>
-          <input type="number" id="exportFPS" value="60" min="1" max="120" />
+          <input type="number" id="exportFPS" value="30" min="1" max="120" />
+        </div>
+      </div>
+      <div class="form-group" style="display:flex; gap: 10px;">
+        <div style="flex:1;">
+          <label>Resolution Width</label>
+          <input type="number" id="exportWidth" value="1920" />
+        </div>
+        <div style="flex:1;">
+          <label>Resolution Height</label>
+          <input type="number" id="exportHeight" value="1080" />
         </div>
       </div>
       <div class="form-group">

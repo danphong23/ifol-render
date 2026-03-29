@@ -117,6 +117,38 @@ pub fn animation_system(world: &mut World) {
                 }
             }
         }
+
+        // 3. Evaluate Transient Editor Overrides (Highest Authority)
+        if let Some(overrides) = world.editor_overrides.get(&entity.id) {
+            for (target, value) in overrides {
+                if let crate::ecs::OverrideValue::Float(val) = value {
+                    match target {
+                        AnimTarget::TransformX => entity.resolved.x = *val,
+                        AnimTarget::TransformY => entity.resolved.y = *val,
+                        AnimTarget::TransformRotation => entity.resolved.rotation = *val,
+                        AnimTarget::TransformAnchorX => entity.resolved.anchor_x = *val,
+                        AnimTarget::TransformAnchorY => entity.resolved.anchor_y = *val,
+                        AnimTarget::TransformScaleX => entity.resolved.scale_x = *val,
+                        AnimTarget::TransformScaleY => entity.resolved.scale_y = *val,
+                        
+                        AnimTarget::RectWidth => entity.resolved.width = *val,
+                        AnimTarget::RectHeight => entity.resolved.height = *val,
+                        
+                        AnimTarget::Opacity => entity.resolved.opacity = *val,
+                        AnimTarget::Volume => entity.resolved.volume = *val,
+                        AnimTarget::PlaybackTime => entity.resolved.playback_time = *val as f64,
+                        
+                        AnimTarget::ColorR => entity.resolved.color[0] = *val,
+                        AnimTarget::ColorG => entity.resolved.color[1] = *val,
+                        AnimTarget::ColorB => entity.resolved.color[2] = *val,
+                        AnimTarget::ColorA => entity.resolved.color[3] = *val,
+                        
+                        AnimTarget::FloatUniform(_) => {}
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
 }
 
