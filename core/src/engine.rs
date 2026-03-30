@@ -712,12 +712,18 @@ impl CoreEngine {
                                     target_h,
                                 );
                             }
-                            PassType::Output { input } => {
-                                let commands = vec![DrawCommand {
+                            PassType::Output { input, entities } => {
+                                let mut commands = vec![DrawCommand {
                                     pipeline: "output_copy".to_string(),
                                     uniforms: vec![0.0],
                                     textures: vec![input.clone()],
                                 }];
+                                if !entities.is_empty() {
+                                    let mut sorted = entities.clone();
+                                    draw::sort_entities(&mut sorted);
+                                    let tex_dims = self.renderer.texture_dimensions();
+                                    commands.extend(draw::build_draw_commands(&sorted, target_w, target_h, &tex_dims));
+                                }
                                 // Render to main output texture (None)
                                 self.renderer.render_frame_to(
                                     &mut encoder,

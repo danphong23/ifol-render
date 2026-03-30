@@ -485,7 +485,10 @@ impl IfolRenderWeb {
             .collect();
         // Wait, editor_gizmo_system MUST run AFTER render_to_frame because it appends to the Frame!
 
-        // 3.2. Core Render Phase
+        // 3.2. Build ECS Context
+        let context = world.build_context(self.render_scope.as_deref());
+
+        // 3.3. Core Render Phase
         let mut frame = ifol_render_ecs::ecs::systems::render_to_frame(
             &world,
             camera_id,
@@ -496,7 +499,7 @@ impl IfolRenderWeb {
             custom_cam_y,
             custom_cam_w,
             custom_cam_h,
-            self.render_scope.as_deref(),
+            &context,
         );
 
         if is_editor_mode {
@@ -524,7 +527,7 @@ impl IfolRenderWeb {
                 sy,
                 w,
                 h,
-                self.render_scope.as_deref(),
+                &context,
             );
         }
 

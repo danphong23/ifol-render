@@ -13,7 +13,7 @@ pub fn render_to_frame(
     custom_cam_y: Option<f32>,
     custom_cam_w: Option<f32>,
     custom_cam_h: Option<f32>,
-    scope_entity_id: Option<&str>,
+    context: &crate::ecs::ContextView,
 ) -> Frame {
     let mut passes = Vec::new();
     let mut texture_updates = Vec::new();
@@ -33,38 +33,6 @@ pub fn render_to_frame(
     let sx = screen_width as f32 / cam_w;
     let sy = screen_height as f32 / cam_h;
 
-    // ── Helper: check if entity is a descendant of (or IS) the scope entity ──
-    let is_in_scope = |entity_id: &str| -> bool {
-        if scope_entity_id.is_none() {
-            return true;
-        }
-        let scope_id = scope_entity_id.unwrap();
-        // The scope entity itself is always in scope
-        if entity_id == scope_id {
-            return true;
-        }
-        // Walk parent chain to see if any ancestor is the scope entity
-        let mut current_id = entity_id.to_string();
-        for _ in 0..32 {
-            // max depth guard
-            if let Some(e) = world.entities.iter().find(|e| e.id == current_id) {
-                if let Some(pid) = storages
-                    .get_component::<crate::ecs::components::meta::ParentId>(&e.id)
-                    .map(|id| &id.0)
-                {
-                    if pid == scope_id {
-                        return true;
-                    }
-                    current_id = pid.to_string();
-                } else {
-                    return false; // reached root without finding scope
-                }
-            } else {
-                return false;
-            }
-        }
-        false
-    };
 
     let mut camera_effects: Vec<crate::ecs::components::draw::EffectPassDef> = Vec::new();
     let mut layer_effects_map = std::collections::HashMap::new();
@@ -81,7 +49,7 @@ pub fn render_to_frame(
             continue;
         }
         // Skip entities outside render scope
-        if !is_in_scope(&entity.id) {
+        if !context.active_entities.contains(&entity.id) {
             continue;
         }
 
@@ -105,7 +73,7 @@ pub fn render_to_frame(
                     if storages.get_component::<crate::ecs::components::Composition>(&e.id).is_some() {
                         // When scoped: the scope entity IS the "root" — treat it as "main".
                         // Its direct children must render to the main output, not an orphaned buffer.
-                        if scope_entity_id == Some(cur.as_str()) {
+                        if context.scope_id == Some(cur.as_str()) {
                             found = "main".to_string();
                         } else {
                             found = cur.clone();
@@ -491,7 +459,7 @@ pub fn render_to_frame(
                     if storages.get_component::<crate::ecs::components::Composition>(&e.id).is_some() {
                         // When scoped: the scope entity IS the "root" — treat it as "main".
                         // Its nested comp proxies must bubble up to main, not an orphaned buffer.
-                        if scope_entity_id == Some(cur.as_str()) {
+                        if context.scope_id == Some(cur.as_str()) {
                             found = "main".to_string();
                         } else {
                             found = cur.clone();

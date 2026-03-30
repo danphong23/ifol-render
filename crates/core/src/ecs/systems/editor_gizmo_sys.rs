@@ -17,40 +17,11 @@ pub fn editor_gizmo_system(
     sy: f32,
     screen_width: u32,
     screen_height: u32,
-    scope_entity_id: Option<&str>,
+    context: &crate::ecs::ContextView,
 ) {
     let storages = &world.storages;
     let sorted = world.sorted_by_layer();
 
-    let is_in_scope = |entity_id: &str| -> bool {
-        if scope_entity_id.is_none() {
-            return true;
-        }
-        let scope_id = scope_entity_id.unwrap();
-        if entity_id == scope_id {
-            return true;
-        }
-
-        let mut current_id = entity_id.to_string();
-        for _ in 0..10 {
-            if let Some(e) = world.entities.iter().find(|e| e.id == current_id) {
-                if let Some(pid) = storages
-                    .get_component::<crate::ecs::components::meta::ParentId>(&e.id)
-                    .map(|id| &id.0)
-                {
-                    if pid == scope_id {
-                        return true;
-                    }
-                    current_id = pid.to_string();
-                } else {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
-        false
-    };
 
     // 1. Camera Gizmo Passes (Dashed rect & triangle)
     // We append them directly into the primary screen pass of the frame.
@@ -60,7 +31,7 @@ pub fn editor_gizmo_system(
     }) {
         for entity in &sorted {
             if !entity.resolved.visible { continue; }
-            if !is_in_scope(&entity.id) { continue; }
+            if !context.active_entities.contains(&entity.id) { continue; }
             if storages.get_component::<CameraComponent>(&entity.id).is_none() { continue; }
 
             let is_selected = selected_entity_ids.contains(&entity.id.as_str());
@@ -173,7 +144,7 @@ pub fn editor_gizmo_system(
     let mut sel_mask_entities = Vec::new();
         for entity in &sorted {
             if !entity.resolved.visible { continue; }
-            if !is_in_scope(&entity.id) { continue; }
+            if !context.active_entities.contains(&entity.id) { continue; }
             if !selected_entity_ids.contains(&entity.id.as_str()) { continue; }
         if storages.get_component::<CameraComponent>(&entity.id).is_some() { continue; }
 

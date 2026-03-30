@@ -469,8 +469,9 @@ fn main() {
                         fps: fps_val,
                     };
                     ifol_render_ecs::ecs::pipeline::run(&mut world, &time_state, None, None);
+                    let context = world.build_context(None);
                     let mut frame = ifol_render_ecs::ecs::systems::render_to_frame(
-                        &world, &camera_id, out_w, out_h, t, None, None, None, None, None,
+                        &world, &camera_id, out_w, out_h, t, None, None, None, None, &context,
                     );
 
                     // Map paths dynamically to ensure decoding works
@@ -719,6 +720,7 @@ fn main() {
                 }
             }
 
+            let context = world.build_context(None);
             let frame = ifol_render_ecs::ecs::systems::render_to_frame(
                 &world,
                 &cam_id,
@@ -729,7 +731,7 @@ fn main() {
                 None,
                 None,
                 None,
-                None,
+                &context,
             );
             let bytes = engine.render_frame(&frame);
 

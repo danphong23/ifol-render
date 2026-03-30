@@ -25,6 +25,13 @@ pub enum OverrideValue {
     String(String),
 }
 
+/// A specific render scope context containing valid entities.
+#[derive(Debug, Clone)]
+pub struct ContextView<'a> {
+    pub scope_id: Option<&'a str>,
+    pub active_entities: std::collections::HashSet<String>,
+}
+
 /// Unique identifier for an entity.
 pub type EntityId = String;
 
@@ -245,6 +252,61 @@ impl World {
             .entry(entity_id.to_string())
             .or_default()
             .insert(target, value);
+    }
+
+    /// Build a ContextView containing only the entities valid within a specific scope.
+    pub fn build_context<'a>(&self, scope_id: Option<&'a str>) -> ContextView<'a> {
+        let mut active_entities = std::collections::HashSet::new();
+
+        if scope_id.is_none() {
+            // All entities are active
+            for e in &self.entities {
+                active_entities.insert(e.id.clone());
+            }
+            return ContextView {
+                scope_id: None,
+                active_entities,
+            };
+        }
+
+        let scope_str = scope_id.unwrap();
+        
+        let is_in_scope = |entity_id: &str| -> bool {
+            if entity_id == scope_str {
+                return true;
+            }
+            let mut current_id = entity_id.to_string();
+            // Traverse up the parent tree
+            for _ in 0..20 {
+                if let Some(e) = self.entities.iter().find(|e| e.id == current_id) {
+                    if let Some(pid) = self.storages
+                        .get_component::<crate::ecs::components::meta::ParentId>(&e.id)
+                        .map(|id| &id.0)
+                    {
+                        if pid == scope_str {
+                            return true;
+                        }
+                        current_id = pid.to_string();
+                    } else {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            }
+            false
+        };
+
+        for e in &self.entities {
+            if is_in_scope(&e.id) {
+                active_entities.insert(e.id.clone());
+            }
+        }
+
+        ContextView {
+            scope_id,
+            active_entities,
+        }
     }
 
     /// Build ECS World from a SceneV2 definition.
