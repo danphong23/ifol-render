@@ -1,11 +1,25 @@
-// Color grading — brightness, contrast, saturation adjustments.
+// Color grading — tint, brightness, contrast, saturation adjustments.
 //
 // Convention: vs_fullscreen + fs_main, bindings 0=uniform, 1=texture, 2=sampler
+//
+// Params layout (alphabetical sort from material_sys):
+//   vec4_uniforms { u0_tint } → u0_tint_0(R), u0_tint_1(G), u0_tint_2(B), u0_tint_3(A)
+//   float_uniforms { u1_contrast, u2_saturation, u3_brightness }
+//   Sorted: u0_tint_0, u0_tint_1, u0_tint_2, u0_tint_3, u1_contrast, u2_saturation, u3_brightness, pad
+//
+// When used WITHOUT vec4 tint (legacy mode with only float uniforms):
+//   float_uniforms { brightness, contrast, saturation }
+//   Sorted: brightness, contrast, saturation, pad
+//   This still works because the struct layout starts at the beginning.
 
 struct Params {
-    brightness: f32,    // -1.0 to 1.0 (0 = no change)
-    contrast: f32,      // 0.0 to 2.0 (1.0 = no change)
-    saturation: f32,    // 0.0 to 2.0 (1.0 = no change)
+    tint_r: f32,
+    tint_g: f32,
+    tint_b: f32,
+    tint_a: f32,
+    contrast: f32,
+    saturation: f32,
+    brightness: f32,
     _pad: f32,
 }
 
@@ -32,8 +46,15 @@ fn vs_fullscreen(@builtin(vertex_index) vi: u32) -> VertexOutput {
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     var color = textureSample(t_input, t_sampler, in.uv);
 
-    // Brightness
-    color = vec4f(color.rgb + vec3f(params.brightness), color.a);
+    // Tint (multiply by tint color)
+    let tint = vec3f(params.tint_r, params.tint_g, params.tint_b);
+    // Only apply tint if it's non-zero (tint_a > 0 signals tint is active)
+    if (params.tint_a > 0.001) {
+        color = vec4f(color.rgb * tint, color.a);
+    }
+
+    // Brightness (multiplicative, 1.0 = neutral)
+    color = vec4f(color.rgb * params.brightness, color.a);
 
     // Contrast (pivot at 0.5)
     color = vec4f((color.rgb - 0.5) * params.contrast + 0.5, color.a);

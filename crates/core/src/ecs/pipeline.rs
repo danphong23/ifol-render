@@ -31,8 +31,8 @@ pub fn run(
     systems::rect_system(world, time);
 
     // Phase 4: Hierarchy cascade (World space resolution)
-    systems::hierarchy_system(world, time);
-    
+    systems::hierarchy_system(world, time, scope_entity_id);
+
     // Phase 5: Culling (skip invisible bounds)
     systems::culling_system(world, time);
 

@@ -39,19 +39,39 @@ impl AssetManager {
 
         // 1. Identify which assets are needed right now or in the immediate future
         for entity in &scene.entities {
-            let asset_id = entity.components.get("videoSource").and_then(|v| v.get("assetId")).and_then(|v| v.as_str())
-                .or_else(|| entity.components.get("imageSource").and_then(|v| v.get("assetId")).and_then(|v| v.as_str()))
-                .or_else(|| entity.components.get("audioSource").and_then(|v| v.get("assetId")).and_then(|v| v.as_str()));
+            let asset_id = entity
+                .components
+                .get("videoSource")
+                .and_then(|v| v.get("assetId"))
+                .and_then(|v| v.as_str())
+                .or_else(|| {
+                    entity
+                        .components
+                        .get("imageSource")
+                        .and_then(|v| v.get("assetId"))
+                        .and_then(|v| v.as_str())
+                })
+                .or_else(|| {
+                    entity
+                        .components
+                        .get("audioSource")
+                        .and_then(|v| v.get("assetId"))
+                        .and_then(|v| v.as_str())
+                });
 
             if let Some(aid) = asset_id {
                 let mut is_needed = false;
                 if let Some(ls) = entity.components.get("lifespan") {
-                    if let Ok(lifespan) = serde_json::from_value::<crate::scene::Lifespan>(ls.clone()) {
+                    if let Ok(lifespan) =
+                        serde_json::from_value::<crate::scene::Lifespan>(ls.clone())
+                    {
                         let active_start = lifespan.start - self.preload_margin;
                         if time >= active_start && time < lifespan.end {
                             is_needed = true;
                         }
-                    } else { is_needed = true; } // play it safe
+                    } else {
+                        is_needed = true;
+                    } // play it safe
                 } else {
                     is_needed = true; // no lifespan = always active
                 }

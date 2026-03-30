@@ -1,5 +1,5 @@
-use ifol_render_ecs::scene::MaterialV2;
 use ifol_render_ecs::ecs::components::meta::Materials;
+use ifol_render_ecs::scene::MaterialV2;
 
 fn main() {
     let json = r#"
@@ -12,7 +12,7 @@ fn main() {
         }
     ]
     "#;
-    
+
     match serde_json::from_str::<Materials>(json) {
         Ok(m) => println!("Success: {:#?}", m),
         Err(e) => println!("Error: {}", e),

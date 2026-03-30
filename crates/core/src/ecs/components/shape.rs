@@ -10,15 +10,15 @@ use serde::{Deserialize, Serialize};
 pub struct ShapeSource {
     #[serde(default)]
     pub kind: ShapeKind,
-    
+
     /// Fill color in RGBA format [r, g, b, a].
     #[serde(default = "default_white")]
     pub fill_color: [f32; 4],
-    
+
     /// Optional stroke color.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stroke_color: Option<[f32; 4]>,
-    
+
     /// Stroke width (only applied if stroke_color exists).
     #[serde(default = "default_stroke_width")]
     pub stroke_width: f32,

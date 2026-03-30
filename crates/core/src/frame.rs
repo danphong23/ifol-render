@@ -253,6 +253,9 @@ pub enum PassType {
     Output {
         /// Input texture key to read as final pixels.
         input: String,
+        /// Overlay entities to draw on top of the final output (useful for editor UI).
+        #[serde(default)]
+        entities: Vec<FlatEntity>,
     },
 }
 

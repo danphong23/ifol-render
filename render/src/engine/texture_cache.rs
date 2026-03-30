@@ -26,7 +26,12 @@ pub struct TextureKey {
 }
 
 impl TextureKey {
-    pub fn new(width: u32, height: u32, format: wgpu::TextureFormat, usage: wgpu::TextureUsages) -> Self {
+    pub fn new(
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        usage: wgpu::TextureUsages,
+    ) -> Self {
         Self {
             width,
             height,
@@ -95,6 +100,12 @@ impl TextureCache {
         }
     }
 
+    /// Clear all textures in the pool (useful when resizing or context loss).
+    pub fn clear(&mut self) {
+        self.buckets.clear();
+        self.entries.clear();
+    }
+
     /// Begin a new frame. All textures become available for reuse.
     ///
     /// Call this at the start of each render frame, before any `acquire()`.
@@ -111,11 +122,7 @@ impl TextureCache {
     /// Otherwise, create a new one via the device.
     ///
     /// Returns a reference to the `wgpu::Texture`.
-    pub fn acquire(
-        &mut self,
-        device: &wgpu::Device,
-        key: TextureKey,
-    ) -> &wgpu::Texture {
+    pub fn acquire(&mut self, device: &wgpu::Device, key: TextureKey) -> &wgpu::Texture {
         // Look for an idle entry in the matching bucket
         if let Some(indices) = self.buckets.get(&key) {
             for &idx in indices {
@@ -142,7 +149,7 @@ impl TextureCache {
             usage: wgpu::TextureUsages::from_bits_truncate(key.usage),
             view_formats: &[],
         });
-        
+
         let idx = self.entries.len();
         self.entries.push(CacheEntry {
             texture,
@@ -210,10 +217,14 @@ impl TextureCache {
     /// Get cache statistics.
     pub fn stats(&self) -> CacheStats {
         let active = self.entries.iter().filter(|e| e.in_use).count();
-        let total_bytes: u64 = self.entries.iter().map(|e| {
-            let bpp = bytes_per_pixel(e.key.format);
-            (e.key.width as u64) * (e.key.height as u64) * bpp
-        }).sum();
+        let total_bytes: u64 = self
+            .entries
+            .iter()
+            .map(|e| {
+                let bpp = bytes_per_pixel(e.key.format);
+                (e.key.width as u64) * (e.key.height as u64) * bpp
+            })
+            .sum();
 
         CacheStats {
             total_count: self.entries.len(),

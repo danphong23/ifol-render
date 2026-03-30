@@ -1,5 +1,5 @@
-use crate::ecs::components::animation::AnimTarget;
 use crate::ecs::World;
+use crate::ecs::components::animation::AnimTarget;
 
 /// Animation System (V4)
 ///
@@ -46,8 +46,7 @@ pub fn animation_system(world: &mut World) {
         if let Some(v) = storages.get_component::<crate::ecs::components::Visual>(&entity.id) {
             entity.resolved.opacity = v.opacity;
             entity.resolved.volume = v.volume;
-            // blend_mode parse removed for brevity, will map properly later
-            entity.resolved.blend_mode = Default::default();
+            entity.resolved.blend_mode = crate::ecs::components::compositing::BlendMode::from_str(&v.blend_mode);
         } else {
             entity.resolved.opacity = 1.0;
             entity.resolved.volume = 1.0;
@@ -58,14 +57,18 @@ pub fn animation_system(world: &mut World) {
         if let Some(c) = storages.get_component::<crate::ecs::components::ColorSource>(&entity.id) {
             let col = &c.color;
             entity.resolved.color = [col.r, col.g, col.b, col.a];
-        } else if let Some(s) = storages.get_component::<crate::ecs::components::ShapeSource>(&entity.id) {
+        } else if let Some(s) =
+            storages.get_component::<crate::ecs::components::ShapeSource>(&entity.id)
+        {
             entity.resolved.color = s.fill_color;
         } else {
             entity.resolved.color = [1.0, 1.0, 1.0, 1.0];
         }
 
         // 2. Evaluate AnimationComponent (if present) to override resolved values
-        if let Some(anim) = storages.get_component::<crate::ecs::components::AnimationComponent>(&entity.id) {
+        if let Some(anim) =
+            storages.get_component::<crate::ecs::components::AnimationComponent>(&entity.id)
+        {
             // Float tracks -> f32 targets
             for track in &anim.float_tracks {
                 if track.track.keyframes.is_empty() {
@@ -80,19 +83,19 @@ pub fn animation_system(world: &mut World) {
                     AnimTarget::TransformAnchorY => entity.resolved.anchor_y = val,
                     AnimTarget::TransformScaleX => entity.resolved.scale_x = val,
                     AnimTarget::TransformScaleY => entity.resolved.scale_y = val,
-                    
+
                     AnimTarget::RectWidth => entity.resolved.width = val,
                     AnimTarget::RectHeight => entity.resolved.height = val,
-                    
+
                     AnimTarget::Opacity => entity.resolved.opacity = val,
                     AnimTarget::Volume => entity.resolved.volume = val,
                     AnimTarget::PlaybackTime => entity.resolved.playback_time = val as f64,
-                    
+
                     AnimTarget::ColorR => entity.resolved.color[0] = val,
                     AnimTarget::ColorG => entity.resolved.color[1] = val,
                     AnimTarget::ColorB => entity.resolved.color[2] = val,
                     AnimTarget::ColorA => entity.resolved.color[3] = val,
-                    
+
                     AnimTarget::FloatUniform(_) => {
                         // Handled dynamically if needed, or matched internally
                     }
@@ -130,19 +133,19 @@ pub fn animation_system(world: &mut World) {
                         AnimTarget::TransformAnchorY => entity.resolved.anchor_y = *val,
                         AnimTarget::TransformScaleX => entity.resolved.scale_x = *val,
                         AnimTarget::TransformScaleY => entity.resolved.scale_y = *val,
-                        
+
                         AnimTarget::RectWidth => entity.resolved.width = *val,
                         AnimTarget::RectHeight => entity.resolved.height = *val,
-                        
+
                         AnimTarget::Opacity => entity.resolved.opacity = *val,
                         AnimTarget::Volume => entity.resolved.volume = *val,
                         AnimTarget::PlaybackTime => entity.resolved.playback_time = *val as f64,
-                        
+
                         AnimTarget::ColorR => entity.resolved.color[0] = *val,
                         AnimTarget::ColorG => entity.resolved.color[1] = *val,
                         AnimTarget::ColorB => entity.resolved.color[2] = *val,
                         AnimTarget::ColorA => entity.resolved.color[3] = *val,
-                        
+
                         AnimTarget::FloatUniform(_) => {}
                         _ => {}
                     }
@@ -155,15 +158,15 @@ pub fn animation_system(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::Entity;
     use crate::ecs::components::animation::{AnimTarget, FloatAnimTrack};
     use crate::ecs::components::{AnimationComponent, Transform};
-    use crate::ecs::Entity;
     use crate::scene::{FloatTrack, Interpolation, Keyframe};
 
     #[test]
     fn test_animation_system_evaluates_float_track() {
         let mut world = World::new();
-        
+
         // Entity with base transform x=10, but animated to go from 100 to 200 over 1 second (linear)
         world.add_entity(Entity {
             id: "anim_test".to_string(),
@@ -172,15 +175,18 @@ mod tests {
         });
 
         // Static fallback
-        world.add_component("anim_test", Transform {
-            x: 10.0,
-            y: 0.0,
-            rotation: 0.0,
-            anchor_x: 0.0,
-            anchor_y: 0.0,
-            scale_x: 1.0,
-            scale_y: 1.0,
-        });
+        world.add_component(
+            "anim_test",
+            Transform {
+                x: 10.0,
+                y: 0.0,
+                rotation: 0.0,
+                anchor_x: 0.0,
+                anchor_y: 0.0,
+                scale_x: 1.0,
+                scale_y: 1.0,
+            },
+        );
 
         // Animation override
         let mut track = FloatTrack::default();
@@ -195,13 +201,16 @@ mod tests {
             interpolation: Interpolation::Hold,
         });
 
-        world.add_component("anim_test", AnimationComponent {
-            float_tracks: vec![FloatAnimTrack {
-                target: AnimTarget::TransformX,
-                track,
-            }],
-            string_tracks: vec![],
-        });
+        world.add_component(
+            "anim_test",
+            AnimationComponent {
+                float_tracks: vec![FloatAnimTrack {
+                    target: AnimTarget::TransformX,
+                    track,
+                }],
+                string_tracks: vec![],
+            },
+        );
 
         // Force visibility
         world.entities[0].resolved.visible = true;
@@ -209,7 +218,7 @@ mod tests {
         // Test at t=0.5
         world.entities[0].resolved.time.local_time = 0.5;
         animation_system(&mut world);
-        
+
         // Assert value is interpolated (150.0) and not the static base (10.0)
         assert_eq!(world.entities[0].resolved.x, 150.0);
     }

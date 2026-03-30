@@ -17,11 +17,31 @@ pub fn setup_builtins(renderer: &mut Renderer) {
             include_str!("../../shaders/composite.wgsl"),
             PipelineConfig::quad(),
         );
+        renderer.register_pipeline(
+            "composite_mask_in",
+            include_str!("../../shaders/composite.wgsl"),
+            PipelineConfig::quad(),
+        );
+        renderer.register_pipeline(
+            "composite_mask_out",
+            include_str!("../../shaders/composite.wgsl"),
+            PipelineConfig::quad(),
+        );
     }
 
     if !renderer.has_pipeline("shapes") {
         renderer.register_pipeline(
             "shapes",
+            include_str!("../../shaders/shapes.wgsl"),
+            PipelineConfig::quad(),
+        );
+        renderer.register_pipeline(
+            "shapes_mask_in",
+            include_str!("../../shaders/shapes.wgsl"),
+            PipelineConfig::quad(),
+        );
+        renderer.register_pipeline(
+            "shapes_mask_out",
             include_str!("../../shaders/shapes.wgsl"),
             PipelineConfig::quad(),
         );
@@ -36,10 +56,24 @@ pub fn setup_builtins(renderer: &mut Renderer) {
     }
 
     if !renderer.has_pipeline("gradient") {
-        renderer.register_pipeline(
+        renderer.register_effect(
             "gradient",
-            include_str!("../../shaders/gradient.wgsl"),
-            PipelineConfig::quad(),
+            include_str!("../../shaders/effects/gradient_effect.wgsl"),
+            vec![
+                ("angle".into(), 0.0),
+                ("color1_r".into(), 1.0),
+                ("color1_g".into(), 1.0),
+                ("color1_b".into(), 1.0),
+                ("color1_a".into(), 1.0),
+                ("color2_r".into(), 0.0),
+                ("color2_g".into(), 0.0),
+                ("color2_b".into(), 0.0),
+                ("color2_a".into(), 1.0),
+                ("_pad0".into(), 0.0),
+                ("_pad1".into(), 0.0),
+                ("_pad2".into(), 0.0),
+            ],
+            1,
         );
     }
 
@@ -77,22 +111,13 @@ pub fn setup_builtins(renderer: &mut Renderer) {
             ";
 
     if !renderer.has_pipeline("copy") {
-        renderer.register_effect(
-            "copy",
-            copy_shader_src,
-            vec![("_pad".into(), 0.0)],
-            1,
-        );
+        renderer.register_effect("copy", copy_shader_src, vec![("_pad".into(), 0.0)], 1);
     }
 
     if !renderer.has_pipeline("output_copy") {
         let mut config = PipelineConfig::fullscreen();
         config.target_format = Some(renderer.texture_format()); // Force output to surface format
-        renderer.register_pipeline(
-            "output_copy",
-            copy_shader_src,
-            config,
-        );
+        renderer.register_pipeline("output_copy", copy_shader_src, config);
     }
 
     if !renderer.has_pipeline("mask_composite") {
@@ -124,9 +149,13 @@ pub fn setup_builtins(renderer: &mut Renderer) {
             "color_grade",
             include_str!("../../shaders/effects/color_grade.wgsl"),
             vec![
-                ("brightness".into(), 0.0),
+                ("tint_r".into(), 1.0),
+                ("tint_g".into(), 1.0),
+                ("tint_b".into(), 1.0),
+                ("tint_a".into(), 1.0),
                 ("contrast".into(), 1.0),
                 ("saturation".into(), 1.0),
+                ("brightness".into(), 0.0),
                 ("_pad".into(), 0.0),
             ],
             1,

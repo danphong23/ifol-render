@@ -15,6 +15,8 @@ pub enum BlendMode {
     SoftLight,
     HardLight,
     Difference,
+    MaskIn,
+    MaskOut,
 }
 
 impl Default for BlendMode {
@@ -36,6 +38,8 @@ impl BlendMode {
             "soft_light" => Self::SoftLight,
             "hard_light" => Self::HardLight,
             "difference" => Self::Difference,
+            "mask_in" => Self::MaskIn,
+            "mask_out" => Self::MaskOut,
             _ => Self::Normal,
         }
     }
@@ -53,6 +57,8 @@ impl BlendMode {
             Self::SoftLight => 8,
             Self::HardLight => 9,
             Self::Difference => 10,
+            Self::MaskIn => 11,
+            Self::MaskOut => 12,
         }
     }
 }

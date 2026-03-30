@@ -159,51 +159,70 @@ fn main() {
                 .unwrap_or_default();
 
             // Override settings with CLI arguments
-            if let Some(f) = fps { settings.fps = f; }
-            if let Some(w) = width { settings.width = w; }
-            if let Some(h) = height { settings.height = h; }
+            if let Some(f) = fps {
+                settings.fps = f;
+            }
+            if let Some(w) = width {
+                settings.width = w;
+            }
+            if let Some(h) = height {
+                settings.height = h;
+            }
 
             eprintln!("Detected V2 Scene format (entities)");
-            let scene_v2: ifol_render_ecs::scene::SceneV2 = serde_json::from_value(
-                serde_json::Value::Object(doc.as_object().unwrap().clone())
-            ).unwrap_or_else(|e| {
-                eprintln!("Invalid V2 scene: {}", e);
-                std::process::exit(1);
-            });
-            
+            let scene_v2: ifol_render_ecs::scene::SceneV2 =
+                serde_json::from_value(serde_json::Value::Object(doc.as_object().unwrap().clone()))
+                    .unwrap_or_else(|e| {
+                        eprintln!("Invalid V2 scene: {}", e);
+                        std::process::exit(1);
+                    });
+
             let mut world = ifol_render_ecs::ecs::World::new();
             world.load_scene(&scene_v2);
-            
+
             // Compute max duration from lifespans
             let mut max_end: f64 = 10.0;
             let storages = &world.storages;
             for ent in &world.entities {
-                if let Some(tl) = storages.get_component::<ifol_render_ecs::scene::Lifespan>(&ent.id) {
-                    if tl.end > max_end && tl.end < 1_000_000.0 { max_end = tl.end; }
+                if let Some(tl) =
+                    storages.get_component::<ifol_render_ecs::scene::Lifespan>(&ent.id)
+                {
+                    if tl.end > max_end && tl.end < 1_000_000.0 {
+                        max_end = tl.end;
+                    }
                 }
             }
-            
+
             let fps_val = settings.fps;
-            
+
             // Run ECS pipeline once at t=0 to resolve visibility (needed for find_camera)
             let init_time = ifol_render_ecs::time::TimeState {
-                global_time: 0.0, delta_time: 1.0 / fps_val, frame_index: 0, fps: fps_val,
+                global_time: 0.0,
+                delta_time: 1.0 / fps_val,
+                frame_index: 0,
+                fps: fps_val,
             };
             ifol_render_ecs::ecs::pipeline::run(&mut world, &init_time, None, None);
-            
+
             // Find camera: use --camera arg if provided, otherwise auto-detect first visible camera
             let camera_id = if let Some(ref cam_arg) = camera {
                 cam_arg.clone()
             } else {
-                world.find_camera("")
+                world
+                    .find_camera("")
                     .map(|e| e.id.clone())
                     .unwrap_or_else(|| "cam".to_string())
             };
-            
+
             let total_frames = (max_end * fps_val).ceil() as usize;
-            eprintln!("V2 Scene: {} entities, cam={}, duration={:.1}s, {} frames", 
-                world.entities.len(), camera_id, max_end, total_frames);
-            
+            eprintln!(
+                "V2 Scene: {} entities, cam={}, duration={:.1}s, {} frames",
+                world.entities.len(),
+                camera_id,
+                max_end,
+                total_frames
+            );
+
             let total = total_frames;
             let computed_fps = settings.fps;
 
@@ -213,21 +232,30 @@ fn main() {
             for ent in &world.entities {
                 let mut has_audio = false;
                 let mut asset_id = String::new();
-                if let Some(vid) = storages.get_component::<ifol_render_ecs::ecs::components::VideoSource>(&ent.id) {
+                if let Some(vid) =
+                    storages.get_component::<ifol_render_ecs::ecs::components::VideoSource>(&ent.id)
+                {
                     has_audio = true;
                     asset_id = vid.asset_id.clone();
-                } else if let Some(aud) = storages.get_component::<ifol_render_ecs::ecs::components::AudioSource>(&ent.id) {
+                } else if let Some(aud) =
+                    storages.get_component::<ifol_render_ecs::ecs::components::AudioSource>(&ent.id)
+                {
                     has_audio = true;
                     asset_id = aud.asset_id.clone();
                 }
-                
+
                 if has_audio {
                     // Get timing from Lifespan
-                    if let Some(life) = storages.get_component::<ifol_render_ecs::scene::Lifespan>(&ent.id) {
+                    if let Some(life) =
+                        storages.get_component::<ifol_render_ecs::scene::Lifespan>(&ent.id)
+                    {
                         let duration = life.end - life.start;
                         // For audio, we check Composition/Video duration limit if any (simplified here to full lifespan)
                         if duration > 0.0 {
-                            let original_url = world.resolve_asset_url(&asset_id).unwrap_or(&asset_id).to_string();
+                            let original_url = world
+                                .resolve_asset_url(&asset_id)
+                                .unwrap_or(&asset_id)
+                                .to_string();
                             let mut local_path = original_url.clone();
                             if local_path.starts_with("http") {
                                 if local_path.contains("/examples/") {
@@ -235,13 +263,16 @@ fn main() {
                                         local_path = format!("web/examples/{}", filename);
                                     }
                                 } else {
-                                    let safe_name = original_url.chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+                                    let safe_name = original_url
+                                        .chars()
+                                        .filter(|c| c.is_alphanumeric())
+                                        .collect::<String>();
                                     local_path = format!("ifol_temp_{}", safe_name);
                                 }
                             } else if local_path.starts_with("file:///") {
                                 local_path = local_path.replace("file:///", "");
                             }
-                            
+
                             audio_clips.push(ifol_audio::AudioClip {
                                 path: local_path,
                                 start_time: life.start,
@@ -273,11 +304,18 @@ fn main() {
 
             eprintln!(
                 "Scene: {}x{} @ {}fps, {} frames, {} audio clips",
-                out_w, out_h, fps, total, audio_clips.len()
+                out_w,
+                out_h,
+                fps,
+                total,
+                audio_clips.len()
             );
             eprintln!(
                 "Export: codec={}, crf={}, preset={}, pix_fmt={}",
-                video_codec.encoder_name(), crf, preset, pixel_format
+                video_codec.encoder_name(),
+                crf,
+                preset,
+                pixel_format
             );
 
             // Detect hardware encoder before creating the engine
@@ -285,7 +323,8 @@ fn main() {
             let sys_info = ifol_render_core::sysinfo::SysInfo::probe(ffmpeg_bin);
             eprintln!(
                 "Encoder: {} (hw: {})",
-                sys_info.best_h264_encoder(), sys_info.vendor_name
+                sys_info.best_h264_encoder(),
+                sys_info.vendor_name
             );
 
             // Create headless CoreEngine
@@ -312,7 +351,8 @@ fn main() {
                         eprintln!("Downloading remote asset {}...", url);
                         let _ = std::process::Command::new("curl")
                             .arg("-s")
-                            .arg("-o").arg(&tmp_path)
+                            .arg("-o")
+                            .arg(&tmp_path)
                             .arg(url)
                             .status();
                     }
@@ -323,10 +363,15 @@ fn main() {
 
             let storages = &world.storages;
             for ent in &world.entities {
-                if let Some(img) = storages.get_component::<ifol_render_ecs::ecs::components::ImageSource>(&ent.id) {
-                    let original_url = world.resolve_asset_url(&img.asset_id).unwrap_or(&img.asset_id).to_string();
+                if let Some(img) =
+                    storages.get_component::<ifol_render_ecs::ecs::components::ImageSource>(&ent.id)
+                {
+                    let original_url = world
+                        .resolve_asset_url(&img.asset_id)
+                        .unwrap_or(&img.asset_id)
+                        .to_string();
                     let mut local_path = original_url.clone();
-                    
+
                     // Map dev server URLs to local files
                     if local_path.starts_with("http") && local_path.contains("/examples/") {
                         if let Some(filename) = local_path.split('/').last() {
@@ -340,15 +385,22 @@ fn main() {
 
                     if !local_path.starts_with("blob:") && !local_path.starts_with("http") {
                         match engine.load_image(&original_url, &local_path) {
-                            Ok(_) => eprintln!("  Loaded image: {} -> {}", original_url, local_path),
+                            Ok(_) => {
+                                eprintln!("  Loaded image: {} -> {}", original_url, local_path)
+                            }
                             Err(e) => eprintln!("  Image load error '{}': {}", local_path, e),
                         }
                     }
                 }
-                if let Some(text) = storages.get_component::<ifol_render_ecs::ecs::components::TextSource>(&ent.id) {
-                    let original_url = world.resolve_asset_url(&text.font).unwrap_or(&text.font).to_string();
+                if let Some(text) =
+                    storages.get_component::<ifol_render_ecs::ecs::components::TextSource>(&ent.id)
+                {
+                    let original_url = world
+                        .resolve_asset_url(&text.font)
+                        .unwrap_or(&text.font)
+                        .to_string();
                     let mut local_path = original_url.clone();
-                    
+
                     if local_path.starts_with("http") && local_path.contains("/examples/") {
                         if let Some(filename) = local_path.split('/').last() {
                             local_path = format!("web/examples/{}", filename);
@@ -363,7 +415,9 @@ fn main() {
                         // Suppress errors if already loaded
                         if !engine.has_font(&original_url) {
                             match engine.load_font(&original_url, &local_path) {
-                                Ok(_) => eprintln!("  Loaded font: {} -> {}", original_url, local_path),
+                                Ok(_) => {
+                                    eprintln!("  Loaded font: {} -> {}", original_url, local_path)
+                                }
                                 Err(e) => eprintln!("  Font load error '{}': {}", local_path, e),
                             }
                         }
@@ -402,47 +456,53 @@ fn main() {
 
             // Build frame iterator using V2 ECS Pipeline
             let mut fi = 0usize;
-            let frame_iter: Box<dyn Iterator<Item = ifol_render_core::Frame>> = Box::new(std::iter::from_fn(move || {
-                if fi >= total_frames { return None; }
-                let t = fi as f64 / fps_val;
-                let time_state = ifol_render_ecs::time::TimeState {
-                    global_time: t,
-                    delta_time: 1.0 / fps_val,
-                    frame_index: fi as u64,
-                    fps: fps_val,
-                };
-                ifol_render_ecs::ecs::pipeline::run(&mut world, &time_state, None, None);
-                let mut frame = ifol_render_ecs::ecs::systems::render_to_frame(
-                    &world, &camera_id, out_w, out_h, t,
-                    None, None, None, None, None
-                );
-                
-                // Map paths dynamically to ensure decoding works
-                for update in &mut frame.texture_updates {
-                    match update {
-                        ifol_render_core::frame::TextureUpdate::DecodeVideoFrame { path, .. }
-                        | ifol_render_core::frame::TextureUpdate::LoadImage { path, .. }
-                        | ifol_render_core::frame::TextureUpdate::LoadFont { path, .. } => {
-                            if path.starts_with("http") {
-                                if path.contains("/examples/") {
-                                    if let Some(filename) = path.split('/').last() {
-                                        *path = format!("web/examples/{}", filename);
-                                    }
-                                } else {
-                                    let safe_name: String = path.chars().filter(|c| c.is_alphanumeric()).collect();
-                                    *path = format!("ifol_temp_{}", safe_name);
-                                }
-                            } else if path.starts_with("file:///") {
-                                *path = path.replace("file:///", "");
-                            }
-                        }
-                        _ => {}
+            let frame_iter: Box<dyn Iterator<Item = ifol_render_core::Frame>> =
+                Box::new(std::iter::from_fn(move || {
+                    if fi >= total_frames {
+                        return None;
                     }
-                }
-                
-                fi += 1;
-                Some(frame)
-            }));
+                    let t = fi as f64 / fps_val;
+                    let time_state = ifol_render_ecs::time::TimeState {
+                        global_time: t,
+                        delta_time: 1.0 / fps_val,
+                        frame_index: fi as u64,
+                        fps: fps_val,
+                    };
+                    ifol_render_ecs::ecs::pipeline::run(&mut world, &time_state, None, None);
+                    let mut frame = ifol_render_ecs::ecs::systems::render_to_frame(
+                        &world, &camera_id, out_w, out_h, t, None, None, None, None, None,
+                    );
+
+                    // Map paths dynamically to ensure decoding works
+                    for update in &mut frame.texture_updates {
+                        match update {
+                            ifol_render_core::frame::TextureUpdate::DecodeVideoFrame {
+                                path,
+                                ..
+                            }
+                            | ifol_render_core::frame::TextureUpdate::LoadImage { path, .. }
+                            | ifol_render_core::frame::TextureUpdate::LoadFont { path, .. } => {
+                                if path.starts_with("http") {
+                                    if path.contains("/examples/") {
+                                        if let Some(filename) = path.split('/').last() {
+                                            *path = format!("web/examples/{}", filename);
+                                        }
+                                    } else {
+                                        let safe_name: String =
+                                            path.chars().filter(|c| c.is_alphanumeric()).collect();
+                                        *path = format!("ifol_temp_{}", safe_name);
+                                    }
+                                } else if path.starts_with("file:///") {
+                                    *path = path.replace("file:///", "");
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    fi += 1;
+                    Some(frame)
+                }));
 
             match engine.export_video(frame_iter, total, &export_config, Some(&sys_info), |prog| {
                 // Return progress as JSON to stdout for easy parsing by Backend Servers
@@ -531,7 +591,7 @@ fn main() {
                 eprintln!("Invalid JSON syntax: {}", e);
                 std::process::exit(1);
             });
-            
+
             let settings: ifol_render_core::RenderSettings = doc
                 .get("settings")
                 .map(|s| serde_json::from_value(s.clone()).unwrap_or_default())
@@ -545,13 +605,16 @@ fn main() {
 
                     let mut max_end: f64 = 0.0;
                     for ent in &world.entities {
-                        if let Some(lifespan) = world.storages.get_component::<ifol_render_ecs::scene::Lifespan>(&ent.id) {
+                        if let Some(lifespan) = world
+                            .storages
+                            .get_component::<ifol_render_ecs::scene::Lifespan>(&ent.id)
+                        {
                             if lifespan.end > max_end && lifespan.end < 1000000.0 {
                                 max_end = lifespan.end;
                             }
                         }
                     }
-                    
+
                     let total_frames = (max_end * settings.fps).ceil() as u32;
                     let log_json = serde_json::json!({
                         "valid": true,
@@ -576,7 +639,14 @@ fn main() {
             }
         }
 
-        Commands::Preview { scene, time, output, width, height, camera } => {
+        Commands::Preview {
+            scene,
+            time,
+            output,
+            width,
+            height,
+            camera,
+        } => {
             let json = std::fs::read_to_string(&scene).unwrap_or_else(|e| {
                 eprintln!("Failed to read {:?}: {}", scene, e);
                 std::process::exit(1);
@@ -585,19 +655,24 @@ fn main() {
                 eprintln!("Invalid JSON syntax: {}", e);
                 std::process::exit(1);
             });
-            
+
             let mut settings: ifol_render_core::RenderSettings = doc
                 .get("settings")
                 .map(|s| serde_json::from_value(s.clone()).unwrap_or_default())
                 .unwrap_or_default();
-                
-            let scene_v2: ifol_render_ecs::scene::SceneV2 = serde_json::from_value(doc).unwrap_or_else(|e| {
-                eprintln!("Invalid ECS Scene structure: {}", e);
-                std::process::exit(1);
-            });
-            
-            if let Some(w) = width { settings.width = w; }
-            if let Some(h) = height { settings.height = h; }
+
+            let scene_v2: ifol_render_ecs::scene::SceneV2 = serde_json::from_value(doc)
+                .unwrap_or_else(|e| {
+                    eprintln!("Invalid ECS Scene structure: {}", e);
+                    std::process::exit(1);
+                });
+
+            if let Some(w) = width {
+                settings.width = w;
+            }
+            if let Some(h) = height {
+                settings.height = h;
+            }
 
             let mut world = ifol_render_ecs::ecs::World::new();
             world.load_scene(&scene_v2);
@@ -607,7 +682,10 @@ fn main() {
 
             // Run ECS pipeline to evaluate time, animation, and visibility at the target timestamp
             let time_state = ifol_render_ecs::time::TimeState {
-                global_time: time, delta_time: 1.0 / settings.fps, frame_index: 0, fps: settings.fps,
+                global_time: time,
+                delta_time: 1.0 / settings.fps,
+                frame_index: 0,
+                fps: settings.fps,
             };
             ifol_render_ecs::ecs::pipeline::run(&mut world, &time_state, None, None);
 
@@ -615,27 +693,52 @@ fn main() {
             let cam_id = if let Some(ref cam_arg) = camera {
                 cam_arg.clone()
             } else {
-                world.find_camera("")
+                world
+                    .find_camera("")
                     .map(|e| e.id.clone())
                     .unwrap_or_else(|| "cam".to_string())
             };
 
             // Sync assets before render (using bare fallback to disk)
             for ent in &world.entities {
-                if let Some(img) = world.storages.get_component::<ifol_render_ecs::ecs::components::ImageSource>(&ent.id) {
-                    let path = world.resolve_asset_url(&img.asset_id).unwrap_or(&img.asset_id);
+                if let Some(img) = world
+                    .storages
+                    .get_component::<ifol_render_ecs::ecs::components::ImageSource>(&ent.id)
+                {
+                    let path = world
+                        .resolve_asset_url(&img.asset_id)
+                        .unwrap_or(&img.asset_id);
                     let _ = engine.load_image(path, path);
                 }
-                if let Some(txt) = world.storages.get_component::<ifol_render_ecs::ecs::components::TextSource>(&ent.id) {
+                if let Some(txt) = world
+                    .storages
+                    .get_component::<ifol_render_ecs::ecs::components::TextSource>(&ent.id)
+                {
                     let path = world.resolve_asset_url(&txt.font).unwrap_or(&txt.font);
                     let _ = engine.load_font(path, path);
                 }
             }
 
-            let frame = ifol_render_ecs::ecs::systems::render_to_frame(&world, &cam_id, settings.width, settings.height, time, None, None, None, None, None);
+            let frame = ifol_render_ecs::ecs::systems::render_to_frame(
+                &world,
+                &cam_id,
+                settings.width,
+                settings.height,
+                time,
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
             let bytes = engine.render_frame(&frame);
-            
-            match ifol_render_core::engine::CoreEngine::save_png(&bytes, settings.width, settings.height, &output) {
+
+            match ifol_render_core::engine::CoreEngine::save_png(
+                &bytes,
+                settings.width,
+                settings.height,
+                &output,
+            ) {
                 Ok(_) => {
                     let log_json = serde_json::json!({
                         "valid": true,

@@ -15,15 +15,20 @@ use crate::time::TimeState;
 pub fn rect_system(world: &mut World, _time: &TimeState) {
     let storages = &world.storages;
     for entity in &mut world.entities {
-        if !entity.resolved.visible { continue; }
+        if !entity.resolved.visible {
+            continue;
+        }
 
         // === Resolve intrinsic dimensions from source ===
         entity.resolved.intrinsic_width = 0.0;
         entity.resolved.intrinsic_height = 0.0;
-        if let Some(vs) = storages.get_component::<crate::ecs::components::VideoSource>(&entity.id) {
+        if let Some(vs) = storages.get_component::<crate::ecs::components::VideoSource>(&entity.id)
+        {
             entity.resolved.intrinsic_width = vs.intrinsic_width;
             entity.resolved.intrinsic_height = vs.intrinsic_height;
-        } else if let Some(img) = storages.get_component::<crate::ecs::components::ImageSource>(&entity.id) {
+        } else if let Some(img) =
+            storages.get_component::<crate::ecs::components::ImageSource>(&entity.id)
+        {
             entity.resolved.intrinsic_width = img.intrinsic_width;
             entity.resolved.intrinsic_height = img.intrinsic_height;
         }
@@ -36,7 +41,9 @@ pub fn rect_system(world: &mut World, _time: &TimeState) {
             if entity.resolved.intrinsic_width > 0.0 && entity.resolved.intrinsic_height > 0.0 {
                 base_w = entity.resolved.intrinsic_width;
                 base_h = entity.resolved.intrinsic_height;
-            } else if let Some(cam) = storages.get_component::<crate::ecs::components::CameraComponent>(&entity.id) {
+            } else if let Some(cam) =
+                storages.get_component::<crate::ecs::components::CameraComponent>(&entity.id)
+            {
                 base_w = cam.resolution_width as f32;
                 base_h = cam.resolution_height as f32;
             } else {
@@ -51,7 +58,8 @@ pub fn rect_system(world: &mut World, _time: &TimeState) {
 
         // === Aspect ratios ===
         if entity.resolved.intrinsic_height > 0.0 {
-            entity.resolved.aspect_ratio = entity.resolved.intrinsic_width / entity.resolved.intrinsic_height;
+            entity.resolved.aspect_ratio =
+                entity.resolved.intrinsic_width / entity.resolved.intrinsic_height;
         } else {
             entity.resolved.aspect_ratio = 1.0;
         }

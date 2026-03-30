@@ -38,7 +38,7 @@ pub struct PipelineConfig {
     /// Explicit target format. If None, uses engine.working_format.
     pub target_format: Option<wgpu::TextureFormat>,
     /// Number of texture bindings to create.
-    /// Default is 1 (binding 1: tex, 2: sampler). 
+    /// Default is 1 (binding 1: tex, 2: sampler).
     /// If 2, creates additional bindings (binding 3: tex2, 4: sampler2).
     pub num_textures: u32,
 }
@@ -271,7 +271,12 @@ impl Renderer {
 
     /// Create a web renderer attached to an HTML canvas.
     #[cfg(target_arch = "wasm32")]
-    pub async fn new_web(canvas: web_sys::HtmlCanvasElement, width: u32, height: u32, hdr_enabled: bool) -> Self {
+    pub async fn new_web(
+        canvas: web_sys::HtmlCanvasElement,
+        width: u32,
+        height: u32,
+        hdr_enabled: bool,
+    ) -> Self {
         let engine = GpuEngine::new_web(canvas, width, height, hdr_enabled).await;
         Self::from_engine(engine)
     }
@@ -343,7 +348,11 @@ impl Renderer {
         // 1x1 transparent fallback texture
         let transparent_texture = engine.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("transparent 1x1"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -364,7 +373,11 @@ impl Renderer {
                 bytes_per_row: Some(4),
                 rows_per_image: Some(1),
             },
-            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
         );
         let transparent_texture_view = transparent_texture.create_view(&Default::default());
 
@@ -397,6 +410,7 @@ impl Renderer {
         self.height = height;
         self.engine.resize(width, height);
         self.effect_ctx = None;
+        self.texture_pool.clear();
     }
 
     /// Query GPU capabilities.
@@ -586,7 +600,11 @@ impl Renderer {
         if needs_create {
             let texture = self.engine.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(key),
-                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -634,9 +652,15 @@ impl Renderer {
             premultiplied_alpha: false,
         };
 
-        let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+        let size = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
 
-        self.engine.queue.copy_external_image_to_texture(&source, dest, size);
+        self.engine
+            .queue
+            .copy_external_image_to_texture(&source, dest, size);
     }
 
     /// Check if a texture is cached.
@@ -655,6 +679,11 @@ impl Renderer {
     pub fn clear_textures(&mut self) {
         self.texture_cache.clear();
         self.texture_cache_bytes = 0;
+    }
+
+    /// Iterator over all texture cache keys (for selective prefix-based eviction).
+    pub fn texture_cache_keys(&self) -> impl Iterator<Item = &String> {
+        self.texture_cache.keys()
     }
 
     /// Set maximum texture cache size in bytes. 0 = unlimited.
@@ -690,7 +719,7 @@ impl Renderer {
 
         let target = self.max_cache_bytes;
         let current_frame = self.frame_number;
-        
+
         while self.texture_cache_bytes + incoming_bytes > target && !self.texture_cache.is_empty() {
             // Find LRU among textures NOT used in the current frame
             let oldest_key = self
@@ -804,7 +833,33 @@ impl Renderer {
             vec![]
         };
 
-        let blend = if config.alpha_blend {
+        let blend = if name.contains("mask_in") {
+            Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::DstAlpha,
+                    dst_factor: wgpu::BlendFactor::Zero,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::DstAlpha,
+                    dst_factor: wgpu::BlendFactor::Zero,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            })
+        } else if name.contains("mask_out") {
+            Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::OneMinusDstAlpha,
+                    dst_factor: wgpu::BlendFactor::Zero,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::OneMinusDstAlpha,
+                    dst_factor: wgpu::BlendFactor::Zero,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            })
+        } else if config.alpha_blend {
             Some(wgpu::BlendState::ALPHA_BLENDING)
         } else {
             None
@@ -909,10 +964,15 @@ impl Renderer {
     ) -> wgpu::TextureView {
         if key.starts_with("_ent_") || key.starts_with("_sel_") {
             // Allocate from exact-match TexturePool
-            let t_key = engine::texture_cache::TextureKey::render_target(width, height, self.engine.working_format);
+            let t_key = engine::texture_cache::TextureKey::render_target(
+                width,
+                height,
+                self.engine.working_format,
+            );
             let texture = self.texture_pool.acquire(&self.engine.device, t_key);
             let view = texture.create_view(&Default::default());
-            self.transient_views.insert(key.to_string(), texture.create_view(&Default::default())); // Store a copy for later lookup
+            self.transient_views
+                .insert(key.to_string(), texture.create_view(&Default::default())); // Store a copy for later lookup
             return view;
         }
 
@@ -923,7 +983,7 @@ impl Renderer {
         };
         if needs_create {
             self.evict_if_needed(expected_size);
-            
+
             let texture = self.engine.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(key),
                 size: wgpu::Extent3d {
@@ -974,6 +1034,8 @@ impl Renderer {
 
     /// Reset transient frame-scoped resources.
     pub fn begin_frame(&mut self) {
+        self.frame_number += 1;
+        self.uniform_ring.reset();
         self.texture_pool.begin_frame();
         self.transient_views.clear();
     }
@@ -982,7 +1044,9 @@ impl Renderer {
     /// Call after rendering to prevent VRAM leaks from removed entities.
     pub fn cleanup_stale_textures(&mut self, max_age: u64) {
         let current = self.frame_number;
-        let stale_keys: Vec<String> = self.texture_cache.iter()
+        let stale_keys: Vec<String> = self
+            .texture_cache
+            .iter()
             .filter(|(_, v)| current > v.last_used_frame + max_age)
             .map(|(k, _)| k.clone())
             .collect();
@@ -997,7 +1061,21 @@ impl Renderer {
     pub fn render_frame(&mut self, commands: &[DrawCommand], clear_color: [f32; 4]) -> Vec<u8> {
         let w = self.engine.width;
         let h = self.engine.height;
-        self.render_frame_to(commands, clear_color, None, w, h);
+        let mut encoder =
+            self.engine
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Direct Frame Encoder"),
+                });
+
+        let surface_frame = self.render_frame_to(&mut encoder, commands, clear_color, None, w, h);
+
+        self.engine.queue.submit(std::iter::once(encoder.finish()));
+
+        if let Some(frame) = surface_frame {
+            frame.present();
+        }
+
         if self.engine.surface.is_none() {
             self.engine.readback_output()
         } else {
@@ -1010,16 +1088,17 @@ impl Renderer {
     /// and `engine.readback_output()` can be called.
     pub fn render_frame_to(
         &mut self,
+        encoder: &mut wgpu::CommandEncoder,
         commands: &[DrawCommand],
         clear_color: [f32; 4],
         output_key: Option<&str>,
         target_width: u32,
         target_height: u32,
-    ) {
-        if commands.is_empty() && output_key.is_some() {
-            // Nothing to draw to intermediate, skip to save GPU time
-            return;
-        }
+    ) -> Option<wgpu::SurfaceTexture> {
+        // NOTE: Do NOT skip empty intermediate passes! The LoadOp::Clear must
+        // always execute to reset stale pixel data from previous frames.
+        // Skipping leaves old pixels in the texture, causing ghost images and
+        // non-deterministic rendering with masking blend modes (DstAlpha).
 
         // Determine the target texture view.
         // For offscreen (output_key is Some), grab/create cached texture.
@@ -1028,28 +1107,22 @@ impl Renderer {
         let mut surface_frame = None;
 
         if let Some(key) = output_key {
-            output_view =
-                self.get_or_create_render_target(key, target_width, target_height);
+            output_view = self.get_or_create_render_target(key, target_width, target_height);
         } else if let Some(ref surface) = self.engine.surface {
             // WebGPU canvas rendering!
             let frame = surface
                 .get_current_texture()
                 .expect("Failed to acquire next surface texture");
-            output_view = frame
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor {
-                    format: Some(self.engine.texture_format), // Use sRGB view format
-                    ..Default::default()
-                });
+            output_view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(self.engine.texture_format), // Use sRGB view format
+                ..Default::default()
+            });
             surface_frame = Some(frame);
         } else {
             // Headless Native rendering!
             let tex = self.engine.output_texture.as_ref().unwrap();
             output_view = tex.create_view(&wgpu::TextureViewDescriptor::default());
         }
-
-        self.frame_number += 1;
-        self.uniform_ring.reset();
 
         // Phase 1: Write all uniforms to ring buffer, build draw list
         struct PreparedDraw {
@@ -1117,10 +1190,10 @@ impl Renderer {
                     } else {
                         &self.transparent_texture_view // Missing asset -> transparent
                     }
-                },
+                }
                 None => &self.white_texture_view, // No texture requested -> use white for solid colors
             };
-            
+
             // Build bind group entries dynamically
             let mut entries = vec![
                 wgpu::BindGroupEntry {
@@ -1128,9 +1201,7 @@ impl Renderer {
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &self.uniform_ring.buffer,
                         offset: 0,
-                        size: Some(
-                            std::num::NonZeroU64::new(self.uniform_ring.alignment).unwrap(),
-                        ),
+                        size: Some(std::num::NonZeroU64::new(self.uniform_ring.alignment).unwrap()),
                     }),
                 },
                 wgpu::BindGroupEntry {
@@ -1154,10 +1225,10 @@ impl Renderer {
                         } else {
                             &self.transparent_texture_view
                         }
-                    },
+                    }
                     None => &self.transparent_texture_view,
                 };
-                
+
                 entries.push(wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(tex_view_2),
@@ -1186,13 +1257,6 @@ impl Renderer {
         }
 
         // Phase 3: Single render pass, minimize pipeline switches
-        let mut encoder =
-            self.engine
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Render Frame"),
-                });
-
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main pass"),
@@ -1244,19 +1308,14 @@ impl Renderer {
             }
         } // encoder.begin_render_pass is dropped here
 
-        self.engine.queue.submit(std::iter::once(encoder.finish()));
-
-        // If we rendered to a WebGPU surface, we MUST present it.
-        if let Some(frame) = surface_frame {
-            frame.present();
-        }
-
         // If intermediate pass, mark the texture as written and update LRU
         if let Some(key) = output_key
             && let Some(entry) = self.texture_cache.get_mut(key)
         {
             entry.last_used_frame = self.frame_number;
         }
+
+        surface_frame
     }
 
     /// Render a frame with post-processing effects applied.
@@ -1272,7 +1331,21 @@ impl Renderer {
         // First: normal draw pass
         let w = self.engine.width;
         let h = self.engine.height;
-        self.render_frame_to(commands, [0.0, 0.0, 0.0, 1.0], Some("effect_input_temp"), w, h);
+        let mut master_encoder =
+            self.engine
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Master Effect Encoder"),
+                });
+
+        let surface_frame = self.render_frame_to(
+            &mut master_encoder,
+            commands,
+            [0.0, 0.0, 0.0, 1.0],
+            Some("effect_input_temp"),
+            w,
+            h,
+        );
 
         // Init effect context if needed
         if self.effect_ctx.is_none() {
@@ -1284,20 +1357,11 @@ impl Renderer {
             ));
         }
 
-        let _output_texture = self.engine.output_texture.as_ref();
-
         // Copy composite result into ping-pong input
-        let mut encoder =
-            self.engine
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("effect copy"),
-                });
         self.effect_ctx.as_ref().unwrap().load_from(
-            &mut encoder,
+            &mut master_encoder,
             &self.texture_cache.get("effect_input_temp").unwrap().texture,
         );
-        self.engine.queue.submit(std::iter::once(encoder.finish()));
 
         // Run each effect
         for config in effect_configs {
@@ -1397,15 +1461,8 @@ impl Renderer {
                         ],
                     });
 
-                let mut encoder =
-                    self.engine
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("effect pass"),
-                        });
-
                 {
-                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    let mut rpass = master_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("effect render pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                             view: effect_ctx.output_view(),
@@ -1425,24 +1482,25 @@ impl Renderer {
                     rpass.draw(0..3, 0..1);
                 }
 
-                self.engine.queue.submit(std::iter::once(encoder.finish()));
                 self.effect_ctx.as_mut().unwrap().swap();
             }
         }
 
         // Copy final result back to output
         let output_texture = self.engine.output_texture.as_ref().unwrap();
-        let mut encoder =
-            self.engine
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("effect store"),
-                });
         self.effect_ctx
             .as_ref()
             .unwrap()
-            .store_to(&mut encoder, output_texture);
-        self.engine.queue.submit(std::iter::once(encoder.finish()));
+            .store_to(&mut master_encoder, output_texture);
+
+        // Submit the ENTIRE batch of passes at once
+        self.engine
+            .queue
+            .submit(std::iter::once(master_encoder.finish()));
+
+        if let Some(frame) = surface_frame {
+            frame.present();
+        }
 
         self.engine.readback_output()
     }

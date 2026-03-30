@@ -6,15 +6,15 @@
 
 pub mod components;
 pub mod pipeline;
-pub mod systems;
-pub mod typemap;
 pub mod registry;
+pub mod systems;
 #[cfg(test)]
 mod tests;
+pub mod typemap;
 
+use crate::ecs::components::animation::AnimTarget;
 use crate::schema::v2::AssetDef;
 use crate::time::EntityTime;
-use crate::ecs::components::animation::AnimTarget;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -90,13 +90,19 @@ impl Default for ResolvedState {
     fn default() -> Self {
         Self {
             visible: false,
-            x: 0.0, y: 0.0,
+            x: 0.0,
+            y: 0.0,
             rotation: 0.0,
-            anchor_x: 0.0, anchor_y: 0.0,
-            scale_x: 1.0, scale_y: 1.0,
-            width: 100.0, height: 100.0,
-            intrinsic_width: 0.0, intrinsic_height: 0.0,
-            aspect_ratio: 1.0, display_aspect: 1.0,
+            anchor_x: 0.0,
+            anchor_y: 0.0,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            width: 100.0,
+            height: 100.0,
+            intrinsic_width: 0.0,
+            intrinsic_height: 0.0,
+            aspect_ratio: 1.0,
+            display_aspect: 1.0,
             fit_mode: components::FitMode::Stretch,
             opacity: 1.0,
             volume: 1.0,
@@ -123,7 +129,7 @@ pub struct World {
     /// Entity lookup by ID.
     #[serde(skip)]
     id_index: HashMap<EntityId, usize>,
-    
+
     #[serde(skip)]
     pub storages: typemap::TypeMap,
     #[serde(skip)]
@@ -193,11 +199,19 @@ impl World {
     pub fn find_camera(&self, camera_id: &str) -> Option<&Entity> {
         let storages = &self.storages;
         if !camera_id.is_empty() {
-            return self.get(camera_id).filter(|e| storages.get_component::<crate::ecs::components::CameraComponent>(&e.id).is_some());
+            return self.get(camera_id).filter(|e| {
+                storages
+                    .get_component::<crate::ecs::components::CameraComponent>(&e.id)
+                    .is_some()
+            });
         }
         // Fallback: first visible camera
-        self.entities.iter()
-            .find(|e| e.resolved.visible && storages.get_component::<crate::ecs::components::CameraComponent>(&e.id).is_some())
+        self.entities.iter().find(|e| {
+            e.resolved.visible
+                && storages
+                    .get_component::<crate::ecs::components::CameraComponent>(&e.id)
+                    .is_some()
+        })
     }
 
     pub fn add_component<T: 'static>(&mut self, entity_id: &str, component: T) {
@@ -209,18 +223,26 @@ impl World {
     }
 
     pub fn get_component<T: 'static>(&self, entity_id: &str) -> Option<&T> {
-        self.storages.get::<HashMap<EntityId, T>>()
+        self.storages
+            .get::<HashMap<EntityId, T>>()
             .and_then(|map| map.get(entity_id))
     }
-    
+
     pub fn get_component_mut<T: 'static>(&mut self, entity_id: &str) -> Option<&mut T> {
-        self.storages.get_mut::<HashMap<EntityId, T>>()
+        self.storages
+            .get_mut::<HashMap<EntityId, T>>()
             .and_then(|map| map.get_mut(entity_id))
     }
 
     /// Set an ephemeral override for a specific animation target.
-    pub fn set_transient_override(&mut self, entity_id: &str, target: AnimTarget, value: OverrideValue) {
-        self.editor_overrides.entry(entity_id.to_string())
+    pub fn set_transient_override(
+        &mut self,
+        entity_id: &str,
+        target: AnimTarget,
+        value: OverrideValue,
+    ) {
+        self.editor_overrides
+            .entry(entity_id.to_string())
             .or_default()
             .insert(target, value);
     }
@@ -236,7 +258,7 @@ impl World {
         // Load entities
         for ent_def in &scene.entities {
             let entity_id = ent_def.id.clone();
-            
+
             self.add_entity(Entity {
                 id: entity_id.clone(),
                 resolved: ResolvedState::default(),
@@ -248,10 +270,16 @@ impl World {
                 let loader_opt = self.registry.loaders.get(key).copied();
                 if let Some(loader) = loader_opt {
                     if let Err(e) = loader(self, &entity_id, value) {
-                        eprintln!("Failed to load component '{}' for entity '{}': {}", key, entity_id, e);
+                        eprintln!(
+                            "Failed to load component '{}' for entity '{}': {}",
+                            key, entity_id, e
+                        );
                     }
                 } else {
-                    println!("Warning: Unknown component '{}' for entity '{}'", key, entity_id);
+                    println!(
+                        "Warning: Unknown component '{}' for entity '{}'",
+                        key, entity_id
+                    );
                 }
             }
         }
@@ -266,10 +294,16 @@ impl World {
         // Build relationships
         for ent in &self.entities {
             let mut is_root = true;
-            if let Some(pid) = self.storages.get_component::<crate::ecs::components::meta::ParentId>(&ent.id) {
+            if let Some(pid) = self
+                .storages
+                .get_component::<crate::ecs::components::meta::ParentId>(&ent.id)
+            {
                 if self.id_index.contains_key(&pid.0) {
                     is_root = false;
-                    children_map.entry(pid.0.clone()).or_default().push(ent.id.clone());
+                    children_map
+                        .entry(pid.0.clone())
+                        .or_default()
+                        .push(ent.id.clone());
                 }
             }
             if is_root {
@@ -279,10 +313,10 @@ impl World {
 
         // Recursive flattening
         fn visit(
-            id: &str, 
-            cmap: &HashMap<String, Vec<String>>, 
-            visited: &mut std::collections::HashSet<String>, 
-            sorted_ids: &mut Vec<String>
+            id: &str,
+            cmap: &HashMap<String, Vec<String>>,
+            visited: &mut std::collections::HashSet<String>,
+            sorted_ids: &mut Vec<String>,
         ) {
             if visited.insert(id.to_string()) {
                 sorted_ids.push(id.to_string());
@@ -298,16 +332,22 @@ impl World {
         for root in roots {
             visit(&root, &children_map, &mut visited, &mut sorted_ids);
         }
-        
+
         // Add any disconnected cycles
         for ent in &self.entities {
             if !visited.contains(&ent.id) {
-                visit(&ent.id.clone(), &children_map, &mut visited, &mut sorted_ids);
+                visit(
+                    &ent.id.clone(),
+                    &children_map,
+                    &mut visited,
+                    &mut sorted_ids,
+                );
             }
         }
 
         // Apply new order
-        let mut id_to_entity: HashMap<String, Entity> = self.entities.drain(..).map(|e| (e.id.clone(), e)).collect();
+        let mut id_to_entity: HashMap<String, Entity> =
+            self.entities.drain(..).map(|e| (e.id.clone(), e)).collect();
         for id in sorted_ids {
             if let Some(ent) = id_to_entity.remove(&id) {
                 self.entities.push(ent);

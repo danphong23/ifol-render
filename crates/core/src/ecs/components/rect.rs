@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use super::FitMode;
+use serde::{Deserialize, Serialize};
 
 /// Display rectangle component.
 ///

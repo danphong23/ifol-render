@@ -44,10 +44,10 @@ impl FitMode {
         if intrinsic_width <= 0.0 || intrinsic_height <= 0.0 || *self == Self::Stretch {
             return ([0.0, 0.0], [1.0, 1.0]);
         }
-        
+
         let display_aspect = display_width / display_height.max(0.001);
         let source_aspect = intrinsic_width / intrinsic_height.max(0.001);
-        
+
         match self {
             Self::Contain => {
                 if source_aspect > display_aspect {
@@ -106,4 +106,3 @@ impl FitMode {
         }
     }
 }
-

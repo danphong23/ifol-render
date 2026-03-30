@@ -17,9 +17,40 @@ pub fn editor_gizmo_system(
     sy: f32,
     screen_width: u32,
     screen_height: u32,
+    scope_entity_id: Option<&str>,
 ) {
     let storages = &world.storages;
     let sorted = world.sorted_by_layer();
+
+    let is_in_scope = |entity_id: &str| -> bool {
+        if scope_entity_id.is_none() {
+            return true;
+        }
+        let scope_id = scope_entity_id.unwrap();
+        if entity_id == scope_id {
+            return true;
+        }
+
+        let mut current_id = entity_id.to_string();
+        for _ in 0..10 {
+            if let Some(e) = world.entities.iter().find(|e| e.id == current_id) {
+                if let Some(pid) = storages
+                    .get_component::<crate::ecs::components::meta::ParentId>(&e.id)
+                    .map(|id| &id.0)
+                {
+                    if pid == scope_id {
+                        return true;
+                    }
+                    current_id = pid.to_string();
+                } else {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        false
+    };
 
     // 1. Camera Gizmo Passes (Dashed rect & triangle)
     // We append them directly into the primary screen pass of the frame.
@@ -29,6 +60,7 @@ pub fn editor_gizmo_system(
     }) {
         for entity in &sorted {
             if !entity.resolved.visible { continue; }
+            if !is_in_scope(&entity.id) { continue; }
             if storages.get_component::<CameraComponent>(&entity.id).is_none() { continue; }
 
             let is_selected = selected_entity_ids.contains(&entity.id.as_str());
@@ -66,56 +98,72 @@ pub fn editor_gizmo_system(
             let tri_cx = (tri_x_world - cam_x) * sx;
             let tri_cy = (tri_y_world - cam_y) * sy;
 
-            if let crate::frame::PassType::Entities { ref mut entities, .. } = main_pass.pass_type {
-                entities.push(FlatEntity {
-                    id: 0,
-                    x: center_x - draw_w * 0.5,
-                    y: center_y - draw_h * 0.5,
-                    width: draw_w,
-                    height: draw_h,
-                    rotation: entity.resolved.rotation,
-                    opacity: 1.0,
-                    blend_mode: 0,
-                    color: cam_color,
-                    shader: "dashed_rect".to_string(),
-                    textures: vec![],
-                    params: vec![norm_dash, norm_gap, norm_border, 0.0],
-                    layer: 9999,
-                    z_index: 9999.0,
-                    fit_mode: 0,
-                    uv_offset: [0.0, 0.0],
-                    uv_scale: [1.0, 1.0],
-                    intrinsic_width: 1.0,
-                    intrinsic_height: 1.0,
-                });
+            let cam_border = FlatEntity {
+                id: 0,
+                x: center_x - draw_w * 0.5,
+                y: center_y - draw_h * 0.5,
+                width: draw_w,
+                height: draw_h,
+                rotation: entity.resolved.rotation,
+                opacity: 1.0,
+                blend_mode: 0,
+                color: cam_color,
+                shader: "dashed_rect".to_string(),
+                textures: vec![],
+                params: vec![norm_dash, norm_gap, norm_border, 0.0],
+                layer: 9999,
+                z_index: 9999.0,
+                fit_mode: 0,
+                uv_offset: [0.0, 0.0],
+                uv_scale: [1.0, 1.0],
+                intrinsic_width: 1.0,
+                intrinsic_height: 1.0,
+            };
 
-                entities.push(FlatEntity {
-                    id: 0,
-                    x: tri_cx - tri_w * 0.5,
-                    y: tri_cy - tri_h * 0.5,
-                    width: tri_w,
-                    height: tri_h,
-                    rotation: entity.resolved.rotation + std::f32::consts::PI,
-                    opacity: 1.0,
-                    blend_mode: 0,
-                    color: cam_color,
-                    shader: "shapes".to_string(),
-                    textures: vec![],
-                    params: vec![5.0, 0.0, 0.0, 0.0],
-                    layer: 9999,
-                    z_index: 9999.0,
-                    fit_mode: 0,
-                    uv_offset: [0.0, 0.0],
-                    uv_scale: [1.0, 1.0],
-                    intrinsic_width: 1.0,
-                    intrinsic_height: 1.0,
-                });
+            let cam_tri = FlatEntity {
+                id: 0,
+                x: tri_cx - tri_w * 0.5,
+                y: tri_cy - tri_h * 0.5,
+                width: tri_w,
+                height: tri_h,
+                rotation: entity.resolved.rotation + std::f32::consts::PI,
+                opacity: 1.0,
+                blend_mode: 0,
+                color: cam_color,
+                shader: "shapes".to_string(),
+                textures: vec![],
+                params: vec![5.0, 0.0, 0.0, 0.0],
+                layer: 9999,
+                z_index: 9999.0,
+                fit_mode: 0,
+                uv_offset: [0.0, 0.0],
+                uv_scale: [1.0, 1.0],
+                intrinsic_width: 1.0,
+                intrinsic_height: 1.0,
+            };
+
+            match main_pass.pass_type {
+                crate::frame::PassType::Entities { ref mut entities, .. } => {
+                    entities.push(cam_border);
+                    entities.push(cam_tri);
+                }
+                crate::frame::PassType::Output { ref mut entities, .. } => {
+                    entities.push(cam_border);
+                    entities.push(cam_tri);
+                }
+                _ => {}
             }
         }
         
         // Sort main pass to keep gizmos on top
-        if let crate::frame::PassType::Entities { ref mut entities, .. } = main_pass.pass_type {
-            entities.sort_by(|a, b| a.z_index.partial_cmp(&b.z_index).unwrap());
+        match main_pass.pass_type {
+            crate::frame::PassType::Entities { ref mut entities, .. } => {
+                entities.sort_by(|a, b| a.z_index.partial_cmp(&b.z_index).unwrap());
+            }
+            crate::frame::PassType::Output { ref mut entities, .. } => {
+                entities.sort_by(|a, b| a.z_index.partial_cmp(&b.z_index).unwrap());
+            }
+            _ => {}
         }
     }
 
@@ -123,9 +171,10 @@ pub fn editor_gizmo_system(
     if selected_entity_ids.is_empty() { return; }
 
     let mut sel_mask_entities = Vec::new();
-    for entity in &sorted {
-        if !entity.resolved.visible { continue; }
-        if !selected_entity_ids.contains(&entity.id.as_str()) { continue; }
+        for entity in &sorted {
+            if !entity.resolved.visible { continue; }
+            if !is_in_scope(&entity.id) { continue; }
+            if !selected_entity_ids.contains(&entity.id.as_str()) { continue; }
         if storages.get_component::<CameraComponent>(&entity.id).is_some() { continue; }
 
         let r = &entity.resolved;
@@ -232,28 +281,32 @@ pub fn editor_gizmo_system(
                 target_height: Some(screen_height),
             });
 
-            if let crate::frame::PassType::Entities { ref mut entities, .. } = frame.passes[main_idx + 2].pass_type {
-                entities.push(FlatEntity {
-                    id: 0,
-                    x: 0.0,
-                    y: 0.0,
-                    width: screen_width as f32,
-                    height: screen_height as f32,
-                    rotation: 0.0,
-                    opacity: 1.0,
-                    blend_mode: 0,
-                    color: [1.0, 1.0, 1.0, 1.0],
-                    shader: "composite".to_string(),
-                    textures: vec!["_sel_outline".to_string()],
-                    params: vec![],
-                    layer: 10001,
-                    z_index: 10001.0,
-                    fit_mode: 0,
-                    uv_offset: [0.0, 0.0],
-                    uv_scale: [1.0, 1.0],
-                    intrinsic_width: 0.0,
-                    intrinsic_height: 0.0,
-                });
+            let glow_overlay = FlatEntity {
+                id: 0,
+                x: 0.0,
+                y: 0.0,
+                width: screen_width as f32,
+                height: screen_height as f32,
+                rotation: 0.0,
+                opacity: 1.0,
+                blend_mode: 0,
+                color: [1.0, 1.0, 1.0, 1.0],
+                shader: "composite".to_string(),
+                textures: vec!["_sel_outline".to_string()],
+                params: vec![],
+                layer: 10001,
+                z_index: 10001.0,
+                fit_mode: 0,
+                uv_offset: [0.0, 0.0],
+                uv_scale: [1.0, 1.0],
+                intrinsic_width: 0.0,
+                intrinsic_height: 0.0,
+            };
+
+            match frame.passes[main_idx + 2].pass_type {
+                crate::frame::PassType::Entities { ref mut entities, .. } => entities.push(glow_overlay),
+                crate::frame::PassType::Output { ref mut entities, .. } => entities.push(glow_overlay),
+                _ => {}
             }
         }
     }

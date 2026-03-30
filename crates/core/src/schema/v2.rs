@@ -1,5 +1,5 @@
+use crate::schema::tracks::{FloatTrack, StringTrack, Vec4Track};
 use serde::{Deserialize, Serialize};
-use crate::schema::tracks::{FloatTrack, StringTrack};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SceneV2 {
@@ -33,16 +33,20 @@ pub enum ShaderScope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialV2 {
     pub shader_id: String,
-    
+
     #[serde(default)]
     pub scope: ShaderScope,
-    
+
     #[serde(default)]
     pub float_uniforms: std::collections::HashMap<String, FloatTrack>,
-    
+
+    #[serde(default)]
+    pub vec4_uniforms: std::collections::HashMap<String, Vec4Track>,
+
     #[serde(default)]
     pub string_uniforms: std::collections::HashMap<String, StringTrack>,
 }
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

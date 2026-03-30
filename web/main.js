@@ -44,17 +44,6 @@ function syncCanvasToViewport() {
         
         if (canvas.width !== bw || canvas.height !== bh) {
             const zoom = (cam_zoom || 1.0) * qLabel;
-            
-            // Keep center point fixed during resize to prevent drift
-            if (cam_x !== undefined && canvas.width > 1 && canvas.height > 1) {
-                const oldViewW = canvas.width / zoom;
-                const oldViewH = canvas.height / zoom;
-                const newViewW = bw / zoom;
-                const newViewH = bh / zoom;
-                cam_x += (oldViewW - newViewW) / 2;
-                cam_y += (oldViewH - newViewH) / 2;
-            }
-            
             canvas.width = bw;
             canvas.height = bh;
             $('lblCanvasSize').textContent = `${bw}x${bh}`;
@@ -93,17 +82,15 @@ _vpResizeObserver.observe($('viewportArea'));
 
 // Get editor camera viewport in world units
 function getEditorCam() {
-    const canvas = $('canvasMain');
+    if(cam_x === undefined) return {}; 
     const qLabel = parseFloat($('selQuality') ? $('selQuality').value : "1") || 1;
-    // We adjust the conceptual zoom based on quality scale to maintain visual sizing
-    const zoom = (cam_zoom || 1.0) * qLabel;
-    
-    // cam_w/cam_h = canvas pixel size / zoom
+    const w = $('canvasMain').width / ((cam_zoom || 1) * qLabel);
+    const h = $('canvasMain').height / ((cam_zoom || 1) * qLabel);
     return {
-        x: cam_x,
-        y: cam_y,
-        w: canvas.width / zoom,
-        h: canvas.height / zoom,
+        x: cam_x - w / 2,
+        y: cam_y - h / 2,
+        w: w,
+        h: h
     };
 }
 
@@ -505,8 +492,12 @@ window.addEventListener('mousemove', e => {
     }
     
     if (isDragging) {
-        if(cam_x === undefined) { cam_x = 0; cam_y = 0; cam_zoom = 1.0; }
-        // dx/dy are canvas pixels. Divide by actual effective zoom (cam_zoom * qLabel) to get world units
+        if(cam_x === undefined) { 
+            cam_x = 640; 
+            cam_y = 360; 
+            cam_zoom = 1.0; 
+        }
+        // dx/dy are canvas pixels. Divide by actual actual zoom to get world units
         const qLabel = parseFloat($('selQuality') ? $('selQuality').value : "1") || 1;
         cam_x -= dx / ((cam_zoom || 1) * qLabel);
         cam_y -= dy / ((cam_zoom || 1) * qLabel);
@@ -516,7 +507,11 @@ window.addEventListener('mousemove', e => {
 
 $('canvasMain').addEventListener('wheel', e => {
     e.preventDefault();
-    if(cam_zoom === undefined) { cam_x = 0; cam_y = 0; cam_zoom = 1.0; }
+    if(cam_zoom === undefined) { 
+        cam_x = 640; 
+        cam_y = 360; 
+        cam_zoom = 1.0; 
+    }
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
     cam_zoom *= zoomFactor;
     

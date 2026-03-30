@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::scene::MaterialV2;
+use serde::{Deserialize, Serialize};
 
 /// Camera component — makes an entity act as a virtual camera.
 ///
@@ -54,8 +54,18 @@ impl Default for CameraComponent {
     }
 }
 
-fn default_res_w() -> u32 { 1280 }
-fn default_res_h() -> u32 { 720 }
-fn default_bg_color() -> [f32; 4] { [0.0, 0.0, 0.0, 1.0] }
-fn default_near() -> f32 { 0.1 }
-fn default_far() -> f32 { 1000.0 }
+fn default_res_w() -> u32 {
+    1280
+}
+fn default_res_h() -> u32 {
+    720
+}
+fn default_bg_color() -> [f32; 4] {
+    [0.0, 0.0, 0.0, 1.0]
+}
+fn default_near() -> f32 {
+    0.1
+}
+fn default_far() -> f32 {
+    1000.0
+}

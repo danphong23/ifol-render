@@ -111,17 +111,27 @@ mod tests {
     // ── Helper: build a FloatTrack quickly ──
     fn track(kfs: &[(f64, f32)]) -> FloatTrack {
         FloatTrack {
-            keyframes: kfs.iter().map(|&(t, v)| Keyframe {
-                time: t, value: v, interpolation: Interpolation::Linear,
-            }).collect(),
+            keyframes: kfs
+                .iter()
+                .map(|&(t, v)| Keyframe {
+                    time: t,
+                    value: v,
+                    interpolation: Interpolation::Linear,
+                })
+                .collect(),
         }
     }
 
     fn track_with_interp(kfs: &[(f64, f32, Interpolation)]) -> FloatTrack {
         FloatTrack {
-            keyframes: kfs.iter().map(|&(t, v, ref ip)| Keyframe {
-                time: t, value: v, interpolation: ip.clone(),
-            }).collect(),
+            keyframes: kfs
+                .iter()
+                .map(|&(t, v, ref ip)| Keyframe {
+                    time: t,
+                    value: v,
+                    interpolation: ip.clone(),
+                })
+                .collect(),
         }
     }
 
@@ -140,8 +150,8 @@ mod tests {
     fn float_track_single_keyframe_constant() {
         let t = track(&[(0.0, 100.0)]);
         assert_eq!(t.evaluate(-1.0, 0.0), 100.0); // before
-        assert_eq!(t.evaluate(0.0, 0.0), 100.0);  // at
-        assert_eq!(t.evaluate(5.0, 0.0), 100.0);  // after
+        assert_eq!(t.evaluate(0.0, 0.0), 100.0); // at
+        assert_eq!(t.evaluate(5.0, 0.0), 100.0); // after
         assert_eq!(t.evaluate(999.0, 0.0), 100.0); // way after
     }
 
@@ -183,8 +193,8 @@ mod tests {
     #[test]
     fn float_track_linear_negative_values() {
         let t = track(&[(0.0, -100.0), (2.0, 100.0)]);
-        assert!((t.evaluate(1.0, 0.0) - 0.0).abs() < 0.01);     // midpoint
-        assert!((t.evaluate(0.5, 0.0) - (-50.0)).abs() < 0.01);  // quarter
+        assert!((t.evaluate(1.0, 0.0) - 0.0).abs() < 0.01); // midpoint
+        assert!((t.evaluate(0.5, 0.0) - (-50.0)).abs() < 0.01); // quarter
     }
 
     #[test]
@@ -207,25 +217,55 @@ mod tests {
     #[test]
     fn float_track_cubic_bezier_ease_in_out() {
         let t = track_with_interp(&[
-            (0.0, 0.0, Interpolation::CubicBezier { x1: 0.42, y1: 0.0, x2: 0.58, y2: 1.0 }),
+            (
+                0.0,
+                0.0,
+                Interpolation::CubicBezier {
+                    x1: 0.42,
+                    y1: 0.0,
+                    x2: 0.58,
+                    y2: 1.0,
+                },
+            ),
             (2.0, 100.0, Interpolation::Linear),
         ]);
         let mid = t.evaluate(1.0, 0.0);
         // Ease-in-out: at midpoint the value should still be ~50 (symmetric easing)
-        assert!((mid - 50.0).abs() < 5.0, "cubic_bezier midpoint was {} (expected ~50)", mid);
+        assert!(
+            (mid - 50.0).abs() < 5.0,
+            "cubic_bezier midpoint was {} (expected ~50)",
+            mid
+        );
         // At quarter time, ease-in should be slower → less than 25
         let quarter = t.evaluate(0.5, 0.0);
-        assert!(quarter < 20.0, "ease-in at quarter should be < 20, was {}", quarter);
+        assert!(
+            quarter < 20.0,
+            "ease-in at quarter should be < 20, was {}",
+            quarter
+        );
         // At three-quarter time, ease-out slows → more than 75
         let three_q = t.evaluate(1.5, 0.0);
-        assert!(three_q > 80.0, "ease-out at 3/4 should be > 80, was {}", three_q);
+        assert!(
+            three_q > 80.0,
+            "ease-out at 3/4 should be > 80, was {}",
+            three_q
+        );
     }
 
     #[test]
     fn float_track_cubic_bezier_linear_equivalent() {
         // CubicBezier(0.0, 0.0, 1.0, 1.0) should behave like linear
         let t = track_with_interp(&[
-            (0.0, 0.0, Interpolation::CubicBezier { x1: 0.0, y1: 0.0, x2: 1.0, y2: 1.0 }),
+            (
+                0.0,
+                0.0,
+                Interpolation::CubicBezier {
+                    x1: 0.0,
+                    y1: 0.0,
+                    x2: 1.0,
+                    y2: 1.0,
+                },
+            ),
             (2.0, 100.0, Interpolation::Linear),
         ]);
         assert!((t.evaluate(0.5, 0.0) - 25.0).abs() < 2.0);
@@ -236,12 +276,34 @@ mod tests {
     #[test]
     fn float_track_bezier_ae_tangents() {
         let t = track_with_interp(&[
-            (0.0, 0.0, Interpolation::Bezier { out_x: 0.33, out_y: 0.0, in_x: 0.33, in_y: 0.0 }),
-            (2.0, 100.0, Interpolation::Bezier { out_x: 0.33, out_y: 0.0, in_x: 0.33, in_y: 0.0 }),
+            (
+                0.0,
+                0.0,
+                Interpolation::Bezier {
+                    out_x: 0.33,
+                    out_y: 0.0,
+                    in_x: 0.33,
+                    in_y: 0.0,
+                },
+            ),
+            (
+                2.0,
+                100.0,
+                Interpolation::Bezier {
+                    out_x: 0.33,
+                    out_y: 0.0,
+                    in_x: 0.33,
+                    in_y: 0.0,
+                },
+            ),
         ]);
         let mid = t.evaluate(1.0, 0.0);
         // With default tangents (0.33, 0), should be roughly S-curve
-        assert!(mid > 30.0 && mid < 70.0, "bezier midpoint was {} (expected ~50)", mid);
+        assert!(
+            mid > 30.0 && mid < 70.0,
+            "bezier midpoint was {} (expected ~50)",
+            mid
+        );
     }
 
     // ══════════════════════════════════════
@@ -257,18 +319,29 @@ mod tests {
 
     #[test]
     fn string_track_step_interpolation() {
-        let t = StringTrack { keyframes: vec![
-            StringKeyframe { time: 0.0, value: "normal".into() },
-            StringKeyframe { time: 2.0, value: "multiply".into() },
-            StringKeyframe { time: 5.0, value: "screen".into() },
-        ]};
+        let t = StringTrack {
+            keyframes: vec![
+                StringKeyframe {
+                    time: 0.0,
+                    value: "normal".into(),
+                },
+                StringKeyframe {
+                    time: 2.0,
+                    value: "multiply".into(),
+                },
+                StringKeyframe {
+                    time: 5.0,
+                    value: "screen".into(),
+                },
+            ],
+        };
         assert_eq!(t.evaluate(-1.0, "default"), "default"); // before first
-        assert_eq!(t.evaluate(0.0, "default"), "normal");   // at first
-        assert_eq!(t.evaluate(1.0, "default"), "normal");   // between 1st-2nd → holds 1st
+        assert_eq!(t.evaluate(0.0, "default"), "normal"); // at first
+        assert_eq!(t.evaluate(1.0, "default"), "normal"); // between 1st-2nd → holds 1st
         assert_eq!(t.evaluate(2.0, "default"), "multiply"); // at second
         assert_eq!(t.evaluate(3.5, "default"), "multiply"); // between 2nd-3rd
-        assert_eq!(t.evaluate(5.0, "default"), "screen");   // at third
-        assert_eq!(t.evaluate(99.0, "default"), "screen");  // after last
+        assert_eq!(t.evaluate(5.0, "default"), "screen"); // at third
+        assert_eq!(t.evaluate(99.0, "default"), "screen"); // after last
     }
 
     // ══════════════════════════════════════
@@ -277,12 +350,14 @@ mod tests {
 
     #[test]
     fn lifespan_contains() {
-        let ls = Lifespan { start: 2.0, end: 5.0 };
-        assert!(!ls.contains(1.99));  // before
-        assert!(ls.contains(2.0));    // at start (inclusive)
-        assert!(ls.contains(3.5));    // middle
-        assert!(!ls.contains(5.0));   // at end (exclusive)
-        assert!(!ls.contains(5.01));  // after
+        let ls = Lifespan {
+            start: 2.0,
+            end: 5.0,
+        };
+        assert!(!ls.contains(1.99)); // before
+        assert!(ls.contains(2.0)); // at start (inclusive)
+        assert!(ls.contains(3.5)); // middle
+        assert!(!ls.contains(5.0)); // at end (exclusive)
+        assert!(!ls.contains(5.01)); // after
     }
 }
-

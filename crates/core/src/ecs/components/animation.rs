@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::scene::{FloatTrack, StringTrack};
+use serde::{Deserialize, Serialize};
 
 /// Main animation component housing keyframe tracks.
 ///
@@ -40,23 +40,23 @@ pub enum AnimTarget {
     TransformAnchorY,
     TransformScaleX,
     TransformScaleY,
-    
+
     // Rect
     RectWidth,
     RectHeight,
-    
+
     // Visual
     Opacity,
     Volume,
     PlaybackTime,
     BlendMode,
-    
+
     // ColorSource
     ColorR,
     ColorG,
     ColorB,
     ColorA,
-    
+
     // Material Uniforms (Extensible)
     FloatUniform(String),
     StringUniform(String),

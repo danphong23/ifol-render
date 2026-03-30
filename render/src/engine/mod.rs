@@ -77,7 +77,12 @@ impl GpuEngine {
 
     /// Create a GPU engine attached to an HTML canvas (Web).
     #[cfg(target_arch = "wasm32")]
-    pub async fn new_web(canvas: web_sys::HtmlCanvasElement, width: u32, height: u32, hdr_enabled: bool) -> Self {
+    pub async fn new_web(
+        canvas: web_sys::HtmlCanvasElement,
+        width: u32,
+        height: u32,
+        hdr_enabled: bool,
+    ) -> Self {
         let instance = wgpu::Instance::default();
 
         let surface = instance
@@ -113,7 +118,7 @@ impl GpuEngine {
             | wgpu::TextureUsages::COPY_DST
             | wgpu::TextureUsages::COPY_SRC;
         let capabilities = surface.get_capabilities(&adapter);
-        
+
         // Prefer sRGB format for correct gamma. Chrome WebGPU typically only offers
         // Bgra8Unorm, so we add its sRGB variant to view_formats and use that as our
         // pipeline format. This enables automatic linear→sRGB conversion in render passes.

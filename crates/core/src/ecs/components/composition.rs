@@ -35,8 +35,12 @@ pub struct Composition {
     pub material_cascade: bool,
 }
 
-fn default_speed() -> f32 { 1.0 }
-fn default_true() -> bool { true }
+fn default_speed() -> f32 {
+    1.0
+}
+fn default_true() -> bool {
+    true
+}
 
 impl Default for Composition {
     fn default() -> Self {
@@ -62,7 +66,9 @@ pub enum DurationMode {
 }
 
 impl Default for DurationMode {
-    fn default() -> Self { DurationMode::Auto }
+    fn default() -> Self {
+        DurationMode::Auto
+    }
 }
 
 /// How content behaves when playback exceeds the composition's duration.
@@ -78,5 +84,7 @@ pub enum LoopMode {
 }
 
 impl Default for LoopMode {
-    fn default() -> Self { LoopMode::Once }
+    fn default() -> Self {
+        LoopMode::Once
+    }
 }

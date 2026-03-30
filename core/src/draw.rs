@@ -22,7 +22,6 @@ use std::collections::HashMap;
 /// }
 /// ```
 
-
 /// Convert a FlatEntity to a clip-space transform matrix.
 ///
 /// The GPU quad spans (-1,-1) to (1,1) in clip space.
@@ -52,19 +51,43 @@ fn pixel_to_clip_matrix(entity: &FlatEntity, out_w: f32, out_h: f32) -> [f32; 16
     if entity.rotation.abs() < 1e-6 {
         // No rotation — axis-aligned scaling
         [
-            half_w * csx, 0.0, 0.0, 0.0,
-            0.0, half_h * csy, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            px, py, 0.0, 1.0,
+            half_w * csx,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            half_h * csy,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            px,
+            py,
+            0.0,
+            1.0,
         ]
     } else {
         let cos = entity.rotation.cos();
         let sin = entity.rotation.sin();
         [
-            half_w * cos * csx, -half_w * sin * csy, 0.0, 0.0,
-            half_h * sin * csx,  half_h * cos * csy, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            px, py, 0.0, 1.0,
+            half_w * cos * csx,
+            -half_w * sin * csy,
+            0.0,
+            0.0,
+            half_h * sin * csx,
+            half_h * cos * csy,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            px,
+            py,
+            0.0,
+            1.0,
         ]
     }
 }
@@ -84,7 +107,13 @@ pub fn sort_entities(entities: &mut [FlatEntity]) {
 ///
 /// Given entity dimensions and texture dimensions, returns (offset_x, offset_y, scale_x, scale_y)
 /// for contain/cover modes. Stretch mode returns (0, 0, 1, 1).
-fn compute_uv_rect(fit_mode: u32, entity_w: f32, entity_h: f32, tex_w: f32, tex_h: f32) -> [f32; 4] {
+fn compute_uv_rect(
+    fit_mode: u32,
+    entity_w: f32,
+    entity_h: f32,
+    tex_w: f32,
+    tex_h: f32,
+) -> [f32; 4] {
     if fit_mode == 0 || tex_w <= 0.0 || tex_h <= 0.0 {
         // Stretch: UV covers entire quad
         return [0.0, 0.0, 1.0, 1.0];
@@ -95,7 +124,7 @@ fn compute_uv_rect(fit_mode: u32, entity_w: f32, entity_h: f32, tex_w: f32, tex_
 
     if fit_mode == 1 {
         // Contain: scale uniformly to fit inside, letterbox
-        // In UV coordinates, scale > 1.0 pushes edges outside [0..1], 
+        // In UV coordinates, scale > 1.0 pushes edges outside [0..1],
         // triggering ClampToEdge transparent padding.
         if tex_aspect > entity_aspect {
             // Texture is wider → fit width exactly, pad height (letterbox)
@@ -146,7 +175,13 @@ pub fn build_draw_commands(
         // Compute UV rect for fit mode
         let uv_rect = if entity.fit_mode != 0 && !entity.textures.is_empty() {
             if let Some(&(tw, th)) = tex_dims.get(&entity.textures[0]) {
-                compute_uv_rect(entity.fit_mode, entity.width, entity.height, tw as f32, th as f32)
+                compute_uv_rect(
+                    entity.fit_mode,
+                    entity.width,
+                    entity.height,
+                    tw as f32,
+                    th as f32,
+                )
             } else {
                 [0.0, 0.0, 1.0, 1.0]
             }
@@ -155,20 +190,22 @@ pub fn build_draw_commands(
         };
 
         let mut uniforms = Vec::with_capacity(32);
-        uniforms.extend_from_slice(&transform);      // 16
-        uniforms.extend_from_slice(&entity.color);    // 4
-        uniforms.push(entity.opacity);                // 1
-        
+        uniforms.extend_from_slice(&transform); // 16
+        uniforms.extend_from_slice(&entity.color); // 4
+        uniforms.push(entity.opacity); // 1
+
         if !entity.params.is_empty() {
             // Specialized shape/effect shaders with custom uniform layout
             uniforms.extend_from_slice(&entity.params);
         } else {
             // Builtin composite shader layout
-            uniforms.push(use_texture);                   // 1
-            uniforms.push(entity.blend_mode as f32);      // 1
-            uniforms.push(entity.fit_mode as f32);        // 1
-            uniforms.push(uv_rect[0]); uniforms.push(uv_rect[1]); // uv_offset: 2
-            uniforms.push(uv_rect[2]); uniforms.push(uv_rect[3]); // uv_scale: 2
+            uniforms.push(use_texture); // 1
+            uniforms.push(entity.blend_mode as f32); // 1
+            uniforms.push(entity.fit_mode as f32); // 1
+            uniforms.push(uv_rect[0]);
+            uniforms.push(uv_rect[1]); // uv_offset: 2
+            uniforms.push(uv_rect[2]);
+            uniforms.push(uv_rect[3]); // uv_scale: 2
         }
 
         commands.push(DrawCommand {

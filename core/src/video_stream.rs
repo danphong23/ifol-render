@@ -10,14 +10,23 @@
 
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 
 /// Maximum frames to skip forward by reading & discarding.
 /// Beyond this, a full seek/restart is cheaper.
-const MAX_SKIP_FRAMES: u64 = 5;
+const MAX_SKIP_FRAMES: u64 = 6;
 
-/// A persistent FFmpeg decoder that reads frames sequentially from a pipe.
+struct WorkerState {
+    stop_signal: Arc<AtomicBool>,
+}
+
+/// A persistent FFmpeg decoder that reads frames sequentially using a background thread.
 pub struct VideoStream {
-    process: Child,
+    rx_frames: Receiver<Result<Vec<u8>, String>>,
+    tx_recycle: SyncSender<Vec<u8>>,
+    worker: Option<WorkerState>,
     path: String,
     width: u32,
     height: u32,
@@ -26,10 +35,8 @@ pub struct VideoStream {
     /// Timestamp (seconds) where the stream was started.
     start_secs: f64,
     fps: f64,
-    /// Reusable frame buffer.
-    buf: Vec<u8>,
-    /// Discard buffer (for forward-skip reads).
-    discard_buf: Vec<u8>,
+    /// The currently held frame pixel buffer.
+    current_frame: Vec<u8>,
     /// FFmpeg binary path.
     ffmpeg_bin: String,
 }
@@ -47,65 +54,130 @@ impl VideoStream {
         fps: f64,
         ffmpeg_bin: &str,
     ) -> Result<Self, String> {
-        let frame_size = (width as usize) * (height as usize) * 4;
-
-        let process = Self::spawn_ffmpeg(path, start_secs, width, height, fps, ffmpeg_bin)?;
+        let (worker, rx_frames, tx_recycle) =
+            Self::start_worker(path, start_secs, width, height, fps, ffmpeg_bin)?;
 
         Ok(Self {
-            process,
+            rx_frames,
+            tx_recycle,
+            worker: Some(worker),
             path: path.to_string(),
             width,
             height,
             frames_read: 0,
             start_secs,
             fps,
-            buf: vec![0u8; frame_size],
-            discard_buf: vec![0u8; frame_size],
+            current_frame: Vec::new(),
             ffmpeg_bin: ffmpeg_bin.to_string(),
         })
+    }
+
+    fn start_worker(
+        path: &str,
+        start_secs: f64,
+        width: u32,
+        height: u32,
+        fps: f64,
+        ffmpeg_bin: &str,
+    ) -> Result<
+        (
+            WorkerState,
+            Receiver<Result<Vec<u8>, String>>,
+            SyncSender<Vec<u8>>,
+        ),
+        String,
+    > {
+        let mut process = Self::spawn_ffmpeg(path, start_secs, width, height, fps, ffmpeg_bin)?;
+        let mut stdout = process.stdout.take().ok_or("FFmpeg stdout not available")?;
+
+        let stop_signal = Arc::new(AtomicBool::new(false));
+        let stop_clone = stop_signal.clone();
+
+        // 8 frames buffer provides ~260ms of read-ahead cushion at 30fps
+        let channel_depth = 8;
+        let (tx, rx) = sync_channel(channel_depth);
+        let (tx_recycle, rx_recycle) = sync_channel(channel_depth);
+
+        let frame_size = (width as usize) * (height as usize) * 4;
+        for _ in 0..channel_depth {
+            let _ = tx_recycle.send(vec![0u8; frame_size]);
+        }
+
+        std::thread::spawn(move || {
+            let mut frames_read = 0;
+            while !stop_clone.load(Ordering::Relaxed) {
+                // Get a buffer to write into (blocks if main thread hasn't returned any)
+                let mut buf = match rx_recycle.recv() {
+                    Ok(b) => b,
+                    Err(_) => break, // Main thread went away
+                };
+
+                // Read from FFmpeg
+                match stdout.read_exact(&mut buf) {
+                    Ok(_) => {
+                        if tx.send(Ok(buf)).is_err() {
+                            break; // Main thread went away
+                        }
+                    }
+                    Err(e) => {
+                        let ok_to_fail = e.kind() == std::io::ErrorKind::UnexpectedEof;
+                        let err_msg = if ok_to_fail {
+                            format!("EOF reached after {} frames", frames_read)
+                        } else {
+                            format!("Read error at frame {}: {}", frames_read, e)
+                        };
+                        let _ = tx.send(Err(err_msg));
+                        break;
+                    }
+                }
+                frames_read += 1;
+            }
+            // Cleanup process when worker thread terminates
+            let _ = process.kill();
+            let _ = process.wait();
+        });
+
+        Ok((WorkerState { stop_signal }, rx, tx_recycle))
     }
 
     /// Read the next frame from the pipe.
     ///
     /// Returns a slice of RGBA pixel data. Fast: just `read_exact()`.
     pub fn read_next_frame(&mut self) -> Result<&[u8], String> {
-        let stdout = self
-            .process
-            .stdout
-            .as_mut()
-            .ok_or("FFmpeg stdout not available")?;
+        // Return the previous buffer for recycling
+        if !self.current_frame.is_empty() {
+            let old_buf = std::mem::take(&mut self.current_frame);
+            let _ = self.tx_recycle.try_send(old_buf);
+        }
 
-        stdout.read_exact(&mut self.buf).map_err(|e| {
-            format!(
-                "Failed to read video frame {} from pipe: {}",
-                self.frames_read, e
-            )
-        })?;
+        let new_buf_res = self
+            .rx_frames
+            .recv()
+            .map_err(|_| "Background decode thread disconnected".to_string())?;
 
-        self.frames_read += 1;
-        Ok(&self.buf)
+        match new_buf_res {
+            Ok(buf) => {
+                self.current_frame = buf;
+                self.frames_read += 1;
+                Ok(&self.current_frame)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Skip N frames by reading and discarding them.
     /// Used for small forward seeks to avoid expensive FFmpeg restarts.
     fn skip_frames(&mut self, count: u64) -> Result<(), String> {
-        let stdout = self
-            .process
-            .stdout
-            .as_mut()
-            .ok_or("FFmpeg stdout not available")?;
-
         for i in 0..count {
-            stdout.read_exact(&mut self.discard_buf).map_err(|e| {
-                format!(
+            if let Err(e) = self.read_next_frame() {
+                return Err(format!(
                     "Failed to skip frame {} (skip {}/{}): {}",
-                    self.frames_read,
+                    self.frames_read - 1,
                     i + 1,
                     count,
                     e
-                )
-            })?;
-            self.frames_read += 1;
+                ));
+            }
         }
 
         log::debug!("Skipped {} frames (forward seek)", count);
@@ -148,12 +220,12 @@ impl VideoStream {
 
     /// Seek to a new timestamp by restarting FFmpeg at that position.
     pub fn seek(&mut self, timestamp_secs: f64) -> Result<(), String> {
-        // Kill old process
-        let _ = self.process.kill();
-        let _ = self.process.wait();
+        if let Some(worker) = self.worker.take() {
+            worker.stop_signal.store(true, Ordering::Relaxed);
+        }
 
-        // Start new process at the requested time
-        self.process = Self::spawn_ffmpeg(
+        // Start new worker at the requested time
+        let (worker, rx_frames, tx_recycle) = Self::start_worker(
             &self.path,
             timestamp_secs,
             self.width,
@@ -161,8 +233,13 @@ impl VideoStream {
             self.fps,
             &self.ffmpeg_bin,
         )?;
+
+        self.worker = Some(worker);
+        self.rx_frames = rx_frames;
+        self.tx_recycle = tx_recycle;
         self.start_secs = timestamp_secs;
         self.frames_read = 0;
+        self.current_frame.clear(); // Reset current buffer
 
         log::debug!("VideoStream seeked to {:.3}s", timestamp_secs);
         Ok(())
@@ -212,13 +289,13 @@ impl VideoStream {
         let fps_str = format!("{}", fps);
 
         let child = Command::new(ffmpeg_bin)
-            .args(["-hwaccel", "auto"])     // HW-accelerated decode (QSV/CUVID/DXVA2)
-            .args(["-threads", "0"])         // Use all CPU threads for decode
+            .args(["-hwaccel", "auto"]) // HW-accelerated decode (QSV/CUVID/DXVA2)
+            .args(["-threads", "0"]) // Use all CPU threads for decode
             .args(["-ss", &ts])
             .args(["-i", path])
-            .args(["-an"])                   // disable audio decoding (faster)
+            .args(["-an"]) // disable audio decoding (faster)
             .args(["-vf", &format!("scale={}:{}", width, height)])
-            .args(["-r", &fps_str])          // force output frame rate
+            .args(["-r", &fps_str]) // force output frame rate
             .args(["-f", "rawvideo"])
             .args(["-pix_fmt", "rgba"])
             .arg("-v")
@@ -261,7 +338,8 @@ enum SeekAction {
 
 impl Drop for VideoStream {
     fn drop(&mut self) {
-        let _ = self.process.kill();
-        let _ = self.process.wait();
+        if let Some(worker) = self.worker.take() {
+            worker.stop_signal.store(true, Ordering::Relaxed);
+        }
     }
 }

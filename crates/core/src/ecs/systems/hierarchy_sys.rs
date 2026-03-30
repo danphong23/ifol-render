@@ -3,65 +3,87 @@ use crate::time::TimeState;
 
 /// Evaluates entity transformations hierarchically (parent -> child order).
 /// Resolves Local space offsets to World space absolute coordinates.
-pub fn hierarchy_system(world: &mut World, _time: &TimeState) {
+pub fn hierarchy_system(world: &mut World, _time: &TimeState, scope_entity_id: Option<&str>) {
     let storages = &world.storages;
     // Store: (x, y, rotation, opacity, scale_x, scale_y, layer, volume, visible)
-    let mut resolved_transforms: std::collections::HashMap<String, (f32, f32, f32, f32, f32, f32, i32, f32, bool)> = std::collections::HashMap::with_capacity(world.entities.len());
+    let mut resolved_transforms: std::collections::HashMap<
+        String,
+        (f32, f32, f32, f32, f32, f32, i32, f32, bool),
+    > = std::collections::HashMap::with_capacity(world.entities.len());
 
     for entity in &mut world.entities {
         // Initial layer fallback
-        let entity_layer = storages.get_component::<crate::ecs::components::meta::Layer>(&entity.id).map(|l| l.0).unwrap_or(0);
+        let entity_layer = storages
+            .get_component::<crate::ecs::components::meta::Layer>(&entity.id)
+            .map(|l| l.0)
+            .unwrap_or(0);
         entity.resolved.layer = entity_layer;
 
-        if let Some(pid) = storages.get_component::<crate::ecs::components::meta::ParentId>(&entity.id).map(|id| &id.0) {
+        if let Some(pid) = storages
+            .get_component::<crate::ecs::components::meta::ParentId>(&entity.id)
+            .map(|id| &id.0)
+        {
+            let is_scope = scope_entity_id.map(|sid| sid == entity.id.as_str()).unwrap_or(false);
+            
             // Read from the dynamically accumulated resolved state (topological order required)
-            if let Some(&(px, py, p_rot, p_opacity, p_sx, p_sy, p_layer, p_volume, p_visible)) = resolved_transforms.get(pid) {
+            // Skip parent propagation entirely if THIS entity is the isolated scope tab!
+            if !is_scope {
+            if let Some(&(px, py, p_rot, p_opacity, p_sx, p_sy, p_layer, p_volume, p_visible)) =
+                resolved_transforms.get(pid)
+            {
                 // Propagate visibility
                 if !p_visible {
                     entity.resolved.visible = false;
                 }
-                
+
                 if entity.resolved.visible {
                     // Apply parent scale to local offset first
                     let dx = entity.resolved.x * p_sx;
                     let dy = entity.resolved.y * p_sy;
-                    
+
                     // Rotate child's offset around parent (p_rot is already in radians)
                     let cos_r = p_rot.cos();
                     let sin_r = p_rot.sin();
-                    
+
                     // Additive position offset
                     entity.resolved.x = px + dx * cos_r - dy * sin_r;
                     entity.resolved.y = py + dx * sin_r + dy * cos_r;
-                    
+
                     // Additive rotation
                     entity.resolved.rotation += p_rot;
-                    
+
                     // Multiplicative scale
                     let old_sx = entity.resolved.scale_x;
                     let old_sy = entity.resolved.scale_y;
                     entity.resolved.scale_x *= p_sx;
                     entity.resolved.scale_y *= p_sy;
-                    
+
                     // Recompute width/height to include parent scale
                     // rect_sys already computed: width = base_w * old_sx
                     // We need: width = base_w * (old_sx * p_sx) = (width / old_sx) * new_sx
                     if old_sx.abs() > 0.001 {
-                        entity.resolved.width = (entity.resolved.width / old_sx) * entity.resolved.scale_x;
+                        entity.resolved.width =
+                            (entity.resolved.width / old_sx) * entity.resolved.scale_x;
                     }
                     if old_sy.abs() > 0.001 {
-                        entity.resolved.height = (entity.resolved.height / old_sy) * entity.resolved.scale_y;
+                        entity.resolved.height =
+                            (entity.resolved.height / old_sy) * entity.resolved.scale_y;
                     }
-                    
+
                     // Multiplicative opacity and volume
                     entity.resolved.opacity *= p_opacity;
                     entity.resolved.volume *= p_volume;
-                    
+
                     // Additive layer
                     entity.resolved.layer += p_layer;
                 }
             } else {
-                log::warn!("Parent ID '{}' not found or not processed before child '{}'. Requires topological order.", pid, entity.id);
+                log::warn!(
+                    "Parent ID '{}' not found or not processed before child '{}'. Requires topological order.",
+                    pid,
+                    entity.id
+                );
+            }
             }
         }
 

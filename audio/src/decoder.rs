@@ -37,7 +37,7 @@ pub fn decode_audio(
     cmd.args(["-vn"]); // disable video decoding (audio-only, faster)
     cmd.args(["-f", "f32le"]); // raw 32-bit float PCM
     cmd.args(["-acodec", "pcm_f32le"]);
-    
+
     // Build atempo chain for speeds other than 1.0
     if (speed - 1.0).abs() > 0.001 {
         let mut cur_speed = speed as f64;

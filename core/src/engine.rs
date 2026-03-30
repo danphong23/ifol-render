@@ -62,7 +62,8 @@ impl CoreEngine {
     ///
     /// On native, pass `FfmpegMediaBackend`. On WASM, pass `WebMediaBackend`.
     pub async fn new_async(settings: RenderSettings, backend: Box<dyn MediaBackend>) -> Self {
-        let renderer = Renderer::new_async(settings.width, settings.height, settings.hdr_enabled).await;
+        let renderer =
+            Renderer::new_async(settings.width, settings.height, settings.hdr_enabled).await;
         Self::build(renderer, settings, backend)
     }
 
@@ -73,7 +74,13 @@ impl CoreEngine {
         settings: RenderSettings,
         backend: Box<dyn MediaBackend>,
     ) -> Self {
-        let renderer = Renderer::new_web(canvas, settings.width, settings.height, settings.hdr_enabled).await;
+        let renderer = Renderer::new_web(
+            canvas,
+            settings.width,
+            settings.height,
+            settings.hdr_enabled,
+        )
+        .await;
         Self::build(renderer, settings, backend)
     }
 
@@ -124,7 +131,7 @@ impl CoreEngine {
         self.settings.height = height;
         self.renderer.resize(width, height);
     }
-    
+
     /// Set the maximum size of the GPU texture cache in bytes. 0 = unlimited.
     pub fn set_vram_limit(&mut self, bytes: u64) {
         self.renderer.set_max_cache_size(bytes);
@@ -144,7 +151,7 @@ impl CoreEngine {
     pub fn renderer_mut(&mut self) -> &mut Renderer {
         &mut self.renderer
     }
-    
+
     /// Get GPU cache VRAM stats
     pub fn vram_usage(&self) -> ifol_render::VramStats {
         self.renderer.vram_usage()
@@ -166,7 +173,8 @@ impl CoreEngine {
         defaults: Vec<(String, f32)>,
         pass_count: u32,
     ) {
-        self.renderer.register_effect(name, wgsl, defaults, pass_count);
+        self.renderer
+            .register_effect(name, wgsl, defaults, pass_count);
     }
 
     /// Check if a shader is registered.
@@ -259,7 +267,8 @@ impl CoreEngine {
         width: u32,
         height: u32,
     ) {
-        self.renderer.load_video_texture_web(key, video, width, height);
+        self.renderer
+            .load_video_texture_web(key, video, width, height);
     }
 
     /// Decode a video frame and upload as texture.
@@ -363,6 +372,26 @@ impl CoreEngine {
         self.renderer.clear_textures();
     }
 
+    /// Evict intermediate scope render targets when the render scope changes.
+    ///
+    /// Removes `_comp_out_*` and `_layer_*` textures which hold pixel data from
+    /// the previous scope session. Real asset textures (images, video, text) are
+    /// preserved to avoid redundant re-uploads.
+    pub fn evict_scope_textures(&mut self) {
+        let keys_to_evict: Vec<String> = self
+            .renderer
+            .texture_cache_keys()
+            .filter(|k| k.starts_with("_comp_out_") || k.starts_with("_layer_") || k.starts_with("_ent_fx_"))
+            .cloned()
+            .collect();
+        for key in keys_to_evict {
+            self.renderer.evict_texture(&key);
+        }
+        // Clear transient texture pool — all in-flight offscreen targets are stale
+        self.renderer.texture_pool.clear();
+        log::info!("Scope changed: evicted intermediate render targets");
+    }
+
     /// Kill all persistent FFmpeg VideoStream processes and clear the cache.
     /// Call this on timeline loop/seek-to-zero to avoid the 200ms backward-seek penalty.
     #[cfg(not(target_arch = "wasm32"))]
@@ -383,14 +412,32 @@ impl CoreEngine {
     /// 3. Return final output pixels
     pub fn render_frame(&mut self, frame: &Frame) -> Vec<u8> {
         self.renderer.begin_frame();
-
-        // Step 1: Process texture updates
         self.process_texture_updates(&frame.texture_updates);
 
-        // Step 2: Execute render passes
-        let mut last_pixels = Vec::new();
+        let mut encoder =
+            self.renderer
+                .engine
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Core Render Frame"),
+                });
 
-        for pass in &frame.passes {
+        let mut surface_frame_res = None;
+        let mut has_output = false;
+
+        for (pidx, pass) in frame.passes.iter().enumerate() {
+            log::debug!(
+                "render_frame pass[{}]: output={:?}, type={}, w={:?}, h={:?}",
+                pidx,
+                pass.output,
+                match &pass.pass_type {
+                    PassType::Entities { entities, .. } => format!("Entities({})", entities.len()),
+                    PassType::Effect { shader, inputs, .. } => format!("Effect({}, inputs={:?})", shader, inputs),
+                    PassType::Output { input, entities, .. } => format!("Output(input={:?}, entities={})", input, entities.len()),
+                },
+                pass.target_width,
+                pass.target_height,
+            );
             let target_w = pass.target_width.unwrap_or(self.settings.width);
             let target_h = pass.target_height.unwrap_or(self.settings.height);
 
@@ -399,24 +446,19 @@ impl CoreEngine {
                     entities,
                     clear_color,
                 } => {
-                    // Sort entities by (layer, z_index)
                     let mut sorted = entities.clone();
                     draw::sort_entities(&mut sorted);
-
-                    // Get texture dimensions for fit_mode UV calculations
                     let tex_dims = self.renderer.texture_dimensions();
-
-                    // Build draw commands (pixel→clip + pack uniforms) using TARGET bounds!
-                    let commands = draw::build_draw_commands(
-                        &sorted,
+                    let commands =
+                        draw::build_draw_commands(&sorted, target_w, target_h, &tex_dims);
+                    self.renderer.render_frame_to(
+                        &mut encoder,
+                        &commands,
+                        *clear_color,
+                        Some(&pass.output),
                         target_w,
                         target_h,
-                        &tex_dims,
                     );
-
-                    // ZERO-COPY: Render directly to intermediate target in VRAM
-                    self.renderer
-                        .render_frame_to(&commands, *clear_color, Some(&pass.output), target_w, target_h);
                 }
 
                 PassType::Effect {
@@ -424,15 +466,13 @@ impl CoreEngine {
                     inputs,
                     params,
                 } => {
-                    // Build a fullscreen draw command using the effect shader
                     let commands = vec![DrawCommand {
                         pipeline: shader.clone(),
                         uniforms: params.clone(),
                         textures: inputs.clone(),
                     }];
-
-                    // ZERO-COPY: Render directly to intermediate target in VRAM
                     self.renderer.render_frame_to(
+                        &mut encoder,
                         &commands,
                         [0.0, 0.0, 0.0, 0.0],
                         Some(&pass.output),
@@ -441,24 +481,48 @@ impl CoreEngine {
                     );
                 }
 
-                PassType::Output { input } => {
-                    // Output pass: Draws VRAM `input` texture back into the CPU mapped Buffer!
-                    let commands = vec![DrawCommand {
+                PassType::Output { input, entities } => {
+                    let mut commands = vec![DrawCommand {
                         pipeline: "output_copy".to_string(),
-                        uniforms: vec![0.0], // Padding to fulfill minimal binding size
+                        uniforms: vec![0.0],
                         textures: vec![input.clone()],
                     }];
-
-                    // Sending None performs the CPU synchronization and mapped Download
-                    last_pixels = self.renderer.render_frame(&commands, [0.0, 0.0, 0.0, 1.0]);
+                    if !entities.is_empty() {
+                        let mut sorted = entities.clone();
+                        draw::sort_entities(&mut sorted);
+                        let tex_dims = self.renderer.texture_dimensions();
+                        commands.extend(draw::build_draw_commands(&sorted, target_w, target_h, &tex_dims));
+                    }
+                    surface_frame_res = self.renderer.render_frame_to(
+                        &mut encoder,
+                        &commands,
+                        [0.0, 0.0, 0.0, 1.0],
+                        None,
+                        target_w,
+                        target_h,
+                    );
+                    has_output = true;
                 }
             }
+        }
+
+        self.renderer
+            .engine
+            .queue
+            .submit(std::iter::once(encoder.finish()));
+
+        if let Some(surface_frame) = surface_frame_res {
+            surface_frame.present();
         }
 
         // Cleanup stale textures (unused for 3+ frames) to prevent VRAM leaks
         self.renderer.cleanup_stale_textures(3);
 
-        last_pixels
+        if self.renderer.engine.surface.is_none() && has_output {
+            self.renderer.engine.readback_output()
+        } else {
+            Vec::new() // No readback support over surface queues
+        }
     }
 
     // ── Export (Native only) ──
@@ -569,12 +633,16 @@ impl CoreEngine {
         // Pre-allocate N staging buffers on GPU
         let mut staging_buffers = Vec::with_capacity(max_in_flight);
         for i in 0..max_in_flight {
-            let staging = self.renderer.engine.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(&format!("Async Staging Buffer {}", i)),
-                size: (padded_bytes_per_row * height) as u64,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
+            let staging = self
+                .renderer
+                .engine
+                .device
+                .create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(&format!("Async Staging Buffer {}", i)),
+                    size: (padded_bytes_per_row * height) as u64,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                });
             staging_buffers.push(staging);
         }
 
@@ -595,25 +663,54 @@ impl CoreEngine {
                     self.renderer.begin_frame();
                     self.process_texture_updates(&frame.texture_updates);
 
+                    let mut encoder = self.renderer.engine.device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor {
+                            label: Some("Export Master Encoder"),
+                        },
+                    );
+
                     for pass in &frame.passes {
                         let target_w = pass.target_width.unwrap_or(width);
                         let target_h = pass.target_height.unwrap_or(height);
 
                         match &pass.pass_type {
-                            PassType::Entities { entities, clear_color } => {
+                            PassType::Entities {
+                                entities,
+                                clear_color,
+                            } => {
                                 let mut sorted = entities.clone();
                                 draw::sort_entities(&mut sorted);
                                 let tex_dims = self.renderer.texture_dimensions();
-                                let commands = draw::build_draw_commands(&sorted, target_w, target_h, &tex_dims);
-                                self.renderer.render_frame_to(&commands, *clear_color, Some(&pass.output), target_w, target_h);
+                                let commands = draw::build_draw_commands(
+                                    &sorted, target_w, target_h, &tex_dims,
+                                );
+                                self.renderer.render_frame_to(
+                                    &mut encoder,
+                                    &commands,
+                                    *clear_color,
+                                    Some(&pass.output),
+                                    target_w,
+                                    target_h,
+                                );
                             }
-                            PassType::Effect { shader, inputs, params } => {
+                            PassType::Effect {
+                                shader,
+                                inputs,
+                                params,
+                            } => {
                                 let commands = vec![DrawCommand {
                                     pipeline: shader.clone(),
                                     uniforms: params.clone(),
                                     textures: inputs.clone(),
                                 }];
-                                self.renderer.render_frame_to(&commands, [0.0; 4], Some(&pass.output), target_w, target_h);
+                                self.renderer.render_frame_to(
+                                    &mut encoder,
+                                    &commands,
+                                    [0.0; 4],
+                                    Some(&pass.output),
+                                    target_w,
+                                    target_h,
+                                );
                             }
                             PassType::Output { input } => {
                                 let commands = vec![DrawCommand {
@@ -622,21 +719,25 @@ impl CoreEngine {
                                     textures: vec![input.clone()],
                                 }];
                                 // Render to main output texture (None)
-                                self.renderer.render_frame_to(&commands, [0.0, 0.0, 0.0, 1.0], None, target_w, target_h);
+                                self.renderer.render_frame_to(
+                                    &mut encoder,
+                                    &commands,
+                                    [0.0, 0.0, 0.0, 1.0],
+                                    None,
+                                    target_w,
+                                    target_h,
+                                );
                             }
                         }
                     }
 
                     self.renderer.cleanup_stale_textures(3);
 
-                    // STEP 2: Initiate Async Copy & Map for this frame
+                    // STEP 2: Initiate Async Copy & Map for this frame (using SAME master encoder)
                     let staging_idx = frames_submitted % max_in_flight;
                     let staging = &staging_buffers[staging_idx];
 
                     if let Some(output_tex) = &self.renderer.engine.output_texture {
-                        let mut encoder = self.renderer.engine.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("readback_async"),
-                        });
                         encoder.copy_texture_to_buffer(
                             wgpu::TexelCopyTextureInfo {
                                 texture: output_tex,
@@ -658,11 +759,16 @@ impl CoreEngine {
                                 depth_or_array_layers: 1,
                             },
                         );
-                        self.renderer.engine.queue.submit(std::iter::once(encoder.finish()));
+                        self.renderer
+                            .engine
+                            .queue
+                            .submit(std::iter::once(encoder.finish()));
 
                         let slice = staging.slice(..);
                         let (tx_map, rx_map) = std::sync::mpsc::channel();
-                        slice.map_async(wgpu::MapMode::Read, move |_| { let _ = tx_map.send(()); });
+                        slice.map_async(wgpu::MapMode::Read, move |_| {
+                            let _ = tx_map.send(());
+                        });
 
                         pending_reads.push_back((frames_submitted, rx_map, staging_idx));
                     }
@@ -686,7 +792,8 @@ impl CoreEngine {
                     let data = staging.slice(..).get_mapped_range();
 
                     // Reuse a pre-allocated buffer instead of allocating 8MB per frame
-                    let mut pixels = rx_recycle.try_recv()
+                    let mut pixels = rx_recycle
+                        .try_recv()
                         .unwrap_or_else(|_| vec![0u8; pixel_buf_size]);
 
                     if no_padding {
@@ -714,9 +821,21 @@ impl CoreEngine {
                     }
 
                     let elapsed = start.elapsed().as_secs_f64();
-                    let export_fps = if elapsed > 0.0 { (frame_idx + 1) as f64 / elapsed } else { 0.0 };
-                    let remaining = if total_frames > frame_idx + 1 { (total_frames - frame_idx - 1) as u64 } else { 0 };
-                    let eta = if export_fps > 0.0 { remaining as f64 / export_fps } else { 0.0 };
+                    let export_fps = if elapsed > 0.0 {
+                        (frame_idx + 1) as f64 / elapsed
+                    } else {
+                        0.0
+                    };
+                    let remaining = if total_frames > frame_idx + 1 {
+                        (total_frames - frame_idx - 1) as u64
+                    } else {
+                        0
+                    };
+                    let eta = if export_fps > 0.0 {
+                        remaining as f64 / export_fps
+                    } else {
+                        0.0
+                    };
 
                     if !on_progress(ExportProgress {
                         current_frame: frame_idx as u64,

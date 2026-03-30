@@ -10,13 +10,13 @@
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use crate::ecs::typemap::TypeMap;
-    use crate::ecs::registry::ComponentRegistry;
-    use crate::ecs::{Entity, World};
-    use crate::ecs::components::*;
     use crate::ecs::components::meta::*;
+    use crate::ecs::components::*;
+    use crate::ecs::registry::ComponentRegistry;
+    use crate::ecs::typemap::TypeMap;
+    use crate::ecs::{Entity, World};
     use crate::scene::Lifespan;
+    use std::collections::HashMap;
 
     // ══════════════════════════════════════════
     // TC-ECS-01: TypeMap Primitives
@@ -88,16 +88,31 @@ mod tests {
     fn tc_ecs_02a_registry_has_all_core_components() {
         let reg = ComponentRegistry::default();
         let expected_keys = vec![
-            "shapeSource", "videoSource", "imageSource", "textSource",
-            "colorSource", "audioSource", "camera", "transform", "rect",
-            "visual", "animation", "composition", "lifespan",
-            "parentId", "maskId", "layer", "materials",
-            "floatUniforms", "stringUniforms",
+            "shapeSource",
+            "videoSource",
+            "imageSource",
+            "textSource",
+            "colorSource",
+            "audioSource",
+            "camera",
+            "transform",
+            "rect",
+            "visual",
+            "animation",
+            "composition",
+            "lifespan",
+            "parentId",
+            "maskId",
+            "layer",
+            "materials",
+            "floatUniforms",
+            "stringUniforms",
         ];
         for key in &expected_keys {
             assert!(
                 reg.loaders.contains_key(*key),
-                "Registry missing loader for '{}'", key
+                "Registry missing loader for '{}'",
+                key
             );
         }
     }
@@ -116,7 +131,7 @@ mod tests {
             "anchorX": 0.5, "anchorY": 0.5,
             "scaleX": 2.0, "scaleY": 3.0
         });
-        
+
         let loader = world.registry.loaders.get("transform").copied().unwrap();
         loader(&mut world, "test_ent", &json_val).unwrap();
 
@@ -239,7 +254,10 @@ mod tests {
         let mut world = World::new();
         world.load_scene(&scene);
 
-        assert_eq!(world.resolve_asset_url("my_vid"), Some("https://cdn.example.com/video.mp4"));
+        assert_eq!(
+            world.resolve_asset_url("my_vid"),
+            Some("https://cdn.example.com/video.mp4")
+        );
         assert_eq!(world.resolve_asset_url("my_img"), Some("./local/photo.png"));
         assert_eq!(world.resolve_asset_url("nonexistent"), None);
     }

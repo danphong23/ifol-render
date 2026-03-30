@@ -1,5 +1,5 @@
-use crate::ecs::components::composition::LoopMode;
 use crate::ecs::World;
+use crate::ecs::components::composition::LoopMode;
 use crate::time::TimeState;
 use std::collections::HashMap;
 
@@ -22,8 +22,15 @@ pub fn time_system(
     // 1. Pre-compute auto durations for compositions
     let mut auto_durations: HashMap<String, f64> = HashMap::new();
     for entity in &world.entities {
-        if let Some(pid) = storages.get_component::<crate::ecs::components::meta::ParentId>(&entity.id).map(|id| &id.0) {
-            let child_end = storages.get_component::<crate::scene::Lifespan>(&entity.id).copied().map(|ls| ls.end).unwrap_or(0.0);
+        if let Some(pid) = storages
+            .get_component::<crate::ecs::components::meta::ParentId>(&entity.id)
+            .map(|id| &id.0)
+        {
+            let child_end = storages
+                .get_component::<crate::scene::Lifespan>(&entity.id)
+                .copied()
+                .map(|ls| ls.end)
+                .unwrap_or(0.0);
             let entry = auto_durations.entry(pid.clone()).or_insert(0.0_f64);
             *entry = entry.max(child_end);
         }
@@ -41,22 +48,27 @@ pub fn time_system(
     for _depth in 0..8 {
         // Collect current content times of compositions
         let mut comp_states: HashMap<String, (f64, bool)> = HashMap::new();
-        
+
         for entity in &mut world.entities {
             let scope = entity.resolved.scope_time;
-            let ls = storages.get_component::<crate::scene::Lifespan>(&entity.id).copied().unwrap_or_default();
-            
+            let ls = storages
+                .get_component::<crate::scene::Lifespan>(&entity.id)
+                .copied()
+                .unwrap_or_default();
+
             // Check visibility at local scope
             let visible_at_scope = ls.contains(scope);
-            
+
             // If it's a composition, calculate its internal content_time
-            if let Some(comp) = storages.get_component::<crate::ecs::components::Composition>(&entity.id) {
+            if let Some(comp) =
+                storages.get_component::<crate::ecs::components::Composition>(&entity.id)
+            {
                 // If THIS entity is the scope entity and we have an override,
                 // use the override directly as content_time (bypass speed/loop/trim)
                 let is_scope_entity = scope_entity_id
                     .map(|sid| sid == entity.id.as_str())
                     .unwrap_or(false);
-                
+
                 let (content_time, duration) = if is_scope_entity && scope_time_override.is_some() {
                     let dur = match &comp.duration {
                         crate::ecs::components::composition::DurationMode::Manual(d) => *d,
@@ -69,21 +81,21 @@ pub fn time_system(
                 } else {
                     let local_time = scope - ls.start;
                     let raw_content = local_time * (comp.speed as f64) + comp.trim_start;
-                    
+
                     let dur = match &comp.duration {
                         crate::ecs::components::composition::DurationMode::Manual(d) => *d,
                         crate::ecs::components::composition::DurationMode::Auto => {
                             auto_durations.get(&entity.id).copied().unwrap_or(5.0)
                         }
                     };
-                    
+
                     let ct = apply_loop_mode(raw_content, dur, &comp.loop_mode);
                     (ct, dur)
                 };
-                
+
                 entity.resolved.content_time = content_time;
                 entity.resolved.max_duration = duration;
-                
+
                 comp_states.insert(entity.id.clone(), (content_time, visible_at_scope));
             }
         }
@@ -91,19 +103,22 @@ pub fn time_system(
         // Propagate content_time down to children as their new scope_time
         let mut changed = false;
         for entity in &mut world.entities {
-            if let Some(pid) = storages.get_component::<crate::ecs::components::meta::ParentId>(&entity.id).map(|id| &id.0) {
+            if let Some(pid) = storages
+                .get_component::<crate::ecs::components::meta::ParentId>(&entity.id)
+                .map(|id| &id.0)
+            {
                 if let Some(&(parent_content_time, _parent_visible)) = comp_states.get(pid) {
                     if (parent_content_time - entity.resolved.scope_time).abs() > 1e-9 {
                         entity.resolved.scope_time = parent_content_time;
                         changed = true;
                     }
-                    
-                    // If parent composition is invisible, child should effectively be invisible, 
+
+                    // If parent composition is invisible, child should effectively be invisible,
                     // but we handle visibility finalization in step 4.
                 }
             }
         }
-        
+
         if !changed {
             break;
         }
@@ -114,7 +129,11 @@ pub fn time_system(
     let comp_visibility: HashMap<String, bool> = world
         .entities
         .iter()
-        .filter(|e| storages.get_component::<crate::ecs::components::Composition>(&e.id).is_some())
+        .filter(|e| {
+            storages
+                .get_component::<crate::ecs::components::Composition>(&e.id)
+                .is_some()
+        })
         .map(|e| {
             // Force scope entity visible when scope_time_override is active
             let is_scope = scope_entity_id
@@ -123,7 +142,11 @@ pub fn time_system(
             let vis = if is_scope && scope_time_override.is_some() {
                 true
             } else {
-                storages.get_component::<crate::scene::Lifespan>(&e.id).copied().unwrap_or_default().contains(e.resolved.scope_time)
+                storages
+                    .get_component::<crate::scene::Lifespan>(&e.id)
+                    .copied()
+                    .unwrap_or_default()
+                    .contains(e.resolved.scope_time)
             };
             (e.id.clone(), vis)
         })
@@ -131,34 +154,50 @@ pub fn time_system(
 
     for entity in &mut world.entities {
         let scope = entity.resolved.scope_time;
-        let ls = storages.get_component::<crate::scene::Lifespan>(&entity.id).copied().unwrap_or_default();
-        
-        let mut visible = ls.contains(scope);
-        
-        // Hide if parent composition is hidden
-        if let Some(pid) = storages.get_component::<crate::ecs::components::meta::ParentId>(&entity.id).map(|id| &id.0) {
-            if let Some(&parent_vis) = comp_visibility.get(pid) {
-                if !parent_vis {
-                    visible = false;
+        let ls = storages
+            .get_component::<crate::scene::Lifespan>(&entity.id)
+            .copied()
+            .unwrap_or_default();
+
+        let is_scope = scope_entity_id
+            .map(|sid| sid == entity.id.as_str())
+            .unwrap_or(false);
+
+        let mut visible = if is_scope && scope_time_override.is_some() {
+            true // Force visibility for the currently previewed tab scope safely bypassing global logic
+        } else {
+            ls.contains(scope)
+        };
+
+        if !(is_scope && scope_time_override.is_some()) {
+            // Hide if parent composition is hidden, EXCEPT if we are previewing THIS exact composition tab
+            if let Some(pid) = storages
+                .get_component::<crate::ecs::components::meta::ParentId>(&entity.id)
+                .map(|id| &id.0)
+            {
+                if let Some(&parent_vis) = comp_visibility.get(pid) {
+                    if !parent_vis {
+                        visible = false;
+                    }
                 }
             }
         }
-        
+
         entity.resolved.visible = visible;
-        
+
         if visible {
             let local_time = scope - ls.start;
             let duration = ls.end - ls.start;
-            
+
             entity.resolved.time.local_time = local_time;
             entity.resolved.time.normalized_time = if duration > 0.0 {
                 local_time / duration
             } else {
                 0.0
             };
-            
+
             // V4 Phase 3: playback_time is no longer magically inferred from local_time.
-            // It defaults to 0.0 and MUST be explicitly driven by an AnimationComponent 
+            // It defaults to 0.0 and MUST be explicitly driven by an AnimationComponent
             // possessing a PlaybackTime FloatTrack. Core does not assume video length.
             entity.resolved.playback_time = 0.0;
         }
@@ -167,8 +206,10 @@ pub fn time_system(
 
 /// Apply loop mode to raw content time.
 pub fn apply_loop_mode(mut raw: f64, duration: f64, mode: &LoopMode) -> f64 {
-    if duration <= 0.0 { return raw; }
-    
+    if duration <= 0.0 {
+        return raw;
+    }
+
     // Prevent floating point drift for exact boundaries
     if (raw - duration).abs() < 1e-9 {
         raw = duration;
@@ -176,17 +217,27 @@ pub fn apply_loop_mode(mut raw: f64, duration: f64, mode: &LoopMode) -> f64 {
     if raw.abs() < 1e-9 {
         raw = 0.0;
     }
-    
+
     match mode {
         LoopMode::Once => raw.min(duration).max(0.0),
         LoopMode::Loop => {
-            if raw < 0.0 { 0.0 } else { raw % duration }
+            if raw < 0.0 {
+                0.0
+            } else {
+                raw % duration
+            }
         }
         LoopMode::PingPong => {
-            if raw < 0.0 { return 0.0; }
+            if raw < 0.0 {
+                return 0.0;
+            }
             let cycle = (raw / duration) as u64;
             let frac = raw % duration;
-            if cycle % 2 == 0 { frac } else { duration - frac }
+            if cycle % 2 == 0 {
+                frac
+            } else {
+                duration - frac
+            }
         }
     }
 }
@@ -194,9 +245,9 @@ pub fn apply_loop_mode(mut raw: f64, duration: f64, mode: &LoopMode) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::{Entity, World};
-    use crate::ecs::components::{Composition, composition::DurationMode};
     use crate::ecs::components::meta::ParentId;
+    use crate::ecs::components::{Composition, composition::DurationMode};
+    use crate::ecs::{Entity, World};
     use crate::scene::Lifespan;
 
     fn build_world() -> World {
@@ -208,7 +259,13 @@ mod tests {
             resolved: Default::default(),
             draw: Default::default(),
         });
-        w.add_component("root", Lifespan { start: 1.0, end: 5.0 });
+        w.add_component(
+            "root",
+            Lifespan {
+                start: 1.0,
+                end: 5.0,
+            },
+        );
 
         // Comp Entity (ID: "comp")
         w.add_entity(Entity {
@@ -216,15 +273,24 @@ mod tests {
             resolved: Default::default(),
             draw: Default::default(),
         });
-        w.add_component("comp", Lifespan { start: 2.0, end: 10.0 });
-        w.add_component("comp", Composition {
-            speed: 2.0,
-            trim_start: 1.0,
-            trim_end: None,
-            loop_mode: LoopMode::Loop,
-            duration: DurationMode::Manual(4.0),
-            ..Default::default()
-        });
+        w.add_component(
+            "comp",
+            Lifespan {
+                start: 2.0,
+                end: 10.0,
+            },
+        );
+        w.add_component(
+            "comp",
+            Composition {
+                speed: 2.0,
+                trim_start: 1.0,
+                trim_end: None,
+                loop_mode: LoopMode::Loop,
+                duration: DurationMode::Manual(4.0),
+                ..Default::default()
+            },
+        );
 
         // Child Entity of Comp (ID: "child")
         w.add_entity(Entity {
@@ -233,7 +299,13 @@ mod tests {
             draw: Default::default(),
         });
         w.add_component("child", ParentId("comp".to_string()));
-        w.add_component("child", Lifespan { start: 1.0, end: 3.0 });
+        w.add_component(
+            "child",
+            Lifespan {
+                start: 1.0,
+                end: 3.0,
+            },
+        );
 
         w
     }
@@ -242,7 +314,7 @@ mod tests {
     fn test_time_system_basic_visibility() {
         let mut world = build_world();
         let mut time = TimeState::default();
-        
+
         // At t=0.0
         time.global_time = 0.0;
         time_system(&mut world, &time, None, None);
@@ -262,10 +334,10 @@ mod tests {
         time_system(&mut world, &time, None, None);
         assert!(world.entities[1].resolved.visible); // comp is active
         assert_eq!(world.entities[1].resolved.time.local_time, 0.5); // 2.5 - 2.0
-        
+
         // Comp content time: local_time(0.5) * speed(2.0) + trim(1.0) = 2.0
         assert_eq!(world.entities[1].resolved.content_time, 2.0);
-        
+
         // Child scope time should be 2.0
         assert_eq!(world.entities[2].resolved.scope_time, 2.0);
         // Child lifespan is 1..3, so at scope=2.0 it is visible

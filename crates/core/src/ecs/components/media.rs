@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::color::Color4;
+use serde::{Deserialize, Serialize};
 
 /// Video file source — references an asset by ID.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,7 +25,9 @@ pub struct VideoSource {
     pub fps: f64,
 }
 
-fn default_fps() -> f64 { 30.0 }
+fn default_fps() -> f64 {
+    30.0
+}
 
 /// Image file source — references an asset by ID.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,10 +55,18 @@ pub struct TextSource {
     pub continuous_rasterization: bool,
 }
 
-fn default_font() -> String { "Inter".into() }
-fn default_font_size() -> f32 { 48.0 }
-fn default_true() -> bool { true }
-fn default_white() -> [f32; 4] { [1.0, 1.0, 1.0, 1.0] }
+fn default_font() -> String {
+    "Inter".into()
+}
+fn default_font_size() -> f32 {
+    48.0
+}
+fn default_true() -> bool {
+    true
+}
+fn default_white() -> [f32; 4] {
+    [1.0, 1.0, 1.0, 1.0]
+}
 
 /// Solid color fill source.
 /// Display size comes from entity-level `Rect` component, not here.
