@@ -15,6 +15,7 @@ struct Uniforms {
     shape_type: f32,
     param1: f32,
     param2: f32,
+    param3: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -90,16 +91,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     // Compute SDF based on shape type
     switch shape {
         case 0 { // rect
-            dist = sdf_rect(p, half);
+            dist = sdf_rect(p, half - vec2f(u.param3));
         }
         case 1 { // rounded_rect
-            dist = sdf_rounded_rect(p, half, u.param1);
+            dist = sdf_rounded_rect(p, half - vec2f(u.param3), u.param1);
         }
         case 2 { // circle
-            dist = sdf_circle(p, 0.5);
+            dist = sdf_circle(p, 0.5 - u.param3);
         }
         case 3 { // ellipse
-            dist = sdf_ellipse(p, half);
+            dist = sdf_ellipse(p, half - vec2f(u.param3));
         }
         case 4 { // line
             dist = sdf_line(p, 0.5, u.param1);

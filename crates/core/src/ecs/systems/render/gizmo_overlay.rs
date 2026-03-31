@@ -172,7 +172,7 @@ pub fn editor_gizmo_system(
                     3.0,                  // 3 = ellipse
                     0.0,                  // param1
                     thicc / max_dim,      // param2 = hollow border width
-                    0.0
+                    pad / draw_w.max(draw_h)  // param3 = normalize UV inset
                 ],
                 layer: 1000000, 
                 z_index: 1000000.0,
