@@ -118,8 +118,8 @@ pub fn pick_entity_at(
         let (min_x, max_x, min_y, max_y) = if is_camera {
             // Unity-style: triangle ABOVE the camera frame, pointing DOWN
             let tri_size = r.width * 0.05;
-            let orig_min_x = -r.anchor_x * r.width;
-            let orig_min_y = -r.anchor_y * r.height;
+            let orig_min_x = -0.5 * r.width;
+            let orig_min_y = -0.5 * r.height;
             let tri_center_x = orig_min_x + r.width * 0.5;
             let tri_center_y = orig_min_y - tri_size * 0.6; // Above top edge
             let hw = tri_size * 0.5;

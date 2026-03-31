@@ -733,6 +733,11 @@ impl IfolRenderWeb {
                 }
             }
 
+            // Cameras are non-visual but their gizmo triangle defines their hit area in Editor Mode.
+            if world.storages.get_component::<ifol_render_ecs::ecs::components::CameraComponent>(&hit.entity_id).is_some() {
+                return Some(hit.entity_id);
+            }
+
             // If it's an image, do an alpha pixel lookup
             if let Some(img) = world
                 .storages
