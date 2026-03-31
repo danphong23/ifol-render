@@ -30,6 +30,8 @@ pub enum OverrideValue {
 pub struct ContextView<'a> {
     pub scope_id: Option<&'a str>,
     pub active_entities: std::collections::HashSet<String>,
+    pub selected_ids: std::collections::HashSet<String>,
+    pub select_mode: String,
 }
 
 /// Bitmask-based Render Categories for culling (Layer Masking).
@@ -267,7 +269,7 @@ impl World {
     }
 
     /// Build a ContextView containing only the entities valid within a specific scope.
-    pub fn build_context<'a>(&self, scope_id: Option<&'a str>) -> ContextView<'a> {
+    pub fn build_context<'a>(&self, scope_id: Option<&'a str>, selected_ids: std::collections::HashSet<String>, select_mode: String) -> ContextView<'a> {
         let mut active_entities = std::collections::HashSet::new();
 
         if scope_id.is_none() {
@@ -278,6 +280,8 @@ impl World {
             return ContextView {
                 scope_id: None,
                 active_entities,
+                selected_ids,
+                select_mode,
             };
         }
 
@@ -318,6 +322,8 @@ impl World {
         ContextView {
             scope_id,
             active_entities,
+            selected_ids,
+            select_mode,
         }
     }
 

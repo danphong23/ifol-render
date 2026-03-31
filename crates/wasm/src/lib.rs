@@ -485,8 +485,11 @@ impl IfolRenderWeb {
             .collect();
         // Wait, editor_gizmo_system MUST run AFTER render_to_frame because it appends to the Frame!
 
-        // 3.2. Build ECS Context
-        let context = world.build_context(self.render_scope.as_deref());
+        let mut selected_ids = std::collections::HashSet::new();
+        for s in &self.selected_entity_ids {
+            selected_ids.insert(s.clone());
+        }
+        let context = world.build_context(self.render_scope.as_deref(), selected_ids, self.select_mode.clone());
 
         // 3.3. Core Render Phase
         let mut frame = ifol_render_ecs::ecs::systems::render_to_frame(
@@ -612,9 +615,9 @@ impl IfolRenderWeb {
 
         let cw = cam_ent.resolved.width.max(1.0);
         let ch = cam_ent.resolved.height.max(1.0);
-        // Inner cam view origin = cam world pos - cam anchor * cam size
-        let inner_cam_x = cam_ent.resolved.x - cam_ent.resolved.anchor_x * cw;
-        let inner_cam_y = cam_ent.resolved.y - cam_ent.resolved.anchor_y * ch;
+        // Inner cam view origin = cam world pos - half cam size
+        let inner_cam_x = cam_ent.resolved.x - cw * 0.5;
+        let inner_cam_y = cam_ent.resolved.y - ch * 0.5;
 
         Some(format!(
             "{{\"x\":{},\"y\":{},\"w\":{},\"h\":{}}}",
@@ -663,8 +666,11 @@ impl IfolRenderWeb {
     ) -> Option<String> {
         if let Some(world) = &self.v2_world {
             let cam = world.find_camera(camera_id);
-            let cam_x = custom_cam_x.unwrap_or_else(|| cam.map(|c| c.resolved.x).unwrap_or(0.0));
-            let cam_y = custom_cam_y.unwrap_or_else(|| cam.map(|c| c.resolved.y).unwrap_or(0.0));
+            let cam_top_left_x = cam.map(|c| c.resolved.x - c.resolved.width * 0.5).unwrap_or(0.0);
+            let cam_top_left_y = cam.map(|c| c.resolved.y - c.resolved.height * 0.5).unwrap_or(0.0);
+            
+            let cam_x = custom_cam_x.unwrap_or(cam_top_left_x);
+            let cam_y = custom_cam_y.unwrap_or(cam_top_left_y);
             let cam_w = custom_cam_w
                 .unwrap_or_else(|| cam.map(|c| c.resolved.width).unwrap_or(1280.0))
                 .max(1.0);
@@ -707,9 +713,9 @@ impl IfolRenderWeb {
                     let inner_cw = cam_ent.resolved.width.max(1.0);
                     let inner_ch = cam_ent.resolved.height.max(1.0);
                     let comp_ent = world.entities.iter().find(|e| e.id == hit.entity_id).unwrap();
-                    // Fix: The inner camera offset must subtract the Camera's anchor, not the Composition's anchor!
-                    let inner_cam_x = cam_ent.resolved.x - cam_ent.resolved.anchor_x * inner_cw;
-                    let inner_cam_y = cam_ent.resolved.y - cam_ent.resolved.anchor_y * inner_ch;
+                    // Fix: The inner camera offset must subtract half the Camera's size to get top-left
+                    let inner_cam_x = cam_ent.resolved.x - inner_cw * 0.5;
+                    let inner_cam_y = cam_ent.resolved.y - inner_ch * 0.5;
                     
                     let inner_sx = hit.u * inner_cw;
                     let inner_sy = hit.v * inner_ch;
@@ -852,8 +858,14 @@ impl IfolRenderWeb {
             let mut global_x = 0.0;
             let mut global_y = 0.0;
             if let Some(entity) = world.entities.iter().find(|e| e.id == entity_id) {
-                global_x = entity.resolved.x;
-                global_y = entity.resolved.y;
+                let anchor_dx = (0.5 - entity.resolved.anchor_x) * entity.resolved.width;
+                let anchor_dy = (0.5 - entity.resolved.anchor_y) * entity.resolved.height;
+                let final_cos_r = entity.resolved.rotation.cos();
+                let final_sin_r = entity.resolved.rotation.sin();
+                
+                // Reverse the visual center offset baked by hierarchy_sys.rs back to the true world anchor!
+                global_x = entity.resolved.x - (anchor_dx * final_cos_r - anchor_dy * final_sin_r);
+                global_y = entity.resolved.y - (anchor_dx * final_sin_r + anchor_dy * final_cos_r);
             }
 
             // Inverse-transform world coordinates back to local coordinates

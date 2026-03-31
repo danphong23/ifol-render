@@ -22,8 +22,11 @@ pub fn render_to_frame(
 
     // ── Camera projection: world units → pixels ──
     let cam = world.find_camera(camera_id);
-    let cam_x = custom_cam_x.unwrap_or_else(|| cam.map(|c| c.resolved.x).unwrap_or(0.0));
-    let cam_y = custom_cam_y.unwrap_or_else(|| cam.map(|c| c.resolved.y).unwrap_or(0.0));
+    let cam_top_left_x = cam.map(|c| c.resolved.x - c.resolved.width * 0.5).unwrap_or(0.0);
+    let cam_top_left_y = cam.map(|c| c.resolved.y - c.resolved.height * 0.5).unwrap_or(0.0);
+
+    let cam_x = custom_cam_x.unwrap_or(cam_top_left_x);
+    let cam_y = custom_cam_y.unwrap_or(cam_top_left_y);
     let cam_w = custom_cam_w
         .unwrap_or_else(|| cam.map(|c| c.resolved.width).unwrap_or(1280.0))
         .max(1.0);
@@ -221,8 +224,13 @@ pub fn render_to_frame(
             }
         }
 
-        let has_effects = !padded_effects.is_empty();
-        let pad = if has_effects { entity.draw.effect_padding } else { 0.0 };
+        let is_selected_content = context.select_mode == "content" && context.selected_ids.contains(&entity.id);
+        let has_effects = !padded_effects.is_empty() || is_selected_content;
+        let mut pad = if has_effects { entity.draw.effect_padding } else { 0.0 };
+
+        if is_selected_content {
+            pad = pad.max(6.0); // Ensure buffer has room for the outline glow
+        }
 
         let local_sx = if target_comp == "main" { sx } else { 1.0 };
         let local_sy = if target_comp == "main" { sy } else { 1.0 };
@@ -242,11 +250,9 @@ pub fn render_to_frame(
 
             let cos_r = call.rotation.cos();
             let sin_r = call.rotation.sin();
-            let dx = (0.5 - call.anchor_x) * w;
-            let dy = (0.5 - call.anchor_y) * h;
 
-            let center_x = (call.x - pass_cam_x) * local_sx + dx * cos_r - dy * sin_r;
-            let center_y = (call.y - pass_cam_y) * local_sy + dx * sin_r + dy * cos_r;
+            let center_x = (call.x - pass_cam_x) * local_sx;
+            let center_y = (call.y - pass_cam_y) * local_sy;
             let flat_x = center_x - w * 0.5;
             let flat_y = center_y - h * 0.5;
 
@@ -337,11 +343,42 @@ pub fn render_to_frame(
                 blend_mode: r.blend_mode.as_u32(),
                 color: [1.0, 1.0, 1.0, 1.0],
                 shader: if r.blend_mode.as_u32() == 11 { "composite_mask_in".to_string() } else if r.blend_mode.as_u32() == 12 { "composite_mask_out".to_string() } else { "composite".to_string() },
-                textures: vec![current_key], params: vec![],
+                textures: vec![current_key.clone()], params: vec![],
                 layer, z_index: layer as f32,
                 fit_mode: 0, uv_offset: [0.0, 0.0], uv_scale: [1.0, 1.0],
                 intrinsic_width: ew, intrinsic_height: eh,
             });
+
+            if is_selected_content {
+                let sel_key = format!("_ent_sel_{}", entity.id);
+                passes.push(RenderPass {
+                    output: sel_key.clone(),
+                    pass_type: PassType::Effect {
+                        shader: "selection_outline".to_string(),
+                        inputs: vec![current_key.clone()],
+                        params: vec![4.0, 0.0, 0.0, 0.0]
+                    },
+                    target_width: Some(ew as u32),
+                    target_height: Some(eh as u32),
+                });
+
+                flat_entities.push(FlatEntity {
+                    id: 0,
+                    x: (r.x - local_cam_x) * local_sx - ew * 0.5,
+                    y: (r.y - local_cam_y) * local_sy - eh * 0.5,
+                    width: ew, height: eh,
+                    rotation: 0.0,
+                    opacity: 1.0,
+                    blend_mode: 0,
+                    color: [1.0, 1.0, 1.0, 1.0],
+                    shader: "composite".to_string(),
+                    textures: vec![sel_key], params: vec![],
+                    layer: 999999, z_index: 999999.0,
+                    fit_mode: 0, uv_offset: [0.0, 0.0], uv_scale: [1.0, 1.0],
+                    intrinsic_width: ew, intrinsic_height: eh,
+                });
+            }
+
         } else {
             flat_entities.extend(local_flat_list);
         }
@@ -443,36 +480,70 @@ pub fn render_to_frame(
         };
 
 
-        let ew = comp_ent.resolved.width * p_sx;
-        let eh = comp_ent.resolved.height * p_sy;
-        
-        let cos_r = comp_ent.resolved.rotation.cos();
-        let sin_r = comp_ent.resolved.rotation.sin();
-        let dx = (0.5 - comp_ent.resolved.anchor_x) * ew;
-        let dy = (0.5 - comp_ent.resolved.anchor_y) * eh;
-
-        let center_x = (comp_ent.resolved.x - parent_cx) * p_sx + dx * cos_r - dy * sin_r;
-        let center_y = (comp_ent.resolved.y - parent_cy) * p_sy + dx * sin_r + dy * cos_r;
-
+        let original_ew = comp_ent.resolved.width * p_sx;
+        let original_eh = comp_ent.resolved.height * p_sy;
+        // Push the original comp normal output
         let (uv_offset, uv_scale) = comp_ent.resolved.fit_mode.calculate_uv(
-            comp_ent.resolved.width, comp_ent.resolved.height, *cw, *ch, 0.5, 0.5
+            original_ew, original_eh, *cw, *ch, 0.5, 0.5
         );
+        let center_x = (comp_ent.resolved.x - parent_cx) * p_sx;
+        let center_y = (comp_ent.resolved.y - parent_cy) * p_sy;
 
         let flat = FlatEntity {
             id: 0,
-            x: center_x - ew * 0.5, y: center_y - eh * 0.5,
-            width: ew, height: eh,
+            x: center_x - original_ew * 0.5, y: center_y - original_eh * 0.5,
+            width: original_ew, height: original_eh,
             rotation: comp_ent.resolved.rotation,
             opacity: 1.0,
             blend_mode: comp_ent.resolved.blend_mode.as_u32(),
             shader: if comp_ent.resolved.blend_mode.as_u32() == 11 { "composite_mask_in".to_string() } else if comp_ent.resolved.blend_mode.as_u32() == 12 { "composite_mask_out".to_string() } else { "composite".to_string() },
             color: [1.0, 1.0, 1.0, 1.0],
-            textures: vec![comp_tex_key], params: vec![],
+            textures: vec![comp_tex_key.clone()], params: vec![],
             layer: comp_ent.resolved.layer, z_index: comp_ent.resolved.layer as f32,
             fit_mode: 0, uv_offset, uv_scale,
             intrinsic_width: *cw, intrinsic_height: *ch,
         };
-        comp_lists.entry(target_comp).or_default().push(flat);
+        comp_lists.entry(target_comp.clone()).or_default().push(flat);
+
+        // Push overlay gizmo pass if selected
+        if context.selected_ids.contains(&comp_ent.id) && context.select_mode == "content" {
+            let offset = 6.0;
+            let pad_w = offset * 2.0;
+            let pad_h = offset * 2.0;
+            let target_cx = *cw + pad_w;
+            let target_cy = *ch + pad_h;
+
+            let out_key = format!("_comp_fx_{}", comp_id);
+            passes.push(RenderPass {
+                output: out_key.clone(),
+                pass_type: PassType::Effect {
+                    shader: "selection_outline".to_string(),
+                    inputs: vec![comp_tex_key.clone()],
+                    params: vec![4.0, 0.0, 0.0, 0.0]
+                },
+                target_width: Some(target_cx as u32),
+                target_height: Some(target_cy as u32),
+            });
+            
+            let ew = original_ew + pad_w * p_sx;
+            let eh = original_eh + pad_h * p_sy;
+
+            let gizmo_flat = FlatEntity {
+                id: 0,
+                x: center_x - ew * 0.5, y: center_y - eh * 0.5,
+                width: ew, height: eh,
+                rotation: comp_ent.resolved.rotation,
+                opacity: 1.0,
+                blend_mode: 0,
+                shader: "composite".to_string(),
+                color: [1.0, 1.0, 1.0, 1.0],
+                textures: vec![out_key], params: vec![],
+                layer: 999999, z_index: 999999.0,
+                fit_mode: 0, uv_offset, uv_scale,
+                intrinsic_width: target_cx, intrinsic_height: target_cy,
+            };
+            comp_lists.entry(target_comp).or_default().push(gizmo_flat);
+        }
     }
     
     // Everything implicitly bubbled up to "main" (the Root)

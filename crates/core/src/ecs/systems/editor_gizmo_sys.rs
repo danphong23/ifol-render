@@ -61,14 +61,13 @@ pub fn editor_gizmo_system(
         
         let cos_r = entity.resolved.rotation.cos();
         let sin_r = entity.resolved.rotation.sin();
-        let dx = (0.5 - entity.resolved.anchor_x) * draw_w;
-        let dy = (0.5 - entity.resolved.anchor_y) * draw_h;
-        let center_x = (entity.resolved.x - cam_x) * sx + dx * cos_r - dy * sin_r;
-        let center_y = (entity.resolved.y - cam_y) * sy + dx * sin_r + dy * cos_r;
+
+        let center_x = (entity.resolved.x - cam_x) * sx;
+        let center_y = (entity.resolved.y - cam_y) * sy;
         
         let tri_size = entity.resolved.width * 0.05;
-        let local_tri_x = -entity.resolved.anchor_x * entity.resolved.width + entity.resolved.width * 0.5;
-        let local_tri_y = -entity.resolved.anchor_y * entity.resolved.height - tri_size * 0.6;
+        let local_tri_x = 0.0;
+        let local_tri_y = -entity.resolved.height * 0.5 - tri_size * 0.6;
         
         let tri_x_world = entity.resolved.x + local_tri_x * cos_r - local_tri_y * sin_r;
         let tri_y_world = entity.resolved.y + local_tri_x * sin_r + local_tri_y * cos_r;
@@ -143,15 +142,13 @@ pub fn editor_gizmo_system(
         
         let cos_r = entity.resolved.rotation.cos();
         let sin_r = entity.resolved.rotation.sin();
-        let dx = (0.5 - entity.resolved.anchor_x) * bounds_w;
-        let dy = (0.5 - entity.resolved.anchor_y) * bounds_h;
-        bounds_cx = (entity.resolved.x - cam_x) * sx + dx * cos_r - dy * sin_r;
-        bounds_cy = (entity.resolved.y - cam_y) * sy + dx * sin_r + dy * cos_r;
+        bounds_cx = (entity.resolved.x - cam_x) * sx;
+        bounds_cy = (entity.resolved.y - cam_y) * sy;
         
         sel_mask_entities.push(entity.id.clone());
     }
 
-    if !sel_mask_entities.is_empty() {
+    if !sel_mask_entities.is_empty() && select_mode != "content" {
         let is_select = select_mode == "select";
         let thicc = if is_select { 8.0 } else { 4.0 };
         let box_col = if is_select { [1.0, 1.0, 1.0, 1.0] } else { [0.5, 0.5, 0.5, 0.8] };

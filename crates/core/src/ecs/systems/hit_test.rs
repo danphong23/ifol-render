@@ -153,9 +153,9 @@ pub fn pick_entity_at(
                 align_y,
             );
 
-            // Bounds in local space where (0,0) is the anchor point
-            let orig_min_x = -r.anchor_x * r.width;
-            let orig_min_y = -r.anchor_y * r.height;
+            // Bounds in local space where (0,0) is the VISUAL center!
+            let orig_min_x = -0.5 * r.width;
+            let orig_min_y = -0.5 * r.height;
 
             let min_x = orig_min_x + rb_ox;
             let max_x = min_x + rb_w;

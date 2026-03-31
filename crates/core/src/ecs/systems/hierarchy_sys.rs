@@ -19,6 +19,9 @@ pub fn hierarchy_system(world: &mut World, _time: &TimeState, scope_entity_id: O
             .unwrap_or(0);
         entity.resolved.layer = entity_layer;
 
+        let mut curr_anchor_x = entity.resolved.x;
+        let mut curr_anchor_y = entity.resolved.y;
+
         if let Some(pid) = storages
             .get_component::<crate::ecs::components::meta::ParentId>(&entity.id)
             .map(|id| &id.0)
@@ -32,15 +35,11 @@ pub fn hierarchy_system(world: &mut World, _time: &TimeState, scope_entity_id: O
                 resolved_transforms.get(pid)
             {
                 // ── Comp World Isolation ──
-                // If the parent has a Composition component, it creates an isolated
-                // coordinate space. Children live in LOCAL (0,0) origin and must NOT
-                // inherit spatial transforms (position, rotation, scale).
-                // Only non-spatial properties cascade through the boundary.
                 let parent_is_comp = storages
                     .get_component::<crate::ecs::components::Composition>(pid)
                     .is_some();
 
-                // Propagate visibility (always, regardless of comp boundary)
+                // Propagate visibility
                 if !p_visible {
                     entity.resolved.visible = false;
                 }
@@ -48,24 +47,20 @@ pub fn hierarchy_system(world: &mut World, _time: &TimeState, scope_entity_id: O
                 if entity.resolved.visible {
                     if parent_is_comp {
                         // ══ COMP WORLD BOUNDARY ══
-                        // Spatial: entity keeps its own local coords (no parent accumulation)
-                        // Non-spatial: cascade opacity, volume, layer
                         entity.resolved.opacity *= p_opacity;
                         entity.resolved.volume *= p_volume;
                         entity.resolved.layer += p_layer;
                     } else {
                         // ── Normal hierarchy accumulation ──
-                        // Apply parent scale to local offset first
                         let dx = entity.resolved.x * p_sx;
                         let dy = entity.resolved.y * p_sy;
 
-                        // Rotate child's offset around parent (p_rot is already in radians)
                         let cos_r = p_rot.cos();
                         let sin_r = p_rot.sin();
 
                         // Additive position offset
-                        entity.resolved.x = px + dx * cos_r - dy * sin_r;
-                        entity.resolved.y = py + dx * sin_r + dy * cos_r;
+                        curr_anchor_x = px + dx * cos_r - dy * sin_r;
+                        curr_anchor_y = py + dx * sin_r + dy * cos_r;
 
                         // Additive rotation
                         entity.resolved.rotation += p_rot;
@@ -76,42 +71,45 @@ pub fn hierarchy_system(world: &mut World, _time: &TimeState, scope_entity_id: O
                         entity.resolved.scale_x *= p_sx;
                         entity.resolved.scale_y *= p_sy;
 
-                        // Recompute width/height to include parent scale
-                        // rect_sys already computed: width = base_w * old_sx
-                        // We need: width = base_w * (old_sx * p_sx) = (width / old_sx) * new_sx
                         if old_sx.abs() > 0.001 {
-                            entity.resolved.width =
-                                (entity.resolved.width / old_sx) * entity.resolved.scale_x;
+                            entity.resolved.width = (entity.resolved.width / old_sx) * entity.resolved.scale_x;
                         }
                         if old_sy.abs() > 0.001 {
-                            entity.resolved.height =
-                                (entity.resolved.height / old_sy) * entity.resolved.scale_y;
+                            entity.resolved.height = (entity.resolved.height / old_sy) * entity.resolved.scale_y;
                         }
 
-                        // Multiplicative opacity and volume
                         entity.resolved.opacity *= p_opacity;
                         entity.resolved.volume *= p_volume;
-
-                        // Additive layer
                         entity.resolved.layer += p_layer;
                     }
                 }
             } else {
-                log::warn!(
-                    "Parent ID '{}' not found or not processed before child '{}'. Requires topological order.",
-                    pid,
-                    entity.id
-                );
+                log::warn!("Parent ID '{}' not found", pid);
             }
             }
         }
 
+        // Bake Visual Center
+        // Any child using THIS entity as a parent MUST pivot around `curr_anchor_x, curr_anchor_y`.
+        // BUT the entity's visual rendering should be precisely centered at visual center.
+        let final_cos_r = entity.resolved.rotation.cos();
+        let final_sin_r = entity.resolved.rotation.sin();
+        let anchor_dx = (0.5 - entity.resolved.anchor_x) * entity.resolved.width;
+        let anchor_dy = (0.5 - entity.resolved.anchor_y) * entity.resolved.height;
+
+        let visual_center_x = curr_anchor_x + anchor_dx * final_cos_r - anchor_dy * final_sin_r;
+        let visual_center_y = curr_anchor_y + anchor_dx * final_sin_r + anchor_dy * final_cos_r;
+
+        entity.resolved.x = visual_center_x;
+        entity.resolved.y = visual_center_y;
+
         // Accumulate this entity's FINAL resolved state so its children can use it
+        // Note: the children pivot around the ANCHOR, not the Visual Center!
         resolved_transforms.insert(
             entity.id.clone(),
             (
-                entity.resolved.x,
-                entity.resolved.y,
+                curr_anchor_x,
+                curr_anchor_y,
                 entity.resolved.rotation,
                 entity.resolved.opacity,
                 entity.resolved.scale_x,
