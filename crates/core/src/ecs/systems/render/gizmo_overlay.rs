@@ -122,13 +122,6 @@ pub fn editor_gizmo_system(
     }
 
     // 2. Selection Masking Pass (for non-camera selected objects)
-    let mut bounds_w = 0.0;
-    let mut bounds_h = 0.0;
-    let mut bounds_cx = 0.0;
-    let mut bounds_cy = 0.0;
-    let mut bounds_rot = 0.0;
-    let mut sel_mask_entities = Vec::new();
-    
     for entity in &sorted {
         if !entity.resolved.visible { continue; }
         if !context.active_entities.contains(&entity.id) { continue; }
@@ -136,51 +129,77 @@ pub fn editor_gizmo_system(
         if storages.get_component::<CameraComponent>(&entity.id).is_some() { continue; }
         if is_in_comp(&entity.id) { continue; }
 
-        bounds_w = entity.resolved.width * sx;
-        bounds_h = entity.resolved.height * sy;
-        bounds_rot = entity.resolved.rotation;
+        let bounds_w = entity.resolved.width * sx;
+        let bounds_h = entity.resolved.height * sy;
+        let bounds_rot = entity.resolved.rotation;
         
-        let cos_r = entity.resolved.rotation.cos();
-        let sin_r = entity.resolved.rotation.sin();
-        bounds_cx = (entity.resolved.x - cam_x) * sx;
-        bounds_cy = (entity.resolved.y - cam_y) * sy;
-        
-        sel_mask_entities.push(entity.id.clone());
-    }
+        let bounds_cx = (entity.resolved.x - cam_x) * sx;
+        let bounds_cy = (entity.resolved.y - cam_y) * sy;
 
-    if !sel_mask_entities.is_empty() {
+        let is_content = select_mode == "content";
         let is_select = select_mode == "select";
+
         let thicc = if is_select { 8.0 } else { 4.0 };
-        let box_col = if is_select { [1.0, 1.0, 1.0, 1.0] } else { [0.5, 0.5, 0.5, 0.8] };
+        let box_col = if is_content { [0.0, 0.898, 1.0, 0.9] } else if is_select { [1.0, 1.0, 1.0, 1.0] } else { [0.5, 0.5, 0.5, 0.8] };
         
         let max_dim = bounds_w.max(bounds_h).max(1.0);
 
-        gizmos.push(FlatEntity {
-            id: 0,
-            x: bounds_cx - bounds_w * 0.5,
-            y: bounds_cy - bounds_h * 0.5,
-            width: bounds_w.max(1.0),
-            height: bounds_h.max(1.0),
-            rotation: bounds_rot,
-            opacity: 1.0,
-            blend_mode: 0,
-            color: box_col,
-            shader: "dashed_rect".to_string(),
-            textures: vec![],
-            params: vec![
-                100.0, // dash
-                0.0, // gap
-                thicc / max_dim, // normalized border
-                0.0
-            ],
-            layer: 1000000, 
-            z_index: 1000000.0,
-            fit_mode: 0,
-            uv_offset: [0.0, 0.0],
-            uv_scale: [1.0, 1.0],
-            intrinsic_width: bounds_w.max(1.0),
-            intrinsic_height: bounds_h.max(1.0),
-        });
+        let mut is_circle = false;
+        if let Some(call) = entity.draw.draw_calls.first() {
+            if call.kind == crate::ecs::components::draw::DrawKind::SolidEllipse {
+                is_circle = true;
+            }
+        }
+
+        if is_content && is_circle {
+            gizmos.push(FlatEntity {
+                id: 0,
+                x: bounds_cx - bounds_w * 0.5,
+                y: bounds_cy - bounds_h * 0.5,
+                width: bounds_w.max(1.0),
+                height: bounds_h.max(1.0),
+                rotation: bounds_rot,
+                opacity: 1.0,
+                blend_mode: 0,
+                color: box_col,
+                shader: "shapes".to_string(),
+                textures: vec![],
+                params: vec![
+                    3.0,                  // 3 = ellipse
+                    0.0,                  // param1
+                    thicc / max_dim,      // param2 = hollow border width
+                    0.0
+                ],
+                layer: 1000000, 
+                z_index: 1000000.0,
+                fit_mode: 0, uv_offset: [0.0, 0.0], uv_scale: [1.0, 1.0],
+                intrinsic_width: bounds_w.max(1.0), intrinsic_height: bounds_h.max(1.0),
+            });
+        } else {
+            gizmos.push(FlatEntity {
+                id: 0,
+                x: bounds_cx - bounds_w * 0.5,
+                y: bounds_cy - bounds_h * 0.5,
+                width: bounds_w.max(1.0),
+                height: bounds_h.max(1.0),
+                rotation: bounds_rot,
+                opacity: 1.0,
+                blend_mode: 0,
+                color: box_col,
+                shader: "dashed_rect".to_string(),
+                textures: vec![],
+                params: vec![
+                    if is_content { 0.0 } else { 100.0 }, // no dashes for content outline
+                    0.0,
+                    thicc / max_dim,
+                    0.0
+                ],
+                layer: 1000000, 
+                z_index: 1000000.0,
+                fit_mode: 0, uv_offset: [0.0, 0.0], uv_scale: [1.0, 1.0],
+                intrinsic_width: bounds_w.max(1.0), intrinsic_height: bounds_h.max(1.0),
+            });
+        }
     }
 
     gizmos
