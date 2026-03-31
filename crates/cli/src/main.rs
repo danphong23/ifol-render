@@ -469,7 +469,7 @@ fn main() {
                         fps: fps_val,
                     };
                     ifol_render_ecs::ecs::pipeline::run(&mut world, &time_state, None, None);
-                    let context = world.build_context(None);
+                    let context = world.build_context(None, std::collections::HashSet::new(), String::new());
                     let mut frame = ifol_render_ecs::ecs::systems::render_to_frame(
                         &world, &camera_id, out_w, out_h, t, None, None, None, None, &context,
                     );
@@ -720,7 +720,7 @@ fn main() {
                 }
             }
 
-            let context = world.build_context(None);
+            let context = world.build_context(None, std::collections::HashSet::new(), String::new());
             let frame = ifol_render_ecs::ecs::systems::render_to_frame(
                 &world,
                 &cam_id,
