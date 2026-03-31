@@ -148,7 +148,7 @@ pub fn editor_gizmo_system(
         sel_mask_entities.push(entity.id.clone());
     }
 
-    if !sel_mask_entities.is_empty() && select_mode != "content" {
+    if !sel_mask_entities.is_empty() {
         let is_select = select_mode == "select";
         let thicc = if is_select { 8.0 } else { 4.0 };
         let box_col = if is_select { [1.0, 1.0, 1.0, 1.0] } else { [0.5, 0.5, 0.5, 0.8] };

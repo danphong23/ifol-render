@@ -146,13 +146,8 @@ pub fn build_entity_passes(
             }
         }
 
-        let is_selected_content = context.select_mode == "content" && context.selected_ids.contains(&entity.id);
-        let has_effects = !padded_effects.is_empty() || is_selected_content;
-        let mut pad = if has_effects { entity.draw.effect_padding } else { 0.0 };
-
-        if is_selected_content {
-            pad = pad.max(6.0); // Ensure buffer has room for the outline glow
-        }
+        let has_effects = !padded_effects.is_empty();
+        let pad = if has_effects { entity.draw.effect_padding } else { 0.0 };
 
         let local_sx = if target_comp == "main" { state.root_sx } else { 1.0 };
         let local_sy = if target_comp == "main" { state.root_sy } else { 1.0 };
@@ -265,35 +260,7 @@ pub fn build_entity_passes(
                 intrinsic_width: ew, intrinsic_height: eh,
             });
 
-            if is_selected_content {
-                let sel_key = format!("_ent_sel_{}", entity.id);
-                state.passes.push(RenderPass {
-                    output: sel_key.clone(),
-                    pass_type: PassType::Effect {
-                        shader: "selection_outline".to_string(),
-                        inputs: vec![current_key.clone()],
-                        params: vec![4.0, 0.0, 0.0, 0.0]
-                    },
-                    target_width: Some(ew as u32),
-                    target_height: Some(eh as u32),
-                });
 
-                flat_entities.push(FlatEntity {
-                    id: 0,
-                    x: (r.x - local_cam_x) * local_sx - ew * 0.5,
-                    y: (r.y - local_cam_y) * local_sy - eh * 0.5,
-                    width: ew, height: eh,
-                    rotation: 0.0,
-                    opacity: 1.0,
-                    blend_mode: 0,
-                    color: [1.0, 1.0, 1.0, 1.0],
-                    shader: "composite".to_string(),
-                    textures: vec![sel_key], params: vec![],
-                    layer: 999999, z_index: 999999.0,
-                    fit_mode: 0, uv_offset: [0.0, 0.0], uv_scale: [1.0, 1.0],
-                    intrinsic_width: ew, intrinsic_height: eh,
-                });
-            }
 
         } else {
             flat_entities.extend(local_flat_list);
