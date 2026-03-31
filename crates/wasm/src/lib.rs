@@ -507,8 +507,8 @@ impl IfolRenderWeb {
 
         if is_editor_mode {
             let cam = world.find_camera(camera_id);
-            let cam_x = custom_cam_x.unwrap_or_else(|| cam.map(|c| c.resolved.x).unwrap_or(0.0));
-            let cam_y = custom_cam_y.unwrap_or_else(|| cam.map(|c| c.resolved.y).unwrap_or(0.0));
+            let cam_x = custom_cam_x.unwrap_or_else(|| cam.map(|c| c.resolved.x - c.resolved.width * 0.5).unwrap_or(0.0));
+            let cam_y = custom_cam_y.unwrap_or_else(|| cam.map(|c| c.resolved.y - c.resolved.height * 0.5).unwrap_or(0.0));
             let cam_w = custom_cam_w
                 .unwrap_or_else(|| cam.map(|c| c.resolved.width).unwrap_or(1280.0))
                 .max(1.0);

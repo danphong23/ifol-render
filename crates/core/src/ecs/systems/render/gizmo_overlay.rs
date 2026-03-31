@@ -151,13 +151,17 @@ pub fn editor_gizmo_system(
             }
         }
 
+        let pad = thicc * 0.5; // Padding to prevent stroke clipping
+        let draw_w = bounds_w.max(1.0) + pad * 2.0;
+        let draw_h = bounds_h.max(1.0) + pad * 2.0;
+
         if is_content && is_circle {
             gizmos.push(FlatEntity {
                 id: 0,
-                x: bounds_cx - bounds_w * 0.5,
-                y: bounds_cy - bounds_h * 0.5,
-                width: bounds_w.max(1.0),
-                height: bounds_h.max(1.0),
+                x: bounds_cx - bounds_w * 0.5 - pad,
+                y: bounds_cy - bounds_h * 0.5 - pad,
+                width: draw_w,
+                height: draw_h,
                 rotation: bounds_rot,
                 opacity: 1.0,
                 blend_mode: 0,
@@ -178,10 +182,10 @@ pub fn editor_gizmo_system(
         } else {
             gizmos.push(FlatEntity {
                 id: 0,
-                x: bounds_cx - bounds_w * 0.5,
-                y: bounds_cy - bounds_h * 0.5,
-                width: bounds_w.max(1.0),
-                height: bounds_h.max(1.0),
+                x: bounds_cx - bounds_w * 0.5 - pad,
+                y: bounds_cy - bounds_h * 0.5 - pad,
+                width: draw_w,
+                height: draw_h,
                 rotation: bounds_rot,
                 opacity: 1.0,
                 blend_mode: 0,
