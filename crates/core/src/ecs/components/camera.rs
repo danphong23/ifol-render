@@ -38,6 +38,9 @@ pub struct CameraComponent {
     /// Frame-level post-processing effects (applied after all entities are composited).
     #[serde(default)]
     pub post_effects: Vec<MaterialV2>,
+    /// Bitmask for RenderCategories this camera is allowed to render.
+    #[serde(default = "default_culling_mask")]
+    pub culling_mask: crate::ecs::RenderCategory,
 }
 
 impl Default for CameraComponent {
@@ -50,8 +53,13 @@ impl Default for CameraComponent {
             near: 0.1,
             far: 1000.0,
             post_effects: Vec::new(),
+            culling_mask: crate::ecs::RENDER_MASK_DEFAULT,
         }
     }
+}
+
+fn default_culling_mask() -> crate::ecs::RenderCategory {
+    crate::ecs::RENDER_MASK_DEFAULT
 }
 
 fn default_res_w() -> u32 {

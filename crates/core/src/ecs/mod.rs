@@ -32,6 +32,16 @@ pub struct ContextView<'a> {
     pub active_entities: std::collections::HashSet<String>,
 }
 
+/// Bitmask-based Render Categories for culling (Layer Masking).
+pub type RenderCategory = u32;
+pub const RENDER_CATEGORY_SCENE: RenderCategory = 1 << 0;
+pub const RENDER_CATEGORY_UI: RenderCategory    = 1 << 1;
+pub const RENDER_CATEGORY_GIZMO: RenderCategory = 1 << 2;
+// Default to Scene
+pub const RENDER_MASK_DEFAULT: RenderCategory   = RENDER_CATEGORY_SCENE;
+// Show everything
+pub const RENDER_MASK_ALL: RenderCategory       = !0;
+
 /// Unique identifier for an entity.
 pub type EntityId = String;
 
@@ -77,6 +87,7 @@ pub struct ResolvedState {
     pub blend_mode: components::BlendMode,
     pub color: [f32; 4],
     pub layer: i32,
+    pub render_category: RenderCategory,
     // ── Time ──
     pub time: EntityTime,
     /// The timeline time scope this entity belongs to.
@@ -116,6 +127,7 @@ impl Default for ResolvedState {
             blend_mode: components::BlendMode::Normal,
             color: [1.0, 1.0, 1.0, 1.0],
             layer: 0,
+            render_category: RENDER_MASK_DEFAULT,
             time: EntityTime::default(),
             scope_time: 0.0,
             content_time: 0.0,

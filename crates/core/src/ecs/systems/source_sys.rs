@@ -194,48 +194,9 @@ pub fn source_system(world: &mut World) {
 ///   original rect. Surplus area is transparent (no black fill).
 /// - **Cover**: Keep DrawCall at rect size. Image scaled up to cover entirely,
 ///   cropped edges (UV crop handled by shader).
-fn apply_fit_mode(call: &mut DrawCall) {
-    let iw = call.intrinsic_width;
-    let ih = call.intrinsic_height;
-    if iw <= 0.0 || ih <= 0.0 {
-        return;
-    } // No intrinsic → stretch
-
-    match call.fit_mode {
-        FitMode::Contain => {
-            let rect_w = call.width;
-            let rect_h = call.height;
-            if rect_w <= 0.0 || rect_h <= 0.0 {
-                return;
-            }
-
-            let scale = f32::min(rect_w / iw, rect_h / ih);
-            let new_w = iw * scale;
-            let new_h = ih * scale;
-
-            let empty_x = rect_w - new_w;
-            let empty_y = rect_h - new_h;
-
-            call.width = new_w;
-            call.height = new_h;
-
-            // Adjust world position anchor
-            let shift_x = -rect_w * call.anchor_x + empty_x * call.align_x + new_w * call.anchor_x;
-            let shift_y = -rect_h * call.anchor_y + empty_y * call.align_y + new_h * call.anchor_y;
-
-            let cos_r = call.rotation.cos();
-            let sin_r = call.rotation.sin();
-
-            call.x += shift_x * cos_r - shift_y * sin_r;
-            call.y += shift_x * sin_r + shift_y * cos_r;
-        }
-        FitMode::Cover => {
-            // Cover: keep rect size, shader should crop UV.
-            // For now, we keep Stretch behavior (full fill).
-            // Future: add UV offset/scale to DrawCall for precise crop.
-        }
-        FitMode::Stretch => {
-            // Default: no adjustment, texture stretches to fill rect.
-        }
-    }
+fn apply_fit_mode(_call: &mut DrawCall) {
+    // Fit properties (offset & scale) are now fully calculated via 
+    // `FitMode::calculate_uv` right before rendering.
+    // Altering the vertex geometry here causes Editor Gizmos and Hit Tests
+    // (which rely on the mathematical rect) to permanently desync from visuals.
 }

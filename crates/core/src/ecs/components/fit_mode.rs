@@ -51,10 +51,12 @@ impl FitMode {
         match self {
             Self::Contain => {
                 if source_aspect > display_aspect {
-                    let scale_y = display_aspect / source_aspect;
+                    // Image wider than rect -> fits width, letterboxed vertically
+                    let scale_y = source_aspect / display_aspect;
                     ([0.0, (1.0 - scale_y) * align_y], [1.0, scale_y])
                 } else {
-                    let scale_x = source_aspect / display_aspect;
+                    // Image taller than rect -> fits height, pillarboxed horizontally
+                    let scale_x = display_aspect / source_aspect;
                     ([(1.0 - scale_x) * align_x, 0.0], [scale_x, 1.0])
                 }
             }

@@ -80,17 +80,24 @@ const _vpResizeObserver = new ResizeObserver(() => {
 });
 _vpResizeObserver.observe($('viewportArea'));
 
-// Get editor camera viewport in world units
+// Get editor camera viewport in world units.
+// Root mode AND Scope mode: cam_x/y = CENTER of the editor viewport in local space.
+// Thanks to Phase 5 Hierarchy Isolation, composition children always live in local space,
+// so the editor camera does not need to offset by the composition's world coordinates.
 function getEditorCam() {
-    if(cam_x === undefined) return {}; 
-    const qLabel = parseFloat($('selQuality') ? $('selQuality').value : "1") || 1;
-    const w = $('canvasMain').width / ((cam_zoom || 1) * qLabel);
-    const h = $('canvasMain').height / ((cam_zoom || 1) * qLabel);
+    const qLabel = parseFloat($('selQuality') ? $('selQuality').value : '1') || 1;
+    const zoom = (cam_zoom || 1.0);
+
+    const cx = cam_x !== undefined ? cam_x : 640;
+    const cy = cam_y !== undefined ? cam_y : 360;
+
+    const w = $('canvasMain').width / (zoom * qLabel);
+    const h = $('canvasMain').height / (zoom * qLabel);
+
     return {
-        x: cam_x - w / 2,
-        y: cam_y - h / 2,
-        w: w,
-        h: h
+        x: cx - w/2,
+        y: cy - h/2,
+        w: w, h: h
     };
 }
 
@@ -120,7 +127,15 @@ function requestRender() {
     let metricsStr = "";
     if (isEditorMode) {
         const ec = getEditorCam();
-        metricsStr = engine.render_frame_v2(timelineScope ? 0 : timeSec, "main_cam", true, ec.x, ec.y, ec.w, ec.h);
+        // When scoped into composition, use time=0 for root and pass scope cam
+        const renderTime = timelineScope ? 0 : timeSec;
+        metricsStr = engine.render_frame_v2(
+            renderTime, "main_cam", true,
+            (ec.x !== undefined) ? ec.x : undefined,
+            (ec.y !== undefined) ? ec.y : undefined,
+            (ec.w !== undefined) ? ec.w : undefined,
+            (ec.h !== undefined) ? ec.h : undefined
+        );
     } else {
         metricsStr = engine.render_frame_v2(timelineScope ? 0 : timeSec, "main_cam", false, undefined, undefined, undefined, undefined);
     }
@@ -180,6 +195,7 @@ async function initEngine() {
     const canvas = $('gpuCanvas');
     engine = await new IfolRenderWeb(canvas, 1280, 720, 60);
     window.engine = engine; // Expose globally for DevTools debugging
+    engine.set_select_mode($('selSelectMode').value);
     engine.setup_builtins();
     
     // Wire up the new asynchronous Javascript Event Callback interface
@@ -463,6 +479,20 @@ $('canvasMain').addEventListener('mousedown', e => {
     }
 });
 
+$('chkDualViewport').addEventListener('change', e => {
+    isDualView = e.target.checked;
+    resizeCanvas();
+    requestRender();
+});
+
+$('selSelectMode').addEventListener('change', e => {
+    if (engine) engine.set_select_mode(e.target.value);
+});
+
+$('selQuality').addEventListener('change', e => {
+    requestRender();
+});
+
 window.addEventListener('mouseup', () => { 
     isDragging = false; 
     isDraggingEntity = false; 
@@ -492,26 +522,29 @@ window.addEventListener('mousemove', e => {
     }
     
     if (isDragging) {
-        if(cam_x === undefined) { 
-            cam_x = 640; 
-            cam_y = 360; 
-            cam_zoom = 1.0; 
+        // Standard pan: dragging RIGHT moves the view RIGHT → cam_x decreases (cam_x = center for root, offset for scope)
+        if (cam_x === undefined) {
+            // Initialize pan center based on mode:
+            // Root mode = center of 1280x720 scene; scope mode = no offset (0)
+            cam_x = timelineScope ? 0 : 640;
+            cam_y = timelineScope ? 0 : 360;
+            cam_zoom = cam_zoom || 1.0;
         }
-        // dx/dy are canvas pixels. Divide by actual actual zoom to get world units
-        const qLabel = parseFloat($('selQuality') ? $('selQuality').value : "1") || 1;
+        const qLabel = parseFloat($('selQuality') ? $('selQuality').value : '1') || 1;
         cam_x -= dx / ((cam_zoom || 1) * qLabel);
         cam_y -= dy / ((cam_zoom || 1) * qLabel);
-        if(!playing) requestRender();
+        if (!playing) requestRender();
     }
 });
 
 $('canvasMain').addEventListener('wheel', e => {
     e.preventDefault();
-    if(cam_zoom === undefined) { 
-        cam_x = 640; 
-        cam_y = 360; 
-        cam_zoom = 1.0; 
+    if (cam_zoom === undefined) {
+        cam_x = timelineScope ? 0 : 640;
+        cam_y = timelineScope ? 0 : 360;
+        cam_zoom = 1.0;
     }
+
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
     cam_zoom *= zoomFactor;
     
@@ -628,17 +661,34 @@ function setRenderScope(scopeId) {
     timelineScope = scopeId;
     timeSec = 0; // Reset to start of local timeline
     playing = false;
+    cam_zoom = 1.0;  // Always reset zoom when switching scope
+    
     if (engine) {
         engine.set_playing(false);
         engine.set_render_scope(scopeId || undefined);
-        if (scopeId) {
-            engine.set_scope_time(0); // Start at local time 0
+        engine.set_scope_time(scopeId ? 0 : undefined);
+
+        if (scopeId && engine.get_scope_camera_params) {
+            const scStr = engine.get_scope_camera_params();
+            if (scStr) {
+                const sc = JSON.parse(scStr);
+                // Center the editor camera perfectly on the inner camera's view rect
+                cam_x = sc.x + sc.w / 2;
+                cam_y = sc.y + sc.h / 2;
+            } else {
+                cam_x = 640;
+                cam_y = 360;
+            }
         } else {
-            engine.set_scope_time(undefined); // Clear override
+            cam_x = 640;
+            cam_y = 360;
         }
+
         requestRender();
     }
 }
+
+
 
 function renderBreadcrumb() {
     const bc = $('timelineBreadcrumb');

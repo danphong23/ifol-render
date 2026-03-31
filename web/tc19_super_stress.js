@@ -72,7 +72,16 @@ export function createTC19Json(v_dur) {
             {
                 id: "comp_bg",
                 composition: { duration: {manual: v_dur}, speed: 1.0, loopMode: "once", trimStart: 0.0 },
+                rect: { width: 1280, height: 720 },
                 transform: { x: 640, y: 360, rotation: 0, scaleX: 1, scaleY: 1, anchorX: 0.5, anchorY: 0.5 },
+                lifespan: { start: 0, end: v_dur },
+                layer: 0
+            },
+            {
+                id: "camera_bg",
+                parentId: "comp_bg",
+                camera: { width: 1280, height: 720, cullingMask: 4294967295 },
+                transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, anchorX: 0.5, anchorY: 0.5 },
                 lifespan: { start: 0, end: v_dur },
                 layer: 0
             },
@@ -93,9 +102,18 @@ export function createTC19Json(v_dur) {
             {
                 id: "comp_nested",
                 composition: { duration: {manual: v_dur}, speed: 1.0, loopMode: "once", trimStart: 0.0 },
+                rect: { width: 800, height: 600 },
                 transform: { x: 640, y: 360, rotation: 0, scaleX: 1, scaleY: 1, anchorX: 0.5, anchorY: 0.5 },
                 lifespan: { start: 5.0, end: v_dur - 10.0 },
                 layer: 1
+            },
+            {
+                id: "camera_nested",
+                parentId: "comp_nested",
+                camera: { width: 800, height: 600, cullingMask: 4294967295 },
+                transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, anchorX: 0.5, anchorY: 0.5 },
+                lifespan: { start: 0, end: v_dur },
+                layer: 0
             },
             
             // Image 1: TEST FIT MODE COVER
@@ -161,9 +179,18 @@ export function createTC19Json(v_dur) {
             {
                 id: "comp_masking",
                 composition: { duration: {manual: v_dur}, speed: 1.0, loopMode: "once", trimStart: 0.0 },
-                transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, anchorX: 0, anchorY: 0 },
+                rect: { width: 1280, height: 720 },
+                transform: { x: 640, y: 360, rotation: 0, scaleX: 1, scaleY: 1, anchorX: 0.5, anchorY: 0.5 },
                 lifespan: { start: 10.0, end: v_dur - 20.0 },
                 layer: 2
+            },
+            {
+                id: "camera_masking",
+                parentId: "comp_masking",
+                camera: { width: 1280, height: 720, cullingMask: 4294967295 },
+                transform: { x: 640, y: 360, rotation: 0, scaleX: 1, scaleY: 1, anchorX: 0.5, anchorY: 0.5 },
+                lifespan: { start: 0, end: v_dur },
+                layer: 0
             },
             {
                 id: "glow_text_1",
@@ -195,9 +222,18 @@ export function createTC19Json(v_dur) {
                 id: "mask_comp",
                 parentId: "comp_masking",
                 composition: { duration: {manual: v_dur}, speed: 1.0, loopMode: "once", trimStart: 0.0 },
+                rect: { width: 500, height: 500 },
                 transform: { x: 200, y: 500, rotation: 0, scaleX: 1, scaleY: 1, anchorX: 0.5, anchorY: 0.5 },
                 lifespan: { start: 0, end: v_dur },
                 layer: 1
+            },
+            {
+                id: "camera_mask_comp",
+                parentId: "mask_comp",
+                camera: { width: 500, height: 500, cullingMask: 4294967295 },
+                transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, anchorX: 0.5, anchorY: 0.5 },
+                lifespan: { start: 0, end: v_dur },
+                layer: 0
             },
             {
                 id: "mask_shape",
@@ -233,9 +269,18 @@ export function createTC19Json(v_dur) {
             {
                 id: "comp_looped_shapes",
                 composition: { duration: {manual: 5.0}, speed: 1.0, loopMode: "loop", trimStart: 0.0 },
+                rect: { width: 800, height: 800 },
                 transform: { x: 640, y: 360, rotation: 0, scaleX: 1, scaleY: 1, anchorX: 0.5, anchorY: 0.5 },
                 lifespan: { start: 0, end: v_dur },
                 layer: 3
+            },
+            {
+                id: "camera_looped_shapes",
+                parentId: "comp_looped_shapes",
+                camera: { width: 800, height: 800, cullingMask: 4294967295 },
+                transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, anchorX: 0.5, anchorY: 0.5 },
+                lifespan: { start: 0, end: v_dur },
+                layer: 0
             },
             
             // Fast animating circle (Linear)

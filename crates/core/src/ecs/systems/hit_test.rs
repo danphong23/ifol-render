@@ -35,14 +35,52 @@ pub fn pick_entity_at(
     scale_x: f32,
     scale_y: f32,
     is_editor_mode: bool,
+    scope_id: Option<&str>,
 ) -> Vec<HitResult> {
     let storages = &world.storages;
+
+    // Helper: check if an entity is a child (direct or nested) of a Composition
+    let is_inside_comp = |ent_id: &str| -> bool {
+        let mut cur = ent_id.to_string();
+        for _ in 0..32 {
+            if let Some(pid) = storages.get_component::<crate::ecs::components::meta::ParentId>(&cur) {
+                if storages.get_component::<crate::ecs::components::Composition>(&pid.0).is_some() {
+                    // If we're scoped into this comp, its children are "root-level"
+                    if scope_id == Some(pid.0.as_str()) {
+                        return false;
+                    }
+                    return true;
+                }
+                cur = pid.0.clone();
+            } else { break; }
+        }
+        false
+    };
+
+    // Helper: check if entity is within the active scope
+    let is_in_scope = |ent_id: &str| -> bool {
+        match scope_id {
+            None => !is_inside_comp(ent_id),  // Root: only top-level entities
+            Some(sid) => {
+                // Must be a descendant of the scope entity
+                let mut cur = ent_id.to_string();
+                for _ in 0..32 {
+                    if let Some(pid) = storages.get_component::<crate::ecs::components::meta::ParentId>(&cur) {
+                        if pid.0 == sid { return true; }
+                        cur = pid.0.clone();
+                    } else { return false; }
+                }
+                false
+            }
+        }
+    };
 
     // Collect visible entities sorted by layer (top-first for picking)
     let mut sorted: Vec<(&crate::ecs::Entity, i32)> = world
         .entities
         .iter()
         .filter(|e| e.resolved.visible)
+        .filter(|e| is_in_scope(&e.id))
         .filter(|e| {
             // Skip cameras in render mode (they are not visible content)
             // In editor mode, cameras are pickable (rendered as dashed gizmos)
@@ -275,7 +313,7 @@ mod tests {
     #[test]
     fn test_pick_hits_topmost_entity() {
         let world = build_test_world();
-        let hits = pick_entity_at(&world, 200.0, 170.0, 0.0, 0.0, 1.0, 1.0, false);
+        let hits = pick_entity_at(&world, 200.0, 170.0, 0.0, 0.0, 1.0, 1.0, false, None);
         assert_eq!(
             hits.first().map(|h| h.entity_id.clone()),
             Some("box_b".to_string())
@@ -285,7 +323,7 @@ mod tests {
     #[test]
     fn test_pick_hits_lower_entity_outside_overlap() {
         let world = build_test_world();
-        let hits = pick_entity_at(&world, 110.0, 110.0, 0.0, 0.0, 1.0, 1.0, false);
+        let hits = pick_entity_at(&world, 110.0, 110.0, 0.0, 0.0, 1.0, 1.0, false, None);
         assert_eq!(
             hits.first().map(|h| h.entity_id.clone()),
             Some("box_a".to_string())
@@ -295,21 +333,21 @@ mod tests {
     #[test]
     fn test_pick_misses_empty_space() {
         let world = build_test_world();
-        let hits = pick_entity_at(&world, 50.0, 50.0, 0.0, 0.0, 1.0, 1.0, false);
+        let hits = pick_entity_at(&world, 50.0, 50.0, 0.0, 0.0, 1.0, 1.0, false, None);
         assert!(hits.is_empty());
     }
 
     #[test]
     fn test_pick_skips_cameras_in_render_mode() {
         let world = build_test_world();
-        let hits = pick_entity_at(&world, 640.0, 360.0, 0.0, 0.0, 1.0, 1.0, false);
+        let hits = pick_entity_at(&world, 640.0, 360.0, 0.0, 0.0, 1.0, 1.0, false, None);
         assert!(hits.is_empty());
     }
 
     #[test]
     fn test_pick_cameras_in_editor_mode() {
         let world = build_test_world();
-        let hits = pick_entity_at(&world, 640.0, -38.0, 0.0, 0.0, 1.0, 1.0, true);
+        let hits = pick_entity_at(&world, 640.0, -38.0, 0.0, 0.0, 1.0, 1.0, true, None);
         assert_eq!(
             hits.first().map(|h| h.entity_id.clone()),
             Some("cam".to_string())
@@ -319,14 +357,14 @@ mod tests {
     #[test]
     fn test_pick_camera_body_not_pickable() {
         let world = build_test_world();
-        let hits = pick_entity_at(&world, 640.0, 360.0, 0.0, 0.0, 1.0, 1.0, true);
+        let hits = pick_entity_at(&world, 640.0, 360.0, 0.0, 0.0, 1.0, 1.0, true, None);
         assert!(hits.is_empty());
     }
 
     #[test]
     fn test_pick_with_camera_offset() {
         let world = build_test_world();
-        let hits = pick_entity_at(&world, 10.0, 10.0, 100.0, 100.0, 1.0, 1.0, false);
+        let hits = pick_entity_at(&world, 10.0, 10.0, 100.0, 100.0, 1.0, 1.0, false, None);
         assert_eq!(
             hits.first().map(|h| h.entity_id.clone()),
             Some("box_a".to_string())

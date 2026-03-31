@@ -1,6 +1,6 @@
 use crate::ecs::World;
 use crate::ecs::components::CameraComponent;
-use crate::frame::{Frame, FlatEntity, RenderPass};
+use crate::frame::FlatEntity;
 
 /// Editor Gizmo System
 ///
@@ -8,7 +8,6 @@ use crate::frame::{Frame, FlatEntity, RenderPass};
 /// and full-screen selection outlines. This appends directly to the generated Frame.
 pub fn editor_gizmo_system(
     world: &World,
-    frame: &mut Frame,
     selected_entity_ids: &[&str],
     select_mode: &str,
     cam_x: f32,
@@ -18,267 +17,174 @@ pub fn editor_gizmo_system(
     screen_width: u32,
     screen_height: u32,
     context: &crate::ecs::ContextView,
-) {
+) -> Vec<FlatEntity> {
+    let mut gizmos = Vec::new();
     let storages = &world.storages;
     let sorted = world.sorted_by_layer();
 
+    let is_in_comp = |ent_id: &str| -> bool {
+        let mut cur = ent_id.to_string();
+        for _ in 0..32 {
+            if let Some(pid) = storages.get_component::<crate::ecs::components::meta::ParentId>(&cur) {
+                if storages.get_component::<crate::ecs::components::Composition>(&pid.0).is_some() {
+                    // If we're SCOPED INTO this composition, its children are
+                    // effectively root-level — NOT "in comp" for gizmo purposes
+                    if context.scope_id == Some(pid.0.as_str()) {
+                        return false;
+                    }
+                    return true;
+                }
+                cur = pid.0.clone();
+            } else { break; }
+        }
+        false
+    };
 
     // 1. Camera Gizmo Passes (Dashed rect & triangle)
-    // We append them directly into the primary screen pass of the frame.
-    // The main pass is typically the first or last pass drawn to "screen".
-    if let Some(main_pass) = frame.passes.iter_mut().find(|p| {
-        p.output == "main" || p.output == "final"
-    }) {
-        for entity in &sorted {
-            if !entity.resolved.visible { continue; }
-            if !context.active_entities.contains(&entity.id) { continue; }
-            if storages.get_component::<CameraComponent>(&entity.id).is_none() { continue; }
+    for entity in &sorted {
+        if !entity.resolved.visible { continue; }
+        if !context.active_entities.contains(&entity.id) { continue; }
+        if storages.get_component::<CameraComponent>(&entity.id).is_none() { continue; }
+        if is_in_comp(&entity.id) { continue; }
 
-            let is_selected = selected_entity_ids.contains(&entity.id.as_str());
-            let cam_color = if is_selected { [0.0, 0.85, 1.0, 1.0] } else { [1.0, 0.0, 1.0, 0.6] };
-            let cam_px_thickness = if is_selected { 6.0 } else { 4.0 };
+        let is_selected = selected_entity_ids.contains(&entity.id.as_str());
+        let cam_color = if is_selected { [0.0, 0.85, 1.0, 1.0] } else { [1.0, 0.0, 1.0, 0.6] };
+        let cam_px_thickness = if is_selected { 10.0 } else { 6.0 };
 
-            let max_dim = entity.resolved.width.max(entity.resolved.height).max(1.0);
-            let norm_border = cam_px_thickness / max_dim;
-            let norm_dash = 24.0 / max_dim;
-            let norm_gap = 16.0 / max_dim;
+        let max_dim = entity.resolved.width.max(entity.resolved.height).max(1.0);
+        let norm_border = cam_px_thickness / max_dim;
+        let norm_dash = 24.0 / max_dim;
+        let norm_gap = 16.0 / max_dim;
 
-            // Dashed border (FlatEntity representation)
-            let draw_w = entity.resolved.width * sx;
-            let draw_h = entity.resolved.height * sy;
-            
-            // Transform point
-            let cos_r = entity.resolved.rotation.cos();
-            let sin_r = entity.resolved.rotation.sin();
-            let dx = (0.5 - entity.resolved.anchor_x) * draw_w;
-            let dy = (0.5 - entity.resolved.anchor_y) * draw_h;
-            let center_x = (entity.resolved.x - cam_x) * sx + dx * cos_r - dy * sin_r;
-            let center_y = (entity.resolved.y - cam_y) * sy + dx * sin_r + dy * cos_r;
-            
-            let tri_size = entity.resolved.width * 0.05;
-            let orig_min_x = -entity.resolved.anchor_x * entity.resolved.width;
-            let orig_min_y = -entity.resolved.anchor_y * entity.resolved.height;
-            let local_tri_x = orig_min_x + entity.resolved.width * 0.5;
-            let local_tri_y = orig_min_y - tri_size * 0.6;
-            
-            let tri_x_world = entity.resolved.x + local_tri_x * cos_r - local_tri_y * sin_r;
-            let tri_y_world = entity.resolved.y + local_tri_x * sin_r + local_tri_y * cos_r;
-            
-            let tri_w = tri_size * sx;
-            let tri_h = tri_size * sy;
-            let tri_cx = (tri_x_world - cam_x) * sx;
-            let tri_cy = (tri_y_world - cam_y) * sy;
-
-            let cam_border = FlatEntity {
-                id: 0,
-                x: center_x - draw_w * 0.5,
-                y: center_y - draw_h * 0.5,
-                width: draw_w,
-                height: draw_h,
-                rotation: entity.resolved.rotation,
-                opacity: 1.0,
-                blend_mode: 0,
-                color: cam_color,
-                shader: "dashed_rect".to_string(),
-                textures: vec![],
-                params: vec![norm_dash, norm_gap, norm_border, 0.0],
-                layer: 9999,
-                z_index: 9999.0,
-                fit_mode: 0,
-                uv_offset: [0.0, 0.0],
-                uv_scale: [1.0, 1.0],
-                intrinsic_width: 1.0,
-                intrinsic_height: 1.0,
-            };
-
-            let cam_tri = FlatEntity {
-                id: 0,
-                x: tri_cx - tri_w * 0.5,
-                y: tri_cy - tri_h * 0.5,
-                width: tri_w,
-                height: tri_h,
-                rotation: entity.resolved.rotation + std::f32::consts::PI,
-                opacity: 1.0,
-                blend_mode: 0,
-                color: cam_color,
-                shader: "shapes".to_string(),
-                textures: vec![],
-                params: vec![5.0, 0.0, 0.0, 0.0],
-                layer: 9999,
-                z_index: 9999.0,
-                fit_mode: 0,
-                uv_offset: [0.0, 0.0],
-                uv_scale: [1.0, 1.0],
-                intrinsic_width: 1.0,
-                intrinsic_height: 1.0,
-            };
-
-            match main_pass.pass_type {
-                crate::frame::PassType::Entities { ref mut entities, .. } => {
-                    entities.push(cam_border);
-                    entities.push(cam_tri);
-                }
-                crate::frame::PassType::Output { ref mut entities, .. } => {
-                    entities.push(cam_border);
-                    entities.push(cam_tri);
-                }
-                _ => {}
-            }
-        }
+        let draw_w = entity.resolved.width * sx;
+        let draw_h = entity.resolved.height * sy;
         
-        // Sort main pass to keep gizmos on top
-        match main_pass.pass_type {
-            crate::frame::PassType::Entities { ref mut entities, .. } => {
-                entities.sort_by(|a, b| a.z_index.partial_cmp(&b.z_index).unwrap());
-            }
-            crate::frame::PassType::Output { ref mut entities, .. } => {
-                entities.sort_by(|a, b| a.z_index.partial_cmp(&b.z_index).unwrap());
-            }
-            _ => {}
-        }
+        let cos_r = entity.resolved.rotation.cos();
+        let sin_r = entity.resolved.rotation.sin();
+        let dx = (0.5 - entity.resolved.anchor_x) * draw_w;
+        let dy = (0.5 - entity.resolved.anchor_y) * draw_h;
+        let center_x = (entity.resolved.x - cam_x) * sx + dx * cos_r - dy * sin_r;
+        let center_y = (entity.resolved.y - cam_y) * sy + dx * sin_r + dy * cos_r;
+        
+        let tri_size = entity.resolved.width * 0.05;
+        let local_tri_x = -entity.resolved.anchor_x * entity.resolved.width + entity.resolved.width * 0.5;
+        let local_tri_y = -entity.resolved.anchor_y * entity.resolved.height - tri_size * 0.6;
+        
+        let tri_x_world = entity.resolved.x + local_tri_x * cos_r - local_tri_y * sin_r;
+        let tri_y_world = entity.resolved.y + local_tri_x * sin_r + local_tri_y * cos_r;
+        
+        let tri_w = tri_size * sx;
+        let tri_center_x = (tri_x_world - cam_x) * sx;
+        let tri_center_y = (tri_y_world - cam_y) * sy;
+
+        gizmos.push(FlatEntity {
+            id: 0,
+            x: center_x - draw_w * 0.5,
+            y: center_y - draw_h * 0.5,
+            width: draw_w,
+            height: draw_h,
+            rotation: entity.resolved.rotation,
+            opacity: 1.0,
+            blend_mode: 0,
+            color: cam_color,
+            shader: "dashed_rect".to_string(),
+            textures: vec![],
+            params: vec![norm_dash, norm_gap, norm_border, 0.0],
+            layer: 99999 + entity.resolved.layer, 
+            z_index: 99999.0 + entity.resolved.layer as f32,
+            fit_mode: 0,
+            uv_offset: [0.0, 0.0],
+            uv_scale: [1.0, 1.0],
+            intrinsic_width: draw_w,
+            intrinsic_height: draw_h,
+        });
+
+        gizmos.push(FlatEntity {
+            id: 0,
+            x: tri_center_x - tri_w * 0.5,
+            y: tri_center_y - tri_w * 0.5,
+            width: tri_w,
+            height: tri_w,
+            rotation: entity.resolved.rotation + std::f32::consts::PI,
+            opacity: 1.0,
+            blend_mode: 0,
+            color: [0.3, 0.9, 0.4, 0.8],
+            shader: "shapes".to_string(),
+            textures: vec![],
+            params: vec![5.0, 0.0, 0.0, 0.0], // 5.0 = triangle
+            layer: 99999 + entity.resolved.layer + 1,
+            z_index: 99999.0 + entity.resolved.layer as f32 + 1.0,
+            fit_mode: 0,
+            uv_offset: [0.0, 0.0],
+            uv_scale: [1.0, 1.0],
+            intrinsic_width: tri_w,
+            intrinsic_height: tri_w,
+        });
     }
 
-    // 2. Selection Outline Pass (Mask + Glow)
-    if selected_entity_ids.is_empty() { return; }
-
+    // 2. Selection Masking Pass (for non-camera selected objects)
+    let mut bounds_w = 0.0;
+    let mut bounds_h = 0.0;
+    let mut bounds_cx = 0.0;
+    let mut bounds_cy = 0.0;
+    let mut bounds_rot = 0.0;
     let mut sel_mask_entities = Vec::new();
-        for entity in &sorted {
-            if !entity.resolved.visible { continue; }
-            if !context.active_entities.contains(&entity.id) { continue; }
-            if !selected_entity_ids.contains(&entity.id.as_str()) { continue; }
+    
+    for entity in &sorted {
+        if !entity.resolved.visible { continue; }
+        if !context.active_entities.contains(&entity.id) { continue; }
+        if !selected_entity_ids.contains(&entity.id.as_str()) { continue; }
         if storages.get_component::<CameraComponent>(&entity.id).is_some() { continue; }
+        if is_in_comp(&entity.id) { continue; }
 
-        let r = &entity.resolved;
-        if select_mode == "content" {
-            for call in entity.draw.draw_calls.iter() {
-                let w = call.width * sx;
-                let h = call.height * sy;
-                let cos_r = call.rotation.cos();
-                let sin_r = call.rotation.sin();
-                let dx = (0.5 - call.anchor_x) * w;
-                let dy = (0.5 - call.anchor_y) * h;
-                let center_x = (call.x - cam_x) * sx + dx * cos_r - dy * sin_r;
-                let center_y = (call.y - cam_y) * sy + dx * sin_r + dy * cos_r;
-                
-                let iw = call.intrinsic_width;
-                let ih = call.intrinsic_height;
-                let (uv_offset, uv_scale) = call.fit_mode.calculate_uv(call.width, call.height, iw, ih, call.align_x, call.align_y);
-                
-                let mut textures = Vec::new();
-                if let Some(t) = &call.texture_key { textures.push(t.clone()); }
-                
-                let shader = match call.kind {
-                    crate::ecs::components::draw::DrawKind::SolidRect => "shapes",
-                    crate::ecs::components::draw::DrawKind::SolidEllipse => "shapes",
-                    _ => "composite",
-                };
-
-                sel_mask_entities.push(FlatEntity {
-                    id: 0,
-                    x: center_x - w * 0.5,
-                    y: center_y - h * 0.5,
-                    width: w,
-                    height: h,
-                    rotation: call.rotation,
-                    opacity: 1.0,
-                    blend_mode: 0,
-                    color: [1.0, 1.0, 1.0, 1.0],
-                    shader: shader.to_string(),
-                    textures,
-                    params: call.params.clone(),
-                    layer: entity.resolved.layer,
-                    z_index: entity.resolved.layer as f32,
-                    fit_mode: match call.fit_mode { crate::ecs::components::FitMode::Contain => 1, crate::ecs::components::FitMode::Cover => 2, _ => 0 },
-                    uv_offset,
-                    uv_scale,
-                    intrinsic_width: iw,
-                    intrinsic_height: ih,
-                });
-            }
-        } else if select_mode == "rect" {
-            let w = r.width * sx;
-            let h = r.height * sy;
-            let cos_r = r.rotation.cos();
-            let sin_r = r.rotation.sin();
-            let dx = (0.5 - r.anchor_x) * w;
-            let dy = (0.5 - r.anchor_y) * h;
-            let cx = (r.x - cam_x) * sx + dx * cos_r - dy * sin_r;
-            let cy = (r.y - cam_y) * sy + dx * sin_r + dy * cos_r;
-
-            sel_mask_entities.push(FlatEntity {
-                id: 0,
-                x: cx - w * 0.5,
-                y: cy - h * 0.5,
-                width: w,
-                height: h,
-                rotation: r.rotation,
-                opacity: 1.0,
-                blend_mode: 0,
-                color: [1.0, 1.0, 1.0, 1.0],
-                shader: "shapes".to_string(),
-                textures: vec![],
-                params: vec![1.0, 0.0, 0.0, 0.0], // 1.0 = solid rect
-                layer: r.layer,
-                z_index: r.layer as f32,
-                fit_mode: 0,
-                uv_offset: [0.0, 0.0],
-                uv_scale: [1.0, 1.0],
-                intrinsic_width: 1.0,
-                intrinsic_height: 1.0,
-            });
-        }
+        bounds_w = entity.resolved.width * sx;
+        bounds_h = entity.resolved.height * sy;
+        bounds_rot = entity.resolved.rotation;
+        
+        let cos_r = entity.resolved.rotation.cos();
+        let sin_r = entity.resolved.rotation.sin();
+        let dx = (0.5 - entity.resolved.anchor_x) * bounds_w;
+        let dy = (0.5 - entity.resolved.anchor_y) * bounds_h;
+        bounds_cx = (entity.resolved.x - cam_x) * sx + dx * cos_r - dy * sin_r;
+        bounds_cy = (entity.resolved.y - cam_y) * sy + dx * sin_r + dy * cos_r;
+        
+        sel_mask_entities.push(entity.id.clone());
     }
 
     if !sel_mask_entities.is_empty() {
-        if let Some(main_idx) = frame.passes.iter().position(|p| p.output == "main" || p.output == "final") {
-            frame.passes.insert(main_idx, RenderPass {
-                output: "_sel_mask".to_string(),
-                pass_type: crate::frame::PassType::Entities {
-                    entities: sel_mask_entities,
-                    clear_color: [0.0, 0.0, 0.0, 0.0],
-                },
-                target_width: Some(screen_width),
-                target_height: Some(screen_height),
-            });
+        let is_select = select_mode == "select";
+        let thicc = if is_select { 8.0 } else { 4.0 };
+        let box_col = if is_select { [1.0, 1.0, 1.0, 1.0] } else { [0.5, 0.5, 0.5, 0.8] };
+        
+        let max_dim = bounds_w.max(bounds_h).max(1.0);
 
-            frame.passes.insert(main_idx + 1, RenderPass {
-                output: "_sel_outline".to_string(),
-                pass_type: crate::frame::PassType::Effect {
-                    shader: "selection_outline".into(),
-                    inputs: vec!["_sel_mask".into()],
-                    params: vec![3.0, 0.0, 0.0, 0.0], // thickness=3px
-                },
-                target_width: Some(screen_width),
-                target_height: Some(screen_height),
-            });
-
-            let glow_overlay = FlatEntity {
-                id: 0,
-                x: 0.0,
-                y: 0.0,
-                width: screen_width as f32,
-                height: screen_height as f32,
-                rotation: 0.0,
-                opacity: 1.0,
-                blend_mode: 0,
-                color: [1.0, 1.0, 1.0, 1.0],
-                shader: "composite".to_string(),
-                textures: vec!["_sel_outline".to_string()],
-                params: vec![],
-                layer: 10001,
-                z_index: 10001.0,
-                fit_mode: 0,
-                uv_offset: [0.0, 0.0],
-                uv_scale: [1.0, 1.0],
-                intrinsic_width: 0.0,
-                intrinsic_height: 0.0,
-            };
-
-            match frame.passes[main_idx + 2].pass_type {
-                crate::frame::PassType::Entities { ref mut entities, .. } => entities.push(glow_overlay),
-                crate::frame::PassType::Output { ref mut entities, .. } => entities.push(glow_overlay),
-                _ => {}
-            }
-        }
+        gizmos.push(FlatEntity {
+            id: 0,
+            x: bounds_cx - bounds_w * 0.5,
+            y: bounds_cy - bounds_h * 0.5,
+            width: bounds_w.max(1.0),
+            height: bounds_h.max(1.0),
+            rotation: bounds_rot,
+            opacity: 1.0,
+            blend_mode: 0,
+            color: box_col,
+            shader: "dashed_rect".to_string(),
+            textures: vec![],
+            params: vec![
+                100.0, // dash
+                0.0, // gap
+                thicc / max_dim, // normalized border
+                0.0
+            ],
+            layer: 1000000, 
+            z_index: 1000000.0,
+            fit_mode: 0,
+            uv_offset: [0.0, 0.0],
+            uv_scale: [1.0, 1.0],
+            intrinsic_width: bounds_w.max(1.0),
+            intrinsic_height: bounds_h.max(1.0),
+        });
     }
+
+    gizmos
 }

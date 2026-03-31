@@ -31,51 +31,70 @@ pub fn hierarchy_system(world: &mut World, _time: &TimeState, scope_entity_id: O
             if let Some(&(px, py, p_rot, p_opacity, p_sx, p_sy, p_layer, p_volume, p_visible)) =
                 resolved_transforms.get(pid)
             {
-                // Propagate visibility
+                // ── Comp World Isolation ──
+                // If the parent has a Composition component, it creates an isolated
+                // coordinate space. Children live in LOCAL (0,0) origin and must NOT
+                // inherit spatial transforms (position, rotation, scale).
+                // Only non-spatial properties cascade through the boundary.
+                let parent_is_comp = storages
+                    .get_component::<crate::ecs::components::Composition>(pid)
+                    .is_some();
+
+                // Propagate visibility (always, regardless of comp boundary)
                 if !p_visible {
                     entity.resolved.visible = false;
                 }
 
                 if entity.resolved.visible {
-                    // Apply parent scale to local offset first
-                    let dx = entity.resolved.x * p_sx;
-                    let dy = entity.resolved.y * p_sy;
+                    if parent_is_comp {
+                        // ══ COMP WORLD BOUNDARY ══
+                        // Spatial: entity keeps its own local coords (no parent accumulation)
+                        // Non-spatial: cascade opacity, volume, layer
+                        entity.resolved.opacity *= p_opacity;
+                        entity.resolved.volume *= p_volume;
+                        entity.resolved.layer += p_layer;
+                    } else {
+                        // ── Normal hierarchy accumulation ──
+                        // Apply parent scale to local offset first
+                        let dx = entity.resolved.x * p_sx;
+                        let dy = entity.resolved.y * p_sy;
 
-                    // Rotate child's offset around parent (p_rot is already in radians)
-                    let cos_r = p_rot.cos();
-                    let sin_r = p_rot.sin();
+                        // Rotate child's offset around parent (p_rot is already in radians)
+                        let cos_r = p_rot.cos();
+                        let sin_r = p_rot.sin();
 
-                    // Additive position offset
-                    entity.resolved.x = px + dx * cos_r - dy * sin_r;
-                    entity.resolved.y = py + dx * sin_r + dy * cos_r;
+                        // Additive position offset
+                        entity.resolved.x = px + dx * cos_r - dy * sin_r;
+                        entity.resolved.y = py + dx * sin_r + dy * cos_r;
 
-                    // Additive rotation
-                    entity.resolved.rotation += p_rot;
+                        // Additive rotation
+                        entity.resolved.rotation += p_rot;
 
-                    // Multiplicative scale
-                    let old_sx = entity.resolved.scale_x;
-                    let old_sy = entity.resolved.scale_y;
-                    entity.resolved.scale_x *= p_sx;
-                    entity.resolved.scale_y *= p_sy;
+                        // Multiplicative scale
+                        let old_sx = entity.resolved.scale_x;
+                        let old_sy = entity.resolved.scale_y;
+                        entity.resolved.scale_x *= p_sx;
+                        entity.resolved.scale_y *= p_sy;
 
-                    // Recompute width/height to include parent scale
-                    // rect_sys already computed: width = base_w * old_sx
-                    // We need: width = base_w * (old_sx * p_sx) = (width / old_sx) * new_sx
-                    if old_sx.abs() > 0.001 {
-                        entity.resolved.width =
-                            (entity.resolved.width / old_sx) * entity.resolved.scale_x;
+                        // Recompute width/height to include parent scale
+                        // rect_sys already computed: width = base_w * old_sx
+                        // We need: width = base_w * (old_sx * p_sx) = (width / old_sx) * new_sx
+                        if old_sx.abs() > 0.001 {
+                            entity.resolved.width =
+                                (entity.resolved.width / old_sx) * entity.resolved.scale_x;
+                        }
+                        if old_sy.abs() > 0.001 {
+                            entity.resolved.height =
+                                (entity.resolved.height / old_sy) * entity.resolved.scale_y;
+                        }
+
+                        // Multiplicative opacity and volume
+                        entity.resolved.opacity *= p_opacity;
+                        entity.resolved.volume *= p_volume;
+
+                        // Additive layer
+                        entity.resolved.layer += p_layer;
                     }
-                    if old_sy.abs() > 0.001 {
-                        entity.resolved.height =
-                            (entity.resolved.height / old_sy) * entity.resolved.scale_y;
-                    }
-
-                    // Multiplicative opacity and volume
-                    entity.resolved.opacity *= p_opacity;
-                    entity.resolved.volume *= p_volume;
-
-                    // Additive layer
-                    entity.resolved.layer += p_layer;
                 }
             } else {
                 log::warn!(

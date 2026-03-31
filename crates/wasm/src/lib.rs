@@ -516,9 +516,8 @@ impl IfolRenderWeb {
             let sx = w as f32 / cam_w;
             let sy = h as f32 / cam_h;
 
-            ifol_render_ecs::ecs::systems::editor_gizmo_system(
+            let gizmos = ifol_render_ecs::ecs::systems::editor_gizmo_system(
                 &world,
-                &mut frame,
                 &selected_refs,
                 &self.select_mode,
                 cam_x,
@@ -529,37 +528,19 @@ impl IfolRenderWeb {
                 h,
                 &context,
             );
+
+            if !gizmos.is_empty() {
+                if let Some(pass) = frame.passes.iter_mut().find(|p| p.output == "final" || matches!(p.pass_type, ifol_render_ecs::frame::PassType::Output { .. })) {
+                    if let ifol_render_ecs::frame::PassType::Output { entities, .. } = &mut pass.pass_type {
+                        entities.extend(gizmos);
+                    }
+                }
+            }
         }
 
         self.v2_world = Some(world);
 
         // 4. Send to WGPU engine
-        // DEBUG: Log frame passes for diagnosing white screen
-        {
-            // Log visibility of key entities
-            let world_ref = self.v2_world.as_ref().unwrap();
-            let mut vis_msg = String::from("Entity visibility:");
-            for e in &world_ref.entities {
-                if e.id.contains("comp_") || e.id.contains("main_cam") || e.id.contains("anim_") || e.id.contains("glow_text") {
-                    vis_msg.push_str(&format!(
-                        "\n  {} visible={} scope_time={:.2} layer={}",
-                        e.id, e.resolved.visible, e.resolved.scope_time, e.resolved.layer
-                    ));
-                }
-            }
-            web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(&vis_msg));
-
-            let mut debug_msg = format!("Frame passes ({}):", frame.passes.len());
-            for (i, p) in frame.passes.iter().enumerate() {
-                let ptype = match &p.pass_type {
-                    ifol_render_ecs::frame::PassType::Entities { entities, .. } => format!("Entities({})", entities.len()),
-                    ifol_render_ecs::frame::PassType::Effect { shader, inputs, .. } => format!("Effect({}, in={:?})", shader, inputs),
-                    ifol_render_ecs::frame::PassType::Output { input, entities } => format!("Output(in={:?}, UI={})", input, entities.len()),
-                };
-                debug_msg.push_str(&format!("\n  [{}] out={:?} {}", i, p.output, ptype));
-            }
-            web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(&debug_msg));
-        }
         self.engine.render_frame(&frame);
 
         // 5. Build and return the EngineStatus JSON manually
@@ -606,6 +587,41 @@ impl IfolRenderWeb {
     pub fn set_render_scope(&mut self, entity_id: Option<String>) {
         self.render_scope = entity_id;
     }
+
+    /// Get inner camera viewport params for the current render scope composition.
+    /// Returns JSON: { x, y, w, h } representing the inner camera's world-space view origin and size.
+    /// Returns None if not in a scoped composition or no camera found.
+    #[wasm_bindgen]
+    pub fn get_scope_camera_params(&self) -> Option<String> {
+        let scope_id = self.render_scope.as_deref()?;
+        let world = self.v2_world.as_ref()?;
+        let storages = &world.storages;
+
+        // Find the comp entity
+        let comp_ent = world.entities.iter().find(|e| e.id == scope_id)?;
+
+        // Find DIRECT child camera  
+        let cam_ent = world.entities.iter().find(|c| {
+            if storages.get_component::<ifol_render_ecs::ecs::components::CameraComponent>(&c.id).is_none() {
+                return false;
+            }
+            storages.get_component::<ifol_render_ecs::ecs::components::meta::ParentId>(&c.id)
+                .map(|pid| pid.0 == scope_id)
+                .unwrap_or(false)
+        })?;
+
+        let cw = cam_ent.resolved.width.max(1.0);
+        let ch = cam_ent.resolved.height.max(1.0);
+        // Inner cam view origin = cam world pos - cam anchor * cam size
+        let inner_cam_x = cam_ent.resolved.x - cam_ent.resolved.anchor_x * cw;
+        let inner_cam_y = cam_ent.resolved.y - cam_ent.resolved.anchor_y * ch;
+
+        Some(format!(
+            "{{\"x\":{},\"y\":{},\"w\":{},\"h\":{}}}",
+            inner_cam_x, inner_cam_y, cw, ch
+        ))
+    }
+
 
     /// Set engine play state (orchestrates <audio> synced playback)
     #[wasm_bindgen]
@@ -663,42 +679,81 @@ impl IfolRenderWeb {
 
             let candidates = ifol_render_ecs::ecs::systems::hit_test::pick_entity_at(
                 world, screen_x, screen_y, cam_x, cam_y, sx, sy, true,
+                self.render_scope.as_deref(),
             );
 
-            for hit in candidates {
-                // If it's an image, do an alpha pixel lookup
-                if let Some(img) = world
-                    .storages
-                    .get_component::<ifol_render_ecs::ecs::components::ImageSource>(&hit.entity_id)
-                {
-                    let asset_key = world
-                        .resolve_asset_url(&img.asset_id)
-                        .unwrap_or(&img.asset_id);
-                    if let Some((rgba, w, h)) = self.backend.images.read().unwrap().get(asset_key) {
-                        // Map normalized (u, v) into physical pixel coordinates
-                        let px = (hit.u * (*w as f32)) as u32;
-                        let py = (hit.v * (*h as f32)) as u32;
-                        let px = px.clamp(0, w.saturating_sub(1));
-                        let py = py.clamp(0, h.saturating_sub(1));
-
-                        let idx = ((py * *w + px) * 4) as usize;
-                        if idx + 3 < rgba.len() {
-                            let alpha = rgba[idx + 3];
-                            // If pixel is transparent, skip this entity and fall through to the next candidate
-                            if alpha < 10 {
-                                continue;
-                            }
-                        }
-                    }
-                }
-
-                // If we reach here, either it's opaque, or it's a solid/text entity, or texture not found
-                return Some(hit.entity_id);
-            }
-            None
+            self.evaluate_hits_recursive(world, candidates)
         } else {
             None
         }
+    }
+
+    fn evaluate_hits_recursive(
+        &self,
+        world: &ifol_render_ecs::ecs::World,
+        candidates: Vec<ifol_render_ecs::ecs::systems::hit_test::HitResult>,
+    ) -> Option<String> {
+        for hit in candidates {
+            if self.select_mode == "rect" {
+                return Some(hit.entity_id);
+            }
+
+            let is_comp = world.storages.get_component::<ifol_render_ecs::ecs::components::Composition>(&hit.entity_id).is_some();
+            if is_comp && self.select_mode == "content" {
+                if let Some(cam_ent) = world.entities.iter().find(|c| {
+                    world.storages.get_component::<ifol_render_ecs::ecs::components::CameraComponent>(&c.id).is_some() &&
+                    world.storages.get_component::<ifol_render_ecs::ecs::components::meta::ParentId>(&c.id).map_or(false, |pid| pid.0 == hit.entity_id)
+                }) {
+                    let inner_cw = cam_ent.resolved.width.max(1.0);
+                    let inner_ch = cam_ent.resolved.height.max(1.0);
+                    let comp_ent = world.entities.iter().find(|e| e.id == hit.entity_id).unwrap();
+                    // Fix: The inner camera offset must subtract the Camera's anchor, not the Composition's anchor!
+                    let inner_cam_x = cam_ent.resolved.x - cam_ent.resolved.anchor_x * inner_cw;
+                    let inner_cam_y = cam_ent.resolved.y - cam_ent.resolved.anchor_y * inner_ch;
+                    
+                    let inner_sx = hit.u * inner_cw;
+                    let inner_sy = hit.v * inner_ch;
+                    
+                    let inner_hits = ifol_render_ecs::ecs::systems::hit_test::pick_entity_at(
+                        world, inner_sx, inner_sy, inner_cam_x, inner_cam_y, 1.0, 1.0, true,
+                        Some(&hit.entity_id),
+                    );
+                    
+                    if self.evaluate_hits_recursive(world, inner_hits).is_some() {
+                        return Some(hit.entity_id);
+                    } else {
+                        continue;
+                    }
+                }
+            }
+
+            // If it's an image, do an alpha pixel lookup
+            if let Some(img) = world
+                .storages
+                .get_component::<ifol_render_ecs::ecs::components::ImageSource>(&hit.entity_id)
+            {
+                let asset_key = world
+                    .resolve_asset_url(&img.asset_id)
+                    .unwrap_or(&img.asset_id);
+                if let Some((rgba, w, h)) = self.backend.images.read().unwrap().get(asset_key) {
+                    let px = (hit.u * (*w as f32)) as u32;
+                    let py = (hit.v * (*h as f32)) as u32;
+                    let px = px.clamp(0, w.saturating_sub(1));
+                    let py = py.clamp(0, h.saturating_sub(1));
+
+                    let idx = ((py * *w + px) * 4) as usize;
+                    if idx + 3 < rgba.len() {
+                        let alpha = rgba[idx + 3];
+                        if alpha < 10 {
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            return Some(hit.entity_id);
+        }
+        None
     }
 
     #[wasm_bindgen]
@@ -743,12 +798,25 @@ impl IfolRenderWeb {
                     .map(|id| &id.0)
                 {
                     if let Some(parent) = world.entities.iter().find(|e| &e.id == pid) {
-                        // parent.resolved already has full accumulated transform from hierarchy_sys
-                        parent_rot = parent.resolved.rotation;
-                        parent_sx = parent.resolved.scale_x;
-                        parent_sy = parent.resolved.scale_y;
-                        parent_x = parent.resolved.x;
-                        parent_y = parent.resolved.y;
+                        // Check if parent is a Composition (world isolation boundary)
+                        let parent_is_comp = storages
+                            .get_component::<ifol_render_ecs::ecs::components::Composition>(pid)
+                            .is_some();
+                        if parent_is_comp {
+                            // Comp boundary: children live in LOCAL space, no parent transform
+                            parent_rot = 0.0;
+                            parent_sx = 1.0;
+                            parent_sy = 1.0;
+                            parent_x = 0.0;
+                            parent_y = 0.0;
+                        } else {
+                            // Normal hierarchy: use parent's accumulated world transforms
+                            parent_rot = parent.resolved.rotation;
+                            parent_sx = parent.resolved.scale_x;
+                            parent_sy = parent.resolved.scale_y;
+                            parent_x = parent.resolved.x;
+                            parent_y = parent.resolved.y;
+                        }
                     }
                 }
             }
