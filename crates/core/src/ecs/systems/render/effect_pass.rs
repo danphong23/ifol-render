@@ -175,7 +175,10 @@ pub fn build_entity_passes(
             let (uv_offset, uv_scale) = call.fit_mode.calculate_uv(call.width, call.height, iw, ih, call.align_x, call.align_y);
 
             let blend_id = match call.blend_mode.to_lowercase().as_str() {
-                "multiply" => 1, "screen" => 2, "overlay" => 3, "soft_light" => 4, "add" => 5, "difference" => 6, "mask_in" => 11, "mask_out" => 12, _ => 0,
+                "multiply" => 1, "screen" => 2, "overlay" => 3, "add" => 4,
+                "subtract" => 5, "darken" => 6, "lighten" => 7, "soft_light" => 8,
+                "hard_light" => 9, "difference" => 10, "mask_in" => 11, "mask_out" => 12,
+                _ => 0,
             };
 
             let mut textures = Vec::new();

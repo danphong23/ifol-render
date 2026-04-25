@@ -1395,6 +1395,52 @@ $('selTestCase').onchange = async (e) => {
         return;
     }
 
+    // ── Inline TC24 (Blend Modes — 2-Pass Visual Validation) ──
+    if (testId === 'btnTestCase24') {
+        const blendModes = ["normal","multiply","screen","overlay","add","subtract","darken","lighten","soft_light","hard_light","difference"];
+        const cols = 4;
+        const cellW = 300, cellH = 170;
+        const startX = 160, startY = 100;
+        const entities = [
+            { id: "main_cam", camera: { resolutionWidth:1280, resolutionHeight:720, bgColor:[0.08,0.08,0.12,1] }, rect:{width:1280,height:720}, transform:{x:640,y:360,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5}, lifespan:{start:0,end:5}, layer:0 },
+            { id: "bg", shapeSource:{kind:"rectangle",fillColor:[0.08,0.08,0.12,1]}, rect:{width:1280,height:720}, transform:{x:640,y:360,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5}, lifespan:{start:0,end:5}, layer:0 },
+            { id: "title", textSource:{content:"TC24: Blend Modes (2-Pass GPU Composite)", fontSize:28, color:[1,1,1,1]}, rect:{width:800,height:50,fitMode:"contain"}, transform:{x:640,y:40,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5}, lifespan:{start:0,end:5}, layer:999 }
+        ];
+        blendModes.forEach((mode, i) => {
+            const col = i % cols;
+            const row = Math.floor(i / cols);
+            const cx = startX + col * cellW;
+            const cy = startY + row * cellH;
+            const layerBase = (i + 1) * 10;
+            // Background shape (destination)
+            entities.push({
+                id: `bg_${mode}`, shapeSource:{kind:"rectangle",fillColor:[0.2,0.5,1.0,1]},
+                rect:{width:120,height:100}, transform:{x:cx,y:cy,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5},
+                lifespan:{start:0,end:5}, layer:layerBase
+            });
+            // Foreground shape (source — with blend mode applied)
+            entities.push({
+                id: `fg_${mode}`, shapeSource:{kind:"ellipse",fillColor:[1.0,0.3,0.2,1]},
+                rect:{width:120,height:100}, transform:{x:cx+40,y:cy+20,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5},
+                visual:{opacity:0.9, blendMode:mode},
+                lifespan:{start:0,end:5}, layer:layerBase + 1
+            });
+            // Label
+            entities.push({
+                id: `lbl_${mode}`, textSource:{content:mode.replace("_"," "), fontSize:14, color:[1,1,1,0.9]},
+                rect:{width:200,height:25,fitMode:"contain"}, transform:{x:cx+20,y:cy+68,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5},
+                lifespan:{start:0,end:5}, layer:layerBase + 2
+            });
+        });
+        const tc24 = {
+            project: { width: 1280, height: 720, fps: 30, duration: 5, name: "TC24 Blend Modes" },
+            entities
+        };
+        $('jsonEditor').value = JSON.stringify(tc24, null, 2);
+        if (engine) applyJson();
+        return;
+    }
+
     // ── Generic: load from /tests/ folder ──
     try {
         const res = await fetch(`/tests/${testId}.json`);
