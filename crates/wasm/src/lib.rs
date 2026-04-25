@@ -576,16 +576,28 @@ impl IfolRenderWeb {
         }
         
         // 3.2.1 Virtual Editor Camera injection
-        // If we are in editor mode, we inject a virtual camera into the Local World 
-        // to render gizmos overlay without polluting user scene data.
-        let mut actual_camera_id = camera_id.to_string();
-        if is_editor_mode {
-            let gizmo_layer = world.sorted_by_layer()
+        // Pre-compute gizmo_layer and max_content_layer as plain i32 values BEFORE
+        // any mutable world operations (add_entity/add_component).
+        // The sort Vec borrows world — we must drop it before mutation.
+        let (editor_gizmo_layer, editor_max_content_layer) = if is_editor_mode {
+            let sorted = world.sorted_by_layer();
+            let max_non_cam = sorted
                 .iter()
-                .filter(|e| world.storages.get_component::<ifol_render_ecs::ecs::components::CameraComponent>(&e.id).is_none())
+                .filter(|e| world.storages
+                    .get_component::<ifol_render_ecs::ecs::components::CameraComponent>(&e.id)
+                    .is_none())
                 .map(|e| e.resolved.layer)
                 .max()
-                .unwrap_or(0) + 1;
+                .unwrap_or(0);
+            (max_non_cam + 1, max_non_cam)
+            // `sorted` dropped here — world borrow released
+        } else {
+            (1, 0)
+        };
+
+        let mut actual_camera_id = camera_id.to_string();
+        if is_editor_mode {
+            let gizmo_layer = editor_gizmo_layer;
             
             // Create __editor_cam__ virtual camera
             world.add_entity(ifol_render_ecs::ecs::Entity {
@@ -726,21 +738,8 @@ impl IfolRenderWeb {
             let sx = w as f32 / cam_w;
             let sy = h as f32 / cam_h;
 
-            // Compute gizmo base layer = max content entity layer + 1
-            // This ensures gizmos always float above all content, regardless of what
-            // layer numbers the user has used. Core never hardcodes any layer value.
-            let max_content_layer = world.sorted_by_layer()
-                .iter()
-                .filter(|e| {
-                    // Only count entities that are NOT cameras (cameras are gizmos themselves)
-                    world.storages
-                        .get_component::<ifol_render_ecs::ecs::components::CameraComponent>(&e.id)
-                        .is_none()
-                })
-                .map(|e| e.resolved.layer)
-                .max()
-                .unwrap_or(0);
-            let gizmo_base_layer = max_content_layer + 1;
+            // Reuse the pre-computed integer (no additional sort needed).
+            let gizmo_base_layer = editor_max_content_layer + 1;
 
             let gizmos = crate::gizmo_overlay::editor_gizmo_system(
                 &world,
@@ -756,6 +755,8 @@ impl IfolRenderWeb {
                 gizmo_base_layer,
             );
 
+            // T3.2: Only run the gizmo system when something is actually selected.
+            // With no selection, gizmos produce zero entities — skip the whole system.
             if !gizmos.is_empty() {
                 if let Some(pass) = frame.passes.iter_mut().find(|p| p.output == "final" || matches!(p.pass_type, ifol_render_ecs::frame::PassType::Output { .. })) {
                     if let ifol_render_ecs::frame::PassType::Output { entities, .. } = &mut pass.pass_type {

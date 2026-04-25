@@ -253,6 +253,13 @@ pub struct Renderer {
     height: u32,
     /// Current frame number for LRU tracking.
     frame_number: u64,
+    /// Bind group cache: (pipeline_name, tex0_key, tex1_key) → BindGroup.
+    ///
+    /// BindGroups are reused across frames when texture keys don't change,
+    /// eliminating O(N) GPU heap allocations per frame for static entities.
+    /// The uniform dynamic offset is NOT part of the key — it is passed via
+    /// `set_bind_group(..., &[dynamic_offset])` at draw time.
+    bind_group_cache: HashMap<(String, String, String), wgpu::BindGroup>,
 }
 
 impl Renderer {
@@ -399,6 +406,7 @@ impl Renderer {
             width,
             height,
             frame_number: 0,
+            bind_group_cache: HashMap::new(),
         }
     }
 
@@ -411,6 +419,8 @@ impl Renderer {
         self.engine.resize(width, height);
         self.effect_ctx = None;
         self.texture_pool.clear();
+        // T1.5: All intermediate textures are recreated on resize → stale BindGroups.
+        self.bind_group_cache.clear();
     }
 
     /// Query GPU capabilities.
@@ -673,12 +683,19 @@ impl Renderer {
         if let Some(entry) = self.texture_cache.remove(key) {
             self.texture_cache_bytes -= entry.size_bytes;
         }
+        // T1.4: Drop all BindGroups that reference this texture key.
+        // The BindGroup is a GPU object binding a specific TextureView — once the
+        // texture is evicted, that TextureView is dangling and the BindGroup is invalid.
+        self.bind_group_cache
+            .retain(|(_, k0, k1), _| k0 != key && k1 != key);
     }
 
     /// Clear all cached textures.
     pub fn clear_textures(&mut self) {
         self.texture_cache.clear();
         self.texture_cache_bytes = 0;
+        // All BindGroups reference now-dead TextureViews — must purge.
+        self.bind_group_cache.clear();
     }
 
     /// Iterator over all texture cache keys (for selective prefix-based eviction).
@@ -1167,34 +1184,100 @@ impl Renderer {
             });
         }
 
-        // Phase 2: Create bind groups, batched by texture
-        // We need one bind group per (pipeline, texture) combination
-        struct DrawCall {
+        // Phase 2: Get or create bind groups, cached by (pipeline, tex0, tex1).
+        // BindGroups are reused across frames for static entities — the dynamic
+        // uniform offset is supplied at draw time, not baked into the BindGroup.
+        struct DrawCall<'a> {
             pipeline_name: String,
             uniform_offset: u32,
-            bind_group: Option<wgpu::BindGroup>, // Generated below
+            cache_key: (String, String, String),
+            // Hold reference data needed to create BG if cache miss.
+            // We defer creation to avoid double-borrow of self.
+            tex0_is_transient: bool,
+            tex1_is_transient: bool,
+            needs_two_textures: bool,
+            // Resolved texture views (raw ptrs for lifetime bypass)
+            tex0_ptr: *const wgpu::TextureView,
+            tex1_ptr: *const wgpu::TextureView,
+            layout_ptr: *const wgpu::BindGroupLayout,
+            sampler_ptr: *const wgpu::Sampler,
+            phantom: std::marker::PhantomData<&'a ()>,
         }
 
+        // Safety: wgpu resources are GPU-owned and live for the Renderer lifetime.
+        // We store raw pointers only to thread through the borrow checker within
+        // this single function body — no aliasing and no cross-thread use.
         let mut draw_calls: Vec<DrawCall> = Vec::with_capacity(commands.len());
 
         for (cmd, prep) in commands.iter().zip(prepared.iter()) {
             let cached = self.pipelines.get(&prep.pipeline_name).unwrap();
 
-            // First texture logic
-            let tex_view = match cmd.textures.get(0) {
-                Some(key) => {
-                    if let Some(view) = self.transient_views.get(key) {
-                        view
-                    } else if let Some(entry) = self.texture_cache.get(key) {
-                        &entry.view
-                    } else {
-                        &self.transparent_texture_view // Missing asset -> transparent
-                    }
-                }
-                None => &self.white_texture_view, // No texture requested -> use white for solid colors
+            let tex0_key = cmd.textures.first().cloned().unwrap_or_default();
+            let tex1_key = if cached.config.num_textures > 1 {
+                cmd.textures.get(1).cloned().unwrap_or_default()
+            } else {
+                String::new()
             };
 
-            // Build bind group entries dynamically
+            let cache_key = (
+                prep.pipeline_name.clone(),
+                tex0_key.clone(),
+                tex1_key.clone(),
+            );
+
+            // Resolve texture view pointers (needed if cache miss)
+            let tex0_view: &wgpu::TextureView = if tex0_key.is_empty() {
+                &self.white_texture_view
+            } else if let Some(v) = self.transient_views.get(&tex0_key) {
+                v
+            } else if let Some(e) = self.texture_cache.get(&tex0_key) {
+                &e.view
+            } else {
+                &self.transparent_texture_view
+            };
+
+            let tex1_view: &wgpu::TextureView = if tex1_key.is_empty() {
+                &self.transparent_texture_view
+            } else if let Some(v) = self.transient_views.get(&tex1_key) {
+                v
+            } else if let Some(e) = self.texture_cache.get(&tex1_key) {
+                &e.view
+            } else {
+                &self.transparent_texture_view
+            };
+
+            let tex0_transient = !tex0_key.is_empty() && self.transient_views.contains_key(&tex0_key);
+            let tex1_transient = !tex1_key.is_empty() && self.transient_views.contains_key(&tex1_key);
+
+            draw_calls.push(DrawCall {
+                pipeline_name: prep.pipeline_name.clone(),
+                uniform_offset: prep.uniform_offset,
+                cache_key,
+                tex0_is_transient: tex0_transient,
+                tex1_is_transient: tex1_transient,
+                needs_two_textures: cached.config.num_textures > 1,
+                tex0_ptr: tex0_view as *const _,
+                tex1_ptr: tex1_view as *const _,
+                layout_ptr: &cached.bind_group_layout as *const _,
+                sampler_ptr: &cached.sampler as *const _,
+                phantom: std::marker::PhantomData,
+            });
+        }
+
+        // Build / retrieve BindGroups.
+        // Transient-texture entries are NEVER cached (their views are recreated each frame).
+        for dc in &draw_calls {
+            let is_cacheable = !dc.tex0_is_transient && !dc.tex1_is_transient;
+            if is_cacheable && self.bind_group_cache.contains_key(&dc.cache_key) {
+                continue; // Cache hit — nothing to do.
+            }
+
+            // SAFETY: raw ptrs were derived from references that are still valid.
+            let tex0_view = unsafe { &*dc.tex0_ptr };
+            let tex1_view = unsafe { &*dc.tex1_ptr };
+            let layout    = unsafe { &*dc.layout_ptr };
+            let sampler   = unsafe { &*dc.sampler_ptr };
+
             let mut entries = vec![
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -1206,54 +1289,34 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(tex_view),
+                    resource: wgpu::BindingResource::TextureView(tex0_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&cached.sampler),
+                    resource: wgpu::BindingResource::Sampler(sampler),
                 },
             ];
 
-            // If pipeline expects multiple textures, map them
-            if cached.config.num_textures > 1 {
-                let tex_view_2 = match cmd.textures.get(1) {
-                    Some(key) => {
-                        if let Some(view) = self.transient_views.get(key) {
-                            view
-                        } else if let Some(entry) = self.texture_cache.get(key) {
-                            &entry.view
-                        } else {
-                            &self.transparent_texture_view
-                        }
-                    }
-                    None => &self.transparent_texture_view,
-                };
-
+            if dc.needs_two_textures {
                 entries.push(wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(tex_view_2),
+                    resource: wgpu::BindingResource::TextureView(tex1_view),
                 });
                 entries.push(wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: wgpu::BindingResource::Sampler(&cached.sampler), // Reusing standard sampler
+                    resource: wgpu::BindingResource::Sampler(sampler),
                 });
             }
 
-            // Create Bind Group
-            let bg = self
-                .engine
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None,
-                    layout: &cached.bind_group_layout,
-                    entries: &entries,
-                });
-
-            draw_calls.push(DrawCall {
-                pipeline_name: prep.pipeline_name.clone(),
-                uniform_offset: prep.uniform_offset,
-                bind_group: Some(bg),
+            let bg = self.engine.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout,
+                entries: &entries,
             });
+
+            // Always insert — for cacheable keys this persists across frames;
+            // for transient-texture keys it is overwritten every frame (cheap).
+            self.bind_group_cache.insert(dc.cache_key.clone(), bg);
         }
 
         // Phase 3: Single render pass, minimize pipeline switches
@@ -1282,6 +1345,7 @@ impl Renderer {
 
             for dc in &draw_calls {
                 let cached = self.pipelines.get(&dc.pipeline_name).unwrap();
+                let bg = self.bind_group_cache.get(&dc.cache_key).unwrap();
 
                 // Only set pipeline if it changed
                 if current_pipeline != Some(&dc.pipeline_name) {
@@ -1298,7 +1362,7 @@ impl Renderer {
                     }
                 }
 
-                rpass.set_bind_group(0, dc.bind_group.as_ref().unwrap(), &[dc.uniform_offset]);
+                rpass.set_bind_group(0, bg, &[dc.uniform_offset]);
 
                 if cached.config.uses_vertex_buffer {
                     rpass.draw_indexed(0..6, 0, 0..1);
