@@ -13,6 +13,8 @@ use media_manager::WasmMediaManager;
 mod audio_manager;
 use audio_manager::WasmAudioManager;
 
+mod gizmo_overlay;
+
 #[wasm_bindgen]
 pub struct IfolRenderWeb {
     engine: CoreEngine,
@@ -41,6 +43,12 @@ pub struct IfolRenderWeb {
 
     /// JavaScript callback for events (progress, buffers, metrics, errors).
     on_event_callback: Option<js_sys::Function>,
+
+    /// When true, camera post-processing effects (post_effects on CameraComponent)
+    /// are skipped during rendering. Useful for editor preview without color grading.
+    post_effects_enabled: bool,
+    /// Global render quality scale (0.0 to 1.0)
+    render_quality: f32,
 }
 
 #[wasm_bindgen]
@@ -88,6 +96,8 @@ impl IfolRenderWeb {
             scope_time: None,
             select_mode: "rect".to_string(),
             on_event_callback: None,
+            post_effects_enabled: true,
+            render_quality: 1.0,
         })
     }
 
@@ -313,11 +323,12 @@ impl IfolRenderWeb {
         }
 
         // 1. Evaluate ECS timeline and animation systems at `time_sec`
+        let scene_fps = self.engine.settings().fps;
         let time_state = ifol_render_ecs::time::TimeState {
             global_time: time_sec,
-            delta_time: 1.0 / 60.0, // Should be computed dynamically based on the loop
-            frame_index: (time_sec * 60.0) as u64,
-            fps: 60.0,
+            delta_time: 1.0 / scene_fps,
+            frame_index: (time_sec * scene_fps) as u64,
+            fps: scene_fps,
         };
 
         let mut world = self.v2_world.take().unwrap();
@@ -491,17 +502,161 @@ impl IfolRenderWeb {
         }
         let context = world.build_context(self.render_scope.as_deref(), selected_ids, self.select_mode.clone());
 
+        let cam_ids: Vec<String> = world.entities.iter()
+            .filter(|e| world.storages.get_component::<ifol_render_ecs::ecs::components::CameraComponent>(&e.id).is_some())
+            .map(|e| e.id.clone())
+            .collect();
+            
+        // Save original camera state before transient modifications.
+        // We must NOT mutate persistent component data — only apply overrides for this frame.
+        let mut cam_originals: Vec<(String, f32, Vec<ifol_render_ecs::scene::MaterialV2>)> = Vec::new();
+        for cam_id in &cam_ids {
+            if let Some(cam) = world.storages.get_component_mut::<ifol_render_ecs::ecs::components::CameraComponent>(cam_id) {
+                // Save originals before any mutation
+                cam_originals.push((cam_id.clone(), cam.render_scale, cam.post_effects.clone()));
+
+                if !self.post_effects_enabled {
+                    cam.post_effects.clear();
+                }
+                // Apply global preview quality scale (transient, will be restored)
+                cam.render_scale *= self.render_quality;
+            }
+        }
+        
+        // 3.2.1 Virtual Editor Camera injection
+        // If we are in editor mode, we inject a virtual camera into the Local World 
+        // to render gizmos overlay without polluting user scene data.
+        let mut actual_camera_id = camera_id.to_string();
+        if is_editor_mode {
+            let gizmo_layer = world.sorted_by_layer()
+                .iter()
+                .filter(|e| world.storages.get_component::<ifol_render_ecs::ecs::components::CameraComponent>(&e.id).is_none())
+                .map(|e| e.resolved.layer)
+                .max()
+                .unwrap_or(0) + 1;
+            
+            // Create __editor_cam__ virtual camera
+            world.add_entity(ifol_render_ecs::ecs::Entity {
+                id: "__editor_cam__".to_string(),
+                resolved: {
+                    let mut r = ifol_render_ecs::ecs::ResolvedState::default();
+                    r.visible = true;
+                    // Note: We don't have center_x, center_y, width, height yet during this initialization.
+                    // We will update it directly after calculating!
+                    r
+                },
+                draw: Default::default(),
+            });
+            let mut editor_cam = ifol_render_ecs::ecs::components::CameraComponent::default();
+            editor_cam.render_mode = ifol_render_ecs::ecs::components::camera::CameraRenderMode::Cameras;
+            editor_cam.target_cameras = vec!["__editor_cam_content__".to_string(), "__gizmo_cam__".to_string()];
+            world.add_component("__editor_cam__", editor_cam);
+            
+            let (mut center_x, mut center_y, mut width, mut height) = if let Some(c) = world.find_camera(camera_id) {
+                (c.resolved.x, c.resolved.y, c.resolved.width, c.resolved.height)
+            } else {
+                (0.0, 0.0, 1280.0, 720.0)
+            };
+
+            // custom_cam_w and custom_cam_h are provided directly
+            if let Some(w_ov) = custom_cam_w { width = w_ov; }
+            if let Some(h_ov) = custom_cam_h { height = h_ov; }
+
+            // custom_cam_x and custom_cam_y are passed from JS as the TOP-LEFT corner of the viewport!
+            // We must convert them to the ECS Transform coordinate space (CENTER).
+            if let Some(x) = custom_cam_x { center_x = x + width * 0.5; }
+            if let Some(y) = custom_cam_y { center_y = y + height * 0.5; }
+
+            // MANUALLY seed the resolved state for __editor_cam__ since we added the ECS entity 
+            // *after* the pipeline systems have finished executing. 
+            // Ohterwise, it will be mapped with root_cam_x = 0 causing panning failures.
+            if let Some(editor_ent) = world.get_mut("__editor_cam__") {
+                editor_ent.resolved.x = center_x;
+                editor_ent.resolved.y = center_y;
+                editor_ent.resolved.width = width;
+                editor_ent.resolved.height = height;
+            }
+
+            // Clone the original camera to safely override its Transform without modifying the user's scene data permanently
+            let mut clone_cam = ifol_render_ecs::ecs::components::CameraComponent::default();
+            if let Some(c) = world.storages.get_component::<ifol_render_ecs::ecs::components::CameraComponent>(camera_id) {
+                clone_cam = c.clone();
+            }
+            
+            world.add_entity(ifol_render_ecs::ecs::Entity {
+                id: "__editor_cam_content__".to_string(),
+                resolved: {
+                    let mut r = ifol_render_ecs::ecs::ResolvedState::default();
+                    r.visible = true;
+                    r.x = center_x; r.y = center_y;
+                    r.width = width; r.height = height;
+                    r
+                },
+                draw: Default::default(),
+            });
+            world.add_component("__editor_cam_content__", clone_cam);
+            world.add_component("__editor_cam_content__", ifol_render_ecs::ecs::components::Transform {
+                x: center_x, y: center_y, 
+                scale_x: 1.0, scale_y: 1.0, 
+                rotation: 0.0, anchor_x: 0.5, anchor_y: 0.5,
+            });
+            world.add_component("__editor_cam_content__", ifol_render_ecs::ecs::components::Rect {
+                width: width, height: height, 
+                fit_mode: ifol_render_ecs::ecs::components::FitMode::Stretch,
+                align_x: 0.5, align_y: 0.5,
+            });
+
+            world.add_component("__editor_cam__", ifol_render_ecs::ecs::components::Transform {
+                x: center_x, y: center_y, 
+                scale_x: 1.0, scale_y: 1.0, 
+                rotation: 0.0, anchor_x: 0.5, anchor_y: 0.5,
+            });
+            world.add_component("__editor_cam__", ifol_render_ecs::ecs::components::Rect {
+                width: width, height: height, 
+                fit_mode: ifol_render_ecs::ecs::components::FitMode::Stretch,
+                align_x: 0.5, align_y: 0.5,
+            });
+            
+            // Setup gizmo sub-camera pointing to gizmo_layer
+            world.add_entity(ifol_render_ecs::ecs::Entity {
+                id: "__gizmo_cam__".to_string(),
+                resolved: {
+                    let mut r = ifol_render_ecs::ecs::ResolvedState::default();
+                    r.visible = true;
+                    r.x = center_x; r.y = center_y;
+                    r.width = width; r.height = height;
+                    r
+                },
+                draw: Default::default(),
+            });
+            let mut gizmo_cam = ifol_render_ecs::ecs::components::CameraComponent::default();
+            gizmo_cam.render_mode = ifol_render_ecs::ecs::components::camera::CameraRenderMode::Layers;
+            gizmo_cam.target_layers = Some(vec![gizmo_layer]);
+            gizmo_cam.render_order = 999;
+            world.add_component("__gizmo_cam__", gizmo_cam);
+
+            world.add_component("__gizmo_cam__", ifol_render_ecs::ecs::components::Transform {
+                x: center_x, y: center_y, 
+                scale_x: 1.0, scale_y: 1.0, 
+                rotation: 0.0, anchor_x: 0.5, anchor_y: 0.5,
+            });
+            world.add_component("__gizmo_cam__", ifol_render_ecs::ecs::components::Rect {
+                width: width, height: height, 
+                fit_mode: ifol_render_ecs::ecs::components::FitMode::Stretch,
+                align_x: 0.5, align_y: 0.5,
+            });
+            
+            // Redirect render to use virtual master camera
+            actual_camera_id = "__editor_cam__".to_string();
+        }
+
         // 3.3. Core Render Phase
         let mut frame = ifol_render_ecs::ecs::systems::render_to_frame(
             &world,
-            camera_id,
+            &actual_camera_id,
             w,
             h,
             time_sec,
-            custom_cam_x,
-            custom_cam_y,
-            custom_cam_w,
-            custom_cam_h,
             &context,
         );
 
@@ -519,7 +674,23 @@ impl IfolRenderWeb {
             let sx = w as f32 / cam_w;
             let sy = h as f32 / cam_h;
 
-            let gizmos = ifol_render_ecs::ecs::systems::editor_gizmo_system(
+            // Compute gizmo base layer = max content entity layer + 1
+            // This ensures gizmos always float above all content, regardless of what
+            // layer numbers the user has used. Core never hardcodes any layer value.
+            let max_content_layer = world.sorted_by_layer()
+                .iter()
+                .filter(|e| {
+                    // Only count entities that are NOT cameras (cameras are gizmos themselves)
+                    world.storages
+                        .get_component::<ifol_render_ecs::ecs::components::CameraComponent>(&e.id)
+                        .is_none()
+                })
+                .map(|e| e.resolved.layer)
+                .max()
+                .unwrap_or(0);
+            let gizmo_base_layer = max_content_layer + 1;
+
+            let gizmos = crate::gizmo_overlay::editor_gizmo_system(
                 &world,
                 &selected_refs,
                 &self.select_mode,
@@ -530,6 +701,7 @@ impl IfolRenderWeb {
                 w,
                 h,
                 &context,
+                gizmo_base_layer,
             );
 
             if !gizmos.is_empty() {
@@ -538,6 +710,14 @@ impl IfolRenderWeb {
                         entities.extend(gizmos);
                     }
                 }
+            }
+        }
+
+        // Restore original camera state after rendering (undo transient mutations)
+        for (cam_id, orig_scale, orig_effects) in cam_originals {
+            if let Some(cam) = world.storages.get_component_mut::<ifol_render_ecs::ecs::components::CameraComponent>(&cam_id) {
+                cam.render_scale = orig_scale;
+                cam.post_effects = orig_effects;
             }
         }
 
@@ -653,6 +833,31 @@ impl IfolRenderWeb {
         self.select_mode = mode.to_string();
     }
 
+    /// Enable or disable camera post-processing effects for the current viewport.
+    /// When disabled, `post_effects` defined on CameraComponent are stripped before rendering.
+    /// Useful for editor preview modes where post-grading would obscure the true scene.
+    /// Default: enabled (true).
+    #[wasm_bindgen]
+    pub fn set_post_effects_enabled(&mut self, enabled: bool) {
+        self.post_effects_enabled = enabled;
+    }
+
+    /// Returns whether camera post-processing is currently enabled.
+    #[wasm_bindgen]
+    pub fn is_post_effects_enabled(&self) -> bool {
+        self.post_effects_enabled
+    }
+
+    #[wasm_bindgen]
+    pub fn set_render_quality(&mut self, quality: f32) {
+        self.render_quality = quality.clamp(0.01, 1.0);
+    }
+
+    #[wasm_bindgen]
+    pub fn get_render_quality(&self) -> f32 {
+        self.render_quality
+    }
+
     #[wasm_bindgen]
     pub fn pick_entity_v2(
         &self,
@@ -728,7 +933,8 @@ impl IfolRenderWeb {
                     if self.evaluate_hits_recursive(world, inner_hits).is_some() {
                         return Some(hit.entity_id);
                     } else {
-                        continue;
+                        // User requirement: if click is empty space inside composition, select composition itself
+                        return Some(hit.entity_id);
                     }
                 }
             }

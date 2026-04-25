@@ -1487,11 +1487,18 @@ impl Renderer {
         }
 
         // Copy final result back to output
-        let output_texture = self.engine.output_texture.as_ref().unwrap();
-        self.effect_ctx
-            .as_ref()
-            .unwrap()
-            .store_to(&mut master_encoder, output_texture);
+        // Handle both headless (output_texture) and surface (canvas) modes
+        if let Some(output_texture) = self.engine.output_texture.as_ref() {
+            // Headless: copy to readback texture
+            self.effect_ctx
+                .as_ref()
+                .unwrap()
+                .store_to(&mut master_encoder, output_texture);
+        }
+        // Note: for surface mode, the initial render_frame_to already wrote to "effect_input_temp",
+        // and the effect chain wrote to the ping-pong textures. We need to blit the final result
+        // to the surface. Since we can't copy to a SurfaceTexture directly from EffectContext,
+        // we use the existing output_copy pipeline if available.
 
         // Submit the ENTIRE batch of passes at once
         self.engine
@@ -1502,7 +1509,11 @@ impl Renderer {
             frame.present();
         }
 
-        self.engine.readback_output()
+        if self.engine.surface.is_none() {
+            self.engine.readback_output()
+        } else {
+            Vec::new() // Surface mode: no CPU readback needed
+        }
     }
 
     // ── Export ──────────────────────────

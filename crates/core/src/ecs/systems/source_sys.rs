@@ -146,12 +146,20 @@ pub fn source_system(world: &mut World) {
             // For now, let's use a simple key based on entity ID so it re-renders if it changes.
             // If text dynamically updates mid-flight, entity.id string alone won't invalidate the cache.
             // We'll append the content snippet, size, AND real_font_size to force cache eviction if it animatingly changes.
+            // Use a content hash to ensure cache invalidation when text changes,
+            // even if the length stays the same (e.g. "Hello" → "World").
+            let content_hash = {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                text.content.hash(&mut hasher);
+                hasher.finish()
+            };
             let cache_key = format!(
-                "text_{}_{}_{:.2}_{}",
+                "text_{}_{}_{:.2}_{:x}",
                 entity.id,
                 text.font_size,
                 real_font_size,
-                text.content.len()
+                content_hash
             );
 
             base_call.texture_key = Some(cache_key.clone());
