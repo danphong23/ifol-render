@@ -235,7 +235,7 @@ fn build_single_camera_pass(
         "_camera_src".to_string()
     };
 
-    state.passes.push(RenderPass {
+    state.push_pass(RenderPass { pass_hash: 0,
         output: base_output.clone(),
         pass_type: PassType::Entities {
             entities: flat_entities,
@@ -247,9 +247,10 @@ fn build_single_camera_pass(
 
     // Post-processing: Camera Effects
     let mut current_cam_key = base_output;
-    for (i, effect) in state.camera_effects.iter().enumerate() {
+    let camera_effects = state.camera_effects.clone();
+    for (i, effect) in camera_effects.iter().enumerate() {
         let out_key = format!("_camera_fx_{}", i);
-        state.passes.push(RenderPass {
+        state.push_pass(RenderPass { pass_hash: 0,
             output: out_key.clone(),
             pass_type: PassType::Effect {
                 shader: effect.shader_id.clone(),
@@ -262,7 +263,7 @@ fn build_single_camera_pass(
         current_cam_key = out_key;
     }
 
-    state.passes.push(RenderPass {
+    state.push_pass(RenderPass { pass_hash: 0,
         output: "final".into(),
         pass_type: PassType::Output {
             input: if state.camera_effects.is_empty() { "main".into() } else { current_cam_key },
@@ -312,7 +313,7 @@ fn build_multi_camera_passes(
             format!("{}_src", cam_key)
         };
 
-        state.passes.push(RenderPass {
+        state.push_pass(RenderPass { pass_hash: 0,
             output: src_key.clone(),
             pass_type: PassType::Entities {
                 entities: cam_entities,
@@ -326,7 +327,7 @@ fn build_multi_camera_passes(
         let mut current_key = src_key;
         for (i, effect) in cam_info.post_effects.iter().enumerate() {
             let fx_key = format!("{}_fx_{}", cam_key, i);
-            state.passes.push(RenderPass {
+            state.push_pass(RenderPass { pass_hash: 0,
                 output: fx_key.clone(),
                 pass_type: PassType::Effect {
                     shader: effect.shader_id.clone(),
@@ -351,30 +352,34 @@ fn build_multi_camera_passes(
         .iter()
         .skip(1) // First camera is base input, rest are overlays
         .enumerate()
-        .map(|(i, tex_key)| crate::frame::FlatEntity {
-            id: 0,
-            x: 0.0,
-            y: 0.0,
-            width: screen_width as f32,
-            height: screen_height as f32,
-            rotation: 0.0,
-            opacity: 1.0,
-            blend_mode: 0,
-            color: [1.0, 1.0, 1.0, 1.0],
-            shader: "composite".to_string(),
-            textures: vec![tex_key.clone()],
-            params: vec![],
-            layer: (i as i32 + 1) * 100_000,
-            z_index: (i as f32 + 1.0) * 100_000.0,
-            fit_mode: 0,
-            uv_offset: [0.0, 0.0],
-            uv_scale: [1.0, 1.0],
-            intrinsic_width: screen_width as f32,
-            intrinsic_height: screen_height as f32,
+        .map(|(i, tex_key)| {
+            let mut fe = crate::frame::FlatEntity {
+                id: 0, content_hash: 0,
+                x: 0.0,
+                y: 0.0,
+                width: screen_width as f32,
+                height: screen_height as f32,
+                rotation: 0.0,
+                opacity: 1.0,
+                blend_mode: 0,
+                color: [1.0, 1.0, 1.0, 1.0],
+                shader: "composite".to_string(),
+                textures: vec![tex_key.clone()],
+                params: vec![],
+                layer: i as i32,
+                z_index: i as f32,
+                fit_mode: 0,
+                uv_offset: [0.0, 0.0],
+                uv_scale: [1.0, 1.0],
+                intrinsic_width: screen_width as f32,
+                intrinsic_height: screen_height as f32,
+            };
+            fe.content_hash = fe.calculate_hash();
+            fe
         })
         .collect();
 
-    state.passes.push(RenderPass {
+    state.push_pass(RenderPass { pass_hash: 0,
         output: "final".into(),
         pass_type: PassType::Output {
             input: base_input,

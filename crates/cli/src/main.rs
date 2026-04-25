@@ -471,7 +471,7 @@ fn main() {
                     ifol_render_ecs::ecs::pipeline::run(&mut world, &time_state, None, None);
                     let context = world.build_context(None, std::collections::HashSet::new(), String::new());
                     let mut frame = ifol_render_ecs::ecs::systems::render_to_frame(
-                        &world, &camera_id, out_w, out_h, t, None, None, None, None, &context,
+                        &world, &camera_id, out_w, out_h, t, &context,
                     );
 
                     // Map paths dynamically to ensure decoding works
@@ -727,10 +727,6 @@ fn main() {
                 settings.width,
                 settings.height,
                 time,
-                None,
-                None,
-                None,
-                None,
                 &context,
             );
             let bytes = engine.render_frame(&frame);

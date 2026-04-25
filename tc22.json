@@ -1,0 +1,149 @@
+{
+  "project": {
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "duration": 3.0,
+    "name": "TC22 - CameraRenderMode::Cameras (Master + Sub-Camera Compositing)"
+  },
+  "entities": [
+    {
+      "id": "viewport_master",
+      "camera": {
+        "resolutionWidth": 1280,
+        "resolutionHeight": 720,
+        "renderMode": "cameras",
+        "targetCameras": ["cam_content", "cam_editor"],
+        "renderOrder": 0
+      },
+      "rect": { "width": 1280, "height": 720 },
+      "transform": {
+        "x": 640, "y": 360, "rotation": 0,
+        "scaleX": 1, "scaleY": 1, "anchorX": 0.5, "anchorY": 0.5
+      },
+      "lifespan": { "start": 0, "end": 3 },
+      "layer": 0
+    },
+    {
+      "id": "cam_content",
+      "camera": {
+        "resolutionWidth": 1280,
+        "resolutionHeight": 720,
+        "bgColor": [0.05, 0.05, 0.15, 1.0],
+        "renderMode": "layers",
+        "targetLayers": [0, 1, 2],
+        "renderOrder": 0,
+        "postEffects": []
+      },
+      "rect": { "width": 1280, "height": 720 },
+      "transform": {
+        "x": 640, "y": 360, "rotation": 0,
+        "scaleX": 1, "scaleY": 1, "anchorX": 0.5, "anchorY": 0.5
+      },
+      "lifespan": { "start": 0, "end": 3 },
+      "layer": 0
+    },
+    {
+      "id": "cam_editor",
+      "camera": {
+        "resolutionWidth": 1280,
+        "resolutionHeight": 720,
+        "bgColor": [0.0, 0.0, 0.0, 0.0],
+        "renderMode": "layers",
+        "targetLayers": [10],
+        "renderOrder": 1,
+        "postEffects": []
+      },
+      "rect": { "width": 1280, "height": 720 },
+      "transform": {
+        "x": 640, "y": 360, "rotation": 0,
+        "scaleX": 1, "scaleY": 1, "anchorX": 0.5, "anchorY": 0.5
+      },
+      "lifespan": { "start": 0, "end": 3 },
+      "layer": 0
+    },
+    {
+      "id": "bg",
+      "shapeSource": { "kind": "rectangle", "fillColor": [0.08, 0.08, 0.18, 1.0] },
+      "rect": { "width": 1280, "height": 720 },
+      "transform": {
+        "x": 640, "y": 360, "rotation": 0,
+        "scaleX": 1, "scaleY": 1, "anchorX": 0.5, "anchorY": 0.5
+      },
+      "lifespan": { "start": 0, "end": 3 },
+      "layer": 0
+    },
+    {
+      "id": "content_glow",
+      "shapeSource": { "kind": "ellipse", "fillColor": [0.2, 0.5, 1.0, 1.0] },
+      "rect": { "width": 250, "height": 250 },
+      "transform": {
+        "x": 640, "y": 360, "rotation": 0,
+        "scaleX": 1, "scaleY": 1, "anchorX": 0.5, "anchorY": 0.5
+      },
+      "materials": [
+        {
+          "shader_id": "glow",
+          "scope": "padded",
+          "float_uniforms": {
+            "u0_radius": { "keyframes": [{ "time": 0, "value": 50 }] },
+            "u1_intensity": { "keyframes": [{ "time": 0, "value": 3.0 }] }
+          },
+          "vec4_uniforms": {
+            "u0_color": { "keyframes": [{ "time": 0, "value": [0.3, 0.6, 1.0, 1.0] }] }
+          }
+        }
+      ],
+      "lifespan": { "start": 0, "end": 3 },
+      "layer": 1
+    },
+    {
+      "id": "content_label",
+      "textSource": {
+        "content": "Content (Layer 1) - Glow effect active",
+        "fontSize": 28,
+        "font": "inter",
+        "color": [1.0, 1.0, 1.0, 1.0]
+      },
+      "rect": { "width": 500, "height": 50, "fitMode": "contain" },
+      "transform": {
+        "x": 640, "y": 580, "rotation": 0,
+        "scaleX": 1, "scaleY": 1, "anchorX": 0.5, "anchorY": 0.5
+      },
+      "lifespan": { "start": 0, "end": 3 },
+      "layer": 2
+    },
+    {
+      "id": "editor_overlay_rect",
+      "shapeSource": {
+        "kind": "rectangle",
+        "fillColor": [0.0, 0.0, 0.0, 0.0],
+        "strokeColor": [0.0, 1.0, 0.4, 1.0],
+        "strokeWidth": 5
+      },
+      "rect": { "width": 260, "height": 260 },
+      "transform": {
+        "x": 640, "y": 360, "rotation": 0,
+        "scaleX": 1, "scaleY": 1, "anchorX": 0.5, "anchorY": 0.5
+      },
+      "lifespan": { "start": 0, "end": 3 },
+      "layer": 10
+    },
+    {
+      "id": "editor_label",
+      "textSource": {
+        "content": "MASTER CAM > Ordered: [cam_content, cam_editor]. Editor layer=10. No post-fx bleed.",
+        "fontSize": 18,
+        "font": "inter",
+        "color": [0.0, 1.0, 0.4, 1.0]
+      },
+      "rect": { "width": 900, "height": 40, "fitMode": "contain" },
+      "transform": {
+        "x": 640, "y": 50, "rotation": 0,
+        "scaleX": 1, "scaleY": 1, "anchorX": 0.5, "anchorY": 0.5
+      },
+      "lifespan": { "start": 0, "end": 3 },
+      "layer": 10
+    }
+  ]
+}

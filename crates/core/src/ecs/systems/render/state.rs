@@ -81,4 +81,11 @@ impl RenderState {
             current_acc_key: None,
         }
     }
+
+    /// Automatically computes pass_hash before pushing the pass to the frame.
+    /// Used by the RenderGraph to detect and skip unchanged GPU work.
+    pub fn push_pass(&mut self, mut pass: RenderPass) {
+        pass.pass_hash = pass.calculate_hash();
+        self.passes.push(pass);
+    }
 }

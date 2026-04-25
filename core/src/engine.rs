@@ -442,7 +442,24 @@ impl CoreEngine {
             let target_w = pass.target_width.unwrap_or(self.settings.width);
             let target_h = pass.target_height.unwrap_or(self.settings.height);
 
-            match &pass.pass_type {
+            // Phase 4: Explicit RenderGraph Dirty Tracking
+            let mut is_dirty = true;
+            if let Some(node) = self.renderer.graph_state.nodes.get(&pass.output) {
+                if node.pass_hash == pass.pass_hash {
+                    is_dirty = false;
+                }
+            }
+
+            // Ensure the texture actually exists if we think it's clean.
+            // Transient textures (_ent_, etc.) are cleared every frame, so they will correctly fall back to dirty.
+            if !is_dirty && pass.output != "main" && pass.output != "final" {
+                if !self.renderer.has_texture(&pass.output) {
+                    is_dirty = true;
+                }
+            }
+
+            if is_dirty || pass.output == "final" {
+                match &pass.pass_type {
                 PassType::Entities {
                     entities,
                     clear_color,
@@ -528,7 +545,20 @@ impl CoreEngine {
                         log::warn!("Snapshot pass '{}': {}", pass.output, e);
                     }
                 }
+                }
+            } else {
+                log::debug!("Skipping pass {} (hash match and texture preserved)", pass.output);
+                // TODO (T4.5b): Once full liveness analysis is implemented, we can release transient inputs here.
             }
+
+            // Update the graph state
+            self.renderer.graph_state.nodes.insert(
+                pass.output.clone(),
+                ifol_render::RenderGraphNode {
+                    pass_hash: pass.pass_hash,
+                    last_used_frame: self.renderer.get_frame_number(),
+                }
+            );
         }
 
         self.renderer

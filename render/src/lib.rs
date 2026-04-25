@@ -218,6 +218,29 @@ struct CachedTexture {
 }
 
 // ══════════════════════════════════════
+// Render Graph State
+// ══════════════════════════════════════
+
+/// Represents a previously executed render pass in the graph.
+#[derive(Debug, Clone)]
+pub struct RenderGraphNode {
+    /// The hash of the pass's state (inputs, params, entities) when it was compiled.
+    pub pass_hash: u64,
+    /// Frame number this node was last evaluated.
+    pub last_used_frame: u64,
+}
+
+pub struct RenderGraphState {
+    pub nodes: HashMap<String, RenderGraphNode>,
+}
+
+impl Default for RenderGraphState {
+    fn default() -> Self {
+        Self { nodes: HashMap::new() }
+    }
+}
+
+// ══════════════════════════════════════
 // Renderer — Pure GPU Executor
 // ══════════════════════════════════════
 
@@ -260,6 +283,8 @@ pub struct Renderer {
     /// The uniform dynamic offset is NOT part of the key — it is passed via
     /// `set_bind_group(..., &[dynamic_offset])` at draw time.
     bind_group_cache: HashMap<(String, String, String), wgpu::BindGroup>,
+    /// State of the explicit render graph tracking pass dirtiness.
+    pub graph_state: RenderGraphState,
 }
 
 impl Renderer {
@@ -407,6 +432,7 @@ impl Renderer {
             height,
             frame_number: 0,
             bind_group_cache: HashMap::new(),
+            graph_state: RenderGraphState::default(),
         }
     }
 
@@ -439,6 +465,14 @@ impl Renderer {
     }
 
     // ── Texture Cache ──────────────────
+
+    pub fn has_texture(&self, key: &str) -> bool {
+        self.texture_cache.contains_key(key) || self.transient_views.contains_key(key)
+    }
+
+    pub fn get_frame_number(&self) -> u64 {
+        self.frame_number
+    }
 
     /// Load an image file into GPU texture cache.
     pub fn load_image(&mut self, key: &str, path: &str) -> Result<(), String> {
@@ -673,10 +707,7 @@ impl Renderer {
             .copy_external_image_to_texture(&source, dest, size);
     }
 
-    /// Check if a texture is cached.
-    pub fn has_texture(&self, key: &str) -> bool {
-        self.texture_cache.contains_key(key)
-    }
+
 
     /// Evict a cached texture.
     pub fn evict_texture(&mut self, key: &str) {

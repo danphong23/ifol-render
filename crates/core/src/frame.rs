@@ -62,6 +62,10 @@ impl Default for RenderSettings {
 pub struct FlatEntity {
     /// Unique ID for dirty tracking & caching.
     pub id: u64,
+    /// Content hash representing all visual data in this entity (layout, color, texture keys, etc).
+    /// Used by the RenderGraph to detect if an intermediate pass has changed.
+    #[serde(default)]
+    pub content_hash: u64,
 
     // ── Spatial (pixels, top-left origin) ──
     /// Top-left X position in pixels.
@@ -119,6 +123,42 @@ pub struct FlatEntity {
     /// Native media height (for fit_mode calculations). 0 = unknown.
     #[serde(default)]
     pub intrinsic_height: f32,
+}
+
+impl FlatEntity {
+    /// Computes a deterministic hash of all visual properties (layout, color, texture keys, etc).
+    /// Used by the RenderGraph to detect unchanged entity content.
+    pub fn calculate_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+
+        let mut hasher = DefaultHasher::new();
+        
+        hasher.write_u64(self.id);
+        hasher.write_u32(self.x.to_bits());
+        hasher.write_u32(self.y.to_bits());
+        hasher.write_u32(self.width.to_bits());
+        hasher.write_u32(self.height.to_bits());
+        hasher.write_u32(self.rotation.to_bits());
+        hasher.write_u32(self.opacity.to_bits());
+        hasher.write_u32(self.blend_mode);
+        for c in &self.color { hasher.write_u32(c.to_bits()); }
+        
+        self.shader.hash(&mut hasher);
+        for t in &self.textures { t.hash(&mut hasher); }
+        for p in &self.params { hasher.write_u32(p.to_bits()); }
+        
+        hasher.write_i32(self.layer);
+        hasher.write_u32(self.z_index.to_bits());
+        hasher.write_u32(self.fit_mode);
+        
+        for u in &self.uv_offset { hasher.write_u32(u.to_bits()); }
+        for u in &self.uv_scale { hasher.write_u32(u.to_bits()); }
+        hasher.write_u32(self.intrinsic_width.to_bits());
+        hasher.write_u32(self.intrinsic_height.to_bits());
+        
+        hasher.finish()
+    }
 }
 
 fn uv_scale_default() -> [f32; 2] {
@@ -182,7 +222,7 @@ impl Frame {
             passes: self
                 .passes
                 .iter()
-                .map(|pass| RenderPass {
+                .map(|pass| RenderPass { pass_hash: 0,
                     output: pass.output.clone(),
                     pass_type: match &pass.pass_type {
                         PassType::Entities {
@@ -219,6 +259,10 @@ pub struct RenderPass {
     /// Key for the output texture of this pass.
     /// Can be referenced as input by later passes.
     pub output: String,
+    /// Hash representing the complete state of this pass (all inputs + effect params).
+    /// Used by the RenderGraph to skip identical passes.
+    #[serde(default)]
+    pub pass_hash: u64,
     /// What this pass does.
     pub pass_type: PassType,
     /// Optional isolated target width (for grouped relative pre-comps)
@@ -228,6 +272,47 @@ pub struct RenderPass {
     #[serde(default)]
     pub target_height: Option<u32>,
 }
+
+impl RenderPass {
+    /// Computes a deterministic hash of this pass and all its inputs.
+    /// Used by the RenderGraph to detect unchanged passes and skip GPU work.
+    pub fn calculate_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+
+        let mut hasher = DefaultHasher::new();
+        self.output.hash(&mut hasher);
+        
+        if let Some(w) = self.target_width { hasher.write_u32(w); }
+        if let Some(h) = self.target_height { hasher.write_u32(h); }
+
+        match &self.pass_type {
+            PassType::Entities { entities, clear_color } => {
+                hasher.write_u8(0);
+                for c in clear_color { hasher.write_u32(c.to_bits()); }
+                for e in entities { hasher.write_u64(e.content_hash); }
+            }
+            PassType::Effect { shader, inputs, params } => {
+                hasher.write_u8(1);
+                shader.hash(&mut hasher);
+                for i in inputs { i.hash(&mut hasher); }
+                for p in params { hasher.write_u32(p.to_bits()); }
+            }
+            PassType::Snapshot { source_key } => {
+                hasher.write_u8(2);
+                source_key.hash(&mut hasher);
+            }
+            PassType::Output { input, entities } => {
+                hasher.write_u8(3);
+                input.hash(&mut hasher);
+                for e in entities { hasher.write_u64(e.content_hash); }
+            }
+        }
+        
+        hasher.finish()
+    }
+}
+
 
 /// What a render pass does.
 #[derive(Debug, Clone, Serialize, Deserialize)]

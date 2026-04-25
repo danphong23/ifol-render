@@ -1,0 +1,211 @@
+{
+    "$schema": "crates/core/schema_v1.json",
+    "project": {
+        "width": 1280,
+        "height": 720,
+        "fps": 30,
+        "duration": 5.0,
+        "name": "Phase 4.1 ShaderScope Validation (Overflow vs Clipped)"
+    },
+    "entities": [
+        {
+            "id": "bg",
+            "shapeSource": {
+                "kind": "rectangle",
+                "fillColor": [0.1, 0.1, 0.1, 1]
+            },
+            "rect": {
+                "width": 1280,
+                "height": 720
+            },
+            "transform": {
+                "x": 640,
+                "y": 360,
+                "rotation": 0,
+                "scaleX": 1,
+                "scaleY": 1,
+                "anchorX": 0.5,
+                "anchorY": 0.5
+            },
+            "lifespan": {
+                "start": 0,
+                "end": 5
+            },
+            "layer": 0
+        },
+        {
+            "id": "padded_shape",
+            "shapeSource": {
+                "kind": "ellipse",
+                "fillColor": [0.2, 0.6, 1.0, 1.0]
+            },
+            "rect": {
+                "width": 200,
+                "height": 200
+            },
+            "transform": {
+                "x": 400,
+                "y": 360,
+                "rotation": 0,
+                "scaleX": 1,
+                "scaleY": 1,
+                "anchorX": 0.5,
+                "anchorY": 0.5
+            },
+            "materials": [
+                {
+                    "shader_id": "glow",
+                    "scope": "padded",
+                    "float_uniforms": {
+                        "u0_radius": {
+                            "keyframes": [
+                                {
+                                    "time": 0,
+                                    "value": 50
+                                }
+                            ]
+                        },
+                        "u1_intensity": {
+                            "keyframes": [
+                                {
+                                    "time": 0,
+                                    "value": 3.0
+                                }
+                            ]
+                        }
+                    },
+                    "vec4_uniforms": {
+                        "u0_color": {
+                            "keyframes": [
+                                {
+                                    "time": 0,
+                                    "value": [0.2, 1.0, 0.4, 1.0]
+                                }
+                            ]
+                        }
+                    }
+                }
+            ],
+            "lifespan": {
+                "start": 0,
+                "end": 5
+            },
+            "layer": 1
+        },
+        {
+            "id": "clipped_shape",
+            "shapeSource": {
+                "kind": "ellipse",
+                "fillColor": [1.0, 0.3, 0.3, 1.0]
+            },
+            "rect": {
+                "width": 200,
+                "height": 200
+            },
+            "transform": {
+                "x": 880,
+                "y": 360,
+                "rotation": 0,
+                "scaleX": 1,
+                "scaleY": 1,
+                "anchorX": 0.5,
+                "anchorY": 0.5
+            },
+            "materials": [
+                {
+                    "shader_id": "glow",
+                    "scope": "clipped",
+                    "float_uniforms": {
+                        "u0_radius": {
+                            "keyframes": [
+                                {
+                                    "time": 0,
+                                    "value": 50
+                                }
+                            ]
+                        },
+                        "u1_intensity": {
+                            "keyframes": [
+                                {
+                                    "time": 0,
+                                    "value": 3.0
+                                }
+                            ]
+                        }
+                    },
+                    "vec4_uniforms": {
+                        "u0_color": {
+                            "keyframes": [
+                                {
+                                    "time": 0,
+                                    "value": [1.0, 0.8, 0.2, 1.0]
+                                }
+                            ]
+                        }
+                    }
+                }
+            ],
+            "lifespan": {
+                "start": 0,
+                "end": 5
+            },
+            "layer": 2
+        },
+        {
+            "id": "text_label_padded",
+            "textSource": {
+                "content": "PADDED (Overflow Allowed)",
+                "fontSize": 24,
+                "font": "inter",
+                "color": [1, 1, 1, 1]
+            },
+            "rect": {
+                "width": 300,
+                "height": 50,
+                "fitMode": "contain"
+            },
+            "transform": {
+                "x": 400,
+                "y": 500,
+                "rotation": 0,
+                "scaleX": 1,
+                "scaleY": 1,
+                "anchorX": 0.5,
+                "anchorY": 0.5
+            },
+            "lifespan": {
+                "start": 0,
+                "end": 5
+            },
+            "layer": 3
+        },
+        {
+            "id": "text_label_clipped",
+            "textSource": {
+                "content": "CLIPPED (Strict Boundary)",
+                "fontSize": 24,
+                "font": "inter",
+                "color": [1, 1, 1, 1]
+            },
+            "rect": {
+                "width": 300,
+                "height": 50,
+                "fitMode": "contain"
+            },
+            "transform": {
+                "x": 880,
+                "y": 500,
+                "rotation": 0,
+                "scaleX": 1,
+                "scaleY": 1,
+                "anchorX": 0.5,
+                "anchorY": 0.5
+            },
+            "lifespan": {
+                "start": 0,
+                "end": 5
+            },
+            "layer": 3
+        }
+    ]
+}

@@ -1,6 +1,6 @@
-use crate::ecs::World;
-use crate::ecs::components::CameraComponent;
-use crate::frame::FlatEntity;
+use ifol_render_ecs::ecs::{World, ContextView};
+use ifol_render_ecs::ecs::components::CameraComponent;
+use ifol_render_ecs::frame::FlatEntity;
 
 /// Editor Gizmo System
 ///
@@ -15,8 +15,9 @@ pub fn editor_gizmo_system(
     sx: f32,
     sy: f32,
     screen_width: u32,
-    screen_height: u32,
-    context: &crate::ecs::ContextView,
+    _screen_height: u32,
+    context: &ContextView,
+    gizmo_base_layer: i32,
 ) -> Vec<FlatEntity> {
     let mut gizmos = Vec::new();
     let storages = &world.storages;
@@ -25,8 +26,8 @@ pub fn editor_gizmo_system(
     let is_in_comp = |ent_id: &str| -> bool {
         let mut cur = ent_id.to_string();
         for _ in 0..32 {
-            if let Some(pid) = storages.get_component::<crate::ecs::components::meta::ParentId>(&cur) {
-                if storages.get_component::<crate::ecs::components::Composition>(&pid.0).is_some() {
+            if let Some(pid) = storages.get_component::<ifol_render_ecs::ecs::components::meta::ParentId>(&cur) {
+                if storages.get_component::<ifol_render_ecs::ecs::components::Composition>(&pid.0).is_some() {
                     // If we're SCOPED INTO this composition, its children are
                     // effectively root-level — NOT "in comp" for gizmo purposes
                     if context.scope_id == Some(pid.0.as_str()) {
@@ -46,6 +47,8 @@ pub fn editor_gizmo_system(
         if !context.active_entities.contains(&entity.id) { continue; }
         if storages.get_component::<CameraComponent>(&entity.id).is_none() { continue; }
         if is_in_comp(&entity.id) { continue; }
+        // Do not draw gizmos for ephemeral editor cameras
+        if entity.id.starts_with("__editor") || entity.id == "__gizmo_cam__" { continue; }
 
         let is_selected = selected_entity_ids.contains(&entity.id.as_str());
         let cam_color = if is_selected { [0.0, 0.85, 1.0, 1.0] } else { [1.0, 0.0, 1.0, 0.6] };
@@ -76,7 +79,7 @@ pub fn editor_gizmo_system(
         let tri_center_x = (tri_x_world - cam_x) * sx;
         let tri_center_y = (tri_y_world - cam_y) * sy;
 
-        gizmos.push(FlatEntity {
+        gizmos.push(FlatEntity { content_hash: 0,
             id: 0,
             x: center_x - draw_w * 0.5,
             y: center_y - draw_h * 0.5,
@@ -98,7 +101,7 @@ pub fn editor_gizmo_system(
             intrinsic_height: draw_h,
         });
 
-        gizmos.push(FlatEntity {
+        gizmos.push(FlatEntity { content_hash: 0,
             id: 0,
             x: tri_center_x - tri_w * 0.5,
             y: tri_center_y - tri_w * 0.5,
@@ -146,7 +149,7 @@ pub fn editor_gizmo_system(
 
         let mut is_circle = false;
         if let Some(call) = entity.draw.draw_calls.first() {
-            if call.kind == crate::ecs::components::draw::DrawKind::SolidEllipse {
+            if call.kind == ifol_render_ecs::ecs::components::draw::DrawKind::SolidEllipse {
                 is_circle = true;
             }
         }
@@ -156,7 +159,7 @@ pub fn editor_gizmo_system(
         let draw_h = bounds_h.max(1.0) + pad * 2.0;
 
         if is_content && is_circle {
-            gizmos.push(FlatEntity {
+            gizmos.push(FlatEntity { content_hash: 0,
                 id: 0,
                 x: bounds_cx - bounds_w * 0.5 - pad,
                 y: bounds_cy - bounds_h * 0.5 - pad,
@@ -180,7 +183,7 @@ pub fn editor_gizmo_system(
                 intrinsic_width: bounds_w.max(1.0), intrinsic_height: bounds_h.max(1.0),
             });
         } else {
-            gizmos.push(FlatEntity {
+            gizmos.push(FlatEntity { content_hash: 0,
                 id: 0,
                 x: bounds_cx - bounds_w * 0.5 - pad,
                 y: bounds_cy - bounds_h * 0.5 - pad,

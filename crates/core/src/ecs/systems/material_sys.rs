@@ -62,6 +62,16 @@ fn evaluate_material(
     (effect, padding)
 }
 
+/// Public wrapper around evaluate_material for use in the rendering pipeline
+/// (e.g., evaluating camera post_effects during multi-camera discovery).
+pub fn evaluate_material_pub(
+    mat: &MaterialV2,
+    local_time: f64,
+    force_scope: Option<crate::schema::v2::ShaderScope>,
+) -> (EffectPassDef, f32) {
+    evaluate_material(mat, local_time, force_scope)
+}
+
 /// Material System (Phase 2)
 ///
 /// Processes the `Materials` component and `CameraComponent.post_effects`

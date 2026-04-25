@@ -163,6 +163,8 @@ impl TextureCache {
         &self.entries[idx].texture
     }
 
+
+
     /// Evict textures that haven't been used for `max_idle_frames` frames.
     ///
     /// Call periodically (e.g., every 60 frames) to prevent VRAM leaks.

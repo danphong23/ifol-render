@@ -1,0 +1,91 @@
+{
+  "assets": {
+    "inter": { "url": "assets/Inter-Regular.ttf" },
+    "image_a": { "url": "assets/test1.jpg" },
+    "image_b": { "url": "assets/test2.jpg" }
+  },
+  "entities": [
+    {
+      "id": "content_a",
+      "visible": true,
+      "rect": { "width": 500, "height": 500, "fit_mode": "stretch", "align_x": 0.5, "align_y": 0.5 },
+      "transform": { "x": 0, "y": 0, "scale_x": 1.0, "scale_y": 1.0, "rotation": 0.0, "anchor_x": 0.5, "anchor_y": 0.5 },
+      "lifespan": { "start": 0.0, "end": 10.0 },
+      "layer": 0,
+      "shapeSource": {
+        "fill_color": [1.0, 0.0, 0.0, 1.0]
+      }
+    },
+    {
+      "id": "content_b",
+      "visible": true,
+      "rect": { "width": 500, "height": 500, "fit_mode": "stretch", "align_x": 0.5, "align_y": 0.5 },
+      "transform": { "x": 600, "y": 0, "scale_x": 1.0, "scale_y": 1.0, "rotation": 0.0, "anchor_x": 0.5, "anchor_y": 0.5 },
+      "lifespan": { "start": 0.0, "end": 10.0 },
+      "layer": 0,
+      "shapeSource": {
+        "fill_color": [0.0, 0.0, 1.0, 1.0]
+      }
+    },
+    {
+      "id": "cam_1",
+      "parent_id": "root",
+      "visible": true,
+      "rect": { "width": 1280, "height": 720, "fit_mode": "stretch", "align_x": 0.5, "align_y": 0.5 },
+      "transform": { "x": 0, "y": 0, "scale_x": 1.0, "scale_y": 1.0, "rotation": 0.0, "anchor_x": 0.5, "anchor_y": 0.5 },
+      "lifespan": { "start": 0.0, "end": -1.0 },
+      "layer": 10,
+      "camera": {
+        "render_mode": "layers",
+        "target_layers": null,
+        "culling_mask": 4294967295,
+        "render_order": 0
+      }
+    },
+    {
+      "id": "cam_2",
+      "parent_id": "root",
+      "visible": true,
+      "rect": { "width": 1280, "height": 720, "fit_mode": "stretch", "align_x": 0.5, "align_y": 0.5 },
+      "transform": { "x": 600, "y": 0, "scale_x": 1.0, "scale_y": 1.0, "rotation": 0.0, "anchor_x": 0.5, "anchor_y": 0.5 },
+      "lifespan": { "start": 3.0, "end": -1.0 },
+      "layer": 10,
+      "camera": {
+        "render_mode": "layers",
+        "target_layers": null,
+        "culling_mask": 4294967295,
+        "render_order": 0
+      }
+    },
+    {
+      "id": "cam_3_zoom",
+      "parent_id": "root",
+      "visible": true,
+      "rect": { "width": 1280, "height": 720, "fit_mode": "stretch", "align_x": 0.5, "align_y": 0.5 },
+      "transform": { "x": 300, "y": 0, "scale_x": 1.5, "scale_y": 1.5, "rotation": 0.0, "anchor_x": 0.5, "anchor_y": 0.5 },
+      "lifespan": { "start": 6.0, "end": -1.0 },
+      "layer": 10,
+      "camera": {
+        "render_mode": "layers",
+        "target_layers": null,
+        "culling_mask": 4294967295,
+        "render_order": 0
+      }
+    },
+    {
+      "id": "main_cam",
+      "parent_id": "root",
+      "visible": true,
+      "rect": { "width": 1280, "height": 720, "fit_mode": "stretch", "align_x": 0.5, "align_y": 0.5 },
+      "transform": { "x": 640, "y": 360, "scale_x": 1.0, "scale_y": 1.0, "rotation": 0.0, "anchor_x": 0.5, "anchor_y": 0.5 },
+      "lifespan": { "start": 0.0, "end": 10.0 },
+      "layer": 99,
+      "camera": {
+        "render_mode": "cameras",
+        "target_cameras": ["cam_1", "cam_2", "cam_3_zoom"],
+        "culling_mask": 4294967295,
+        "render_order": 99
+      }
+    }
+  ]
+}

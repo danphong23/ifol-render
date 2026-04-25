@@ -12,10 +12,10 @@ export default defineConfig({
     wasm(),
     topLevelAwait(),
     {
-      name: 'export-proxy',
+      name: 'ifol-api',
       configureServer(server) {
-        server.middlewares.use('/api/export', (req, res) => {
-          if (req.method === 'POST') {
+        server.middlewares.use('/api', (req, res) => {
+          if (req.url === '/export' && req.method === 'POST') {
             let body = '';
             req.on('data', chunk => body += chunk.toString());
             req.on('end', () => {
@@ -106,9 +106,27 @@ export default defineConfig({
                 res.end(e.toString());
               }
             });
-          } else if (req.url === '/api/export/progress' && req.method === 'GET') {
+          } else if (req.url === '/export/progress' && req.method === 'GET') {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(globalExportProgress));
+          } else if (req.url === '/scene' && req.method === 'GET') {
+            const scenePath = path.resolve('../scene.json');
+            if (fs.existsSync(scenePath)) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(fs.readFileSync(scenePath));
+            } else {
+                res.writeHead(404);
+                res.end('Not Found');
+            }
+          } else if (req.url === '/scene' && req.method === 'POST') {
+            let body = '';
+            req.on('data', chunk => body += chunk.toString());
+            req.on('end', () => {
+                const scenePath = path.resolve('../scene.json');
+                fs.writeFileSync(scenePath, body);
+                res.writeHead(200);
+                res.end('Saved');
+            });
           } else {
             res.writeHead(405);
             res.end('Method Not Allowed');

@@ -75,34 +75,38 @@ fn rect_arc_length(p: vec2f, half_size: vec2f) -> f32 {
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     let p = in.uv - vec2f(0.5);
     let half = vec2f(0.5);
-    
+
     // Distance to rectangle edge
     let dist = sdf_rect(p, half);
-    
+
     // Anti-aliased border mask
     let pixel_size = fwidth(dist);
     let border = u.border_width;
     let border_mask = 1.0 - smoothstep(-pixel_size, pixel_size, abs(dist) - border * 0.5);
-    
+
     if border_mask < 0.001 {
         discard;
     }
-    
-    // Compute dash pattern along perimeter
-    let arc = rect_arc_length(p, half);
+
+    // Dash pattern
+    // If period <= 0 (dash=0, gap=0), treat as solid line (always visible — no dashes).
     let period = u.dash_length + u.gap_length;
-    let t = arc % period;
-    
-    // Anti-aliased dash edge
-    let dash_aa = fwidth(arc) * 1.5;
-    let dash_mask = smoothstep(u.dash_length - dash_aa, u.dash_length, t);
-    
+    var dash_mask = 0.0; // 0 = visible, 1 = hidden (gap)
+    if period > 0.001 {
+        let arc = rect_arc_length(p, half);
+        let t = arc % period;
+        // Anti-aliased dash edge
+        let dash_aa = fwidth(arc) * 1.5;
+        dash_mask = smoothstep(u.dash_length - dash_aa, u.dash_length, t);
+    }
+    // else: period == 0 → solid line → dash_mask stays 0 (pixel is visible)
+
     // Final: border × dash × opacity
     let final_alpha = border_mask * (1.0 - dash_mask) * u.opacity * u.color.a;
-    
+
     if final_alpha < 0.001 {
         discard;
     }
-    
+
     return vec4f(u.color.rgb, final_alpha);
 }

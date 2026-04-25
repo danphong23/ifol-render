@@ -99,19 +99,32 @@
             <option value="btnTestCase16">16. Multi Effect</option>
             <option value="btnTestCase17">17. AV Sync</option>
             <option value="btnTestCase18">18. Blur Cases</option>
+            <option value="btnTestCase20_shader">20. ShaderScope (Clipped vs Padded)</option>
+            <option value="btnTestCase21">21. Multi-Camera Layer Isolation</option>
+            <option value="btnTestCase22">22. Master-Camera Compositor</option>
+            <option value="btnTestCase23">23. Camera Track Cuts (-1 lifespan)</option>
         </select>
         <button id="btnTestCase19" style="background:#f97316; color:white">19. Backend TC</button>
         <button id="btnTestCase20" style="background:#eab308; color:black; font-weight:bold">20. Event Callbacks</button>
     </div>
     <div style="width:1px; height:20px; background:#555"></div>
     <button id="btnUpdateJson" style="background:#059669; font-weight:bold">Apply JSON ➔ ECS</button>
+    <button id="btnLiveSync" style="background:#dc2626; font-weight:bold">🔴 Live Sync: OFF</button>
+    <button id="btnSaveDisk" style="background:#2563eb; font-weight:bold">💾 Save to Disk</button>
     <label style="display:flex; align-items:center; cursor:pointer; font-size:12px; color:#4ade80;">
         <input type="checkbox" id="chkEditorMode" checked style="margin-right:4px">
         [Editor]
     </label>
+    <select id="selViewCamera" style="margin-left:8px; background:#222; color:#fff; border:1px solid #555; border-radius:4px; font-size:12px; padding:2px 4px; outline:none; max-width: 150px;">
+        <option value="main_cam">main_cam</option>
+    </select>
     <label style="display:flex; align-items:center; cursor:pointer; font-size:12px; color:#c084fc; margin-left:8px;">
         <input type="checkbox" id="chkDualViewport" style="margin-right:4px">
         [Dual View]
+    </label>
+    <label style="display:flex; align-items:center; cursor:pointer; font-size:12px; color:#fb923c; margin-left:8px;" title="When OFF: camera post-processing effects are stripped. Useful for editor preview.">
+        <input type="checkbox" id="chkPostEffects" checked style="margin-right:4px">
+        [Post FX]
     </label>
     <select id="selSelectMode" style="background:#333; color:white; border:1px solid #555; border-radius:4px; font-size:12px; margin-left:8px; padding:2px 4px; outline:none;">
         <option value="rect">Select Mode: Rect (Layer Bounds)</option>

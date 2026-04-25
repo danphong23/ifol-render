@@ -137,14 +137,27 @@ impl WasmMediaManager {
         let diff = (el.current_time() - rounded_time).abs();
 
         if entity_is_playing {
-            if diff > SYNC_TOLERANCE_PLAY {
-                el.set_current_time(rounded_time);
-            }
             if !entry.playing {
                 let _ = el.play();
                 entry.playing = true;
             }
+
+            // Soft Sync via playbackRate to prevent Thrashing (140-270ms frame spikes)
+            if diff > 1.0 {
+                // Extreme drift (> 1s): force seek
+                el.set_current_time(rounded_time);
+            } else if diff > 0.1 {
+                // Minor drift: adjust playback speed
+                if rounded_time > el.current_time() {
+                    el.set_playback_rate(1.1);
+                } else {
+                    el.set_playback_rate(0.9);
+                }
+            } else {
+                el.set_playback_rate(1.0);
+            }
         } else {
+            el.set_playback_rate(1.0);
             if diff > SYNC_TOLERANCE_SCRUB {
                 el.set_current_time(rounded_time);
             }

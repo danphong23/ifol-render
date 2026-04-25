@@ -1,0 +1,132 @@
+{
+  "project": {
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "duration": 3.0,
+    "name": "TC21 - Phase 5 Multi-Camera Architecture Test"
+  },
+  "entities": [
+    {
+      "id": "cam_content",
+      "camera": {
+        "resolutionWidth": 1280,
+        "resolutionHeight": 720,
+        "bgColor": [0.05, 0.05, 0.1, 1.0],
+        "renderMode": "layers",
+        "targetLayers": [0, 1, 2],
+        "renderOrder": 0,
+        "postEffects": []
+      },
+      "rect": { "width": 1280, "height": 720 },
+      "transform": {
+        "x": 640, "y": 360, "rotation": 0,
+        "scaleX": 1, "scaleY": 1, "anchorX": 0.5, "anchorY": 0.5
+      },
+      "lifespan": { "start": 0, "end": 3 },
+      "layer": 0
+    },
+    {
+      "id": "cam_editor",
+      "camera": {
+        "resolutionWidth": 1280,
+        "resolutionHeight": 720,
+        "bgColor": [0.0, 0.0, 0.0, 0.0],
+        "renderMode": "layers",
+        "targetLayers": [999],
+        "renderOrder": 1,
+        "postEffects": []
+      },
+      "rect": { "width": 1280, "height": 720 },
+      "transform": {
+        "x": 640, "y": 360, "rotation": 0,
+        "scaleX": 1, "scaleY": 1, "anchorX": 0.5, "anchorY": 0.5
+      },
+      "lifespan": { "start": 0, "end": 3 },
+      "layer": 0
+    },
+    {
+      "id": "bg_content",
+      "shapeSource": { "kind": "rectangle", "fillColor": [0.1, 0.1, 0.2, 1.0] },
+      "rect": { "width": 1280, "height": 720 },
+      "transform": {
+        "x": 640, "y": 360, "rotation": 0,
+        "scaleX": 1, "scaleY": 1, "anchorX": 0.5, "anchorY": 0.5
+      },
+      "lifespan": { "start": 0, "end": 3 },
+      "layer": 0
+    },
+    {
+      "id": "circle_content",
+      "shapeSource": { "kind": "ellipse", "fillColor": [0.3, 0.6, 1.0, 1.0] },
+      "rect": { "width": 300, "height": 300 },
+      "transform": {
+        "x": 640, "y": 360, "rotation": 0,
+        "scaleX": 1, "scaleY": 1, "anchorX": 0.5, "anchorY": 0.5
+      },
+      "materials": [
+        {
+          "shader_id": "glow",
+          "scope": "padded",
+          "float_uniforms": {
+            "u0_radius": { "keyframes": [{ "time": 0, "value": 40 }] },
+            "u1_intensity": { "keyframes": [{ "time": 0, "value": 3.0 }] }
+          },
+          "vec4_uniforms": {
+            "u0_color": { "keyframes": [{ "time": 0, "value": [0.2, 0.5, 1.0, 1.0] }] }
+          }
+        }
+      ],
+      "lifespan": { "start": 0, "end": 3 },
+      "layer": 1
+    },
+    {
+      "id": "text_content",
+      "textSource": {
+        "content": "Content Camera (Layer 0-2)",
+        "fontSize": 32,
+        "font": "inter",
+        "color": [1.0, 1.0, 1.0, 1.0]
+      },
+      "rect": { "width": 500, "height": 60, "fitMode": "contain" },
+      "transform": {
+        "x": 640, "y": 600, "rotation": 0,
+        "scaleX": 1, "scaleY": 1, "anchorX": 0.5, "anchorY": 0.5
+      },
+      "lifespan": { "start": 0, "end": 3 },
+      "layer": 2
+    },
+    {
+      "id": "gizmo_selection",
+      "shapeSource": {
+        "kind": "rectangle",
+        "fillColor": [0.0, 0.0, 0.0, 0.0],
+        "strokeColor": [0.0, 0.9, 1.0, 1.0],
+        "strokeWidth": 4
+      },
+      "rect": { "width": 310, "height": 310 },
+      "transform": {
+        "x": 640, "y": 360, "rotation": 0,
+        "scaleX": 1, "scaleY": 1, "anchorX": 0.5, "anchorY": 0.5
+      },
+      "lifespan": { "start": 0, "end": 3 },
+      "layer": 999
+    },
+    {
+      "id": "gizmo_label",
+      "textSource": {
+        "content": "EDITOR CAMERA (Layer 999) - Must render ABOVE glow, unaffected",
+        "fontSize": 22,
+        "font": "inter",
+        "color": [0.0, 1.0, 0.5, 1.0]
+      },
+      "rect": { "width": 700, "height": 50, "fitMode": "contain" },
+      "transform": {
+        "x": 640, "y": 80, "rotation": 0,
+        "scaleX": 1, "scaleY": 1, "anchorX": 0.5, "anchorY": 0.5
+      },
+      "lifespan": { "start": 0, "end": 3 },
+      "layer": 999
+    }
+  ]
+}

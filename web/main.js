@@ -36,14 +36,13 @@ function syncCanvasToViewport() {
         const cw = Math.max(1, Math.floor(container.clientWidth));
         const ch = Math.max(1, Math.floor(container.clientHeight));
         
-        let bw = Math.floor(cw * qLabel);
-        let bh = Math.floor(ch * qLabel);
+        let bw = cw; // Physical canvas pixels always match DOM
+        let bh = ch;
         
         canvas.style.width = cw + "px";
         canvas.style.height = ch + "px";
         
         if (canvas.width !== bw || canvas.height !== bh) {
-            const zoom = (cam_zoom || 1.0) * qLabel;
             canvas.width = bw;
             canvas.height = bh;
             $('lblCanvasSize').textContent = `${bw}x${bh}`;
@@ -52,21 +51,25 @@ function syncCanvasToViewport() {
         // Camera mode: fixed resolution matching active camera
         let camW = 1280;
         let camH = 720;
+        const activeCam = $('selViewCamera') ? $('selViewCamera').value : "main_cam";
         if (currentScene && currentScene.entities) {
-            const cam = currentScene.entities.find(e => e.id === "main_cam");
+            const cam = currentScene.entities.find(e => e.id === activeCam);
             if (cam && cam.rect) {
-                camW = Math.floor(cam.rect.width * qLabel);
-                camH = Math.floor(cam.rect.height * qLabel);
+                camW = Math.floor(cam.rect.width);
+                camH = Math.floor(cam.rect.height);
             }
         }
         
-        canvas.style.width = '';
-        canvas.style.height = '';
-
-        if (canvas.width !== camW || canvas.height !== camH) {
-            canvas.width = camW;
-            canvas.height = camH;
-            $('lblCanvasSize').textContent = `${camW}x${camH}`;
+        let bw = camW;
+        let bh = camH;
+        
+        canvas.style.width = camW + "px";
+        canvas.style.height = camH + "px";
+        
+        if (canvas.width !== bw || canvas.height !== bh) {
+            canvas.width = bw;
+            canvas.height = bh;
+            $('lblCanvasSize').textContent = `${bw}x${bh}`;
         }
     }
 }
@@ -85,14 +88,12 @@ _vpResizeObserver.observe($('viewportArea'));
 // Thanks to Phase 5 Hierarchy Isolation, composition children always live in local space,
 // so the editor camera does not need to offset by the composition's world coordinates.
 function getEditorCam() {
-    const qLabel = parseFloat($('selQuality') ? $('selQuality').value : '1') || 1;
     const zoom = (cam_zoom || 1.0);
-
     const cx = cam_x !== undefined ? cam_x : 640;
     const cy = cam_y !== undefined ? cam_y : 360;
 
-    const w = $('canvasMain').width / (zoom * qLabel);
-    const h = $('canvasMain').height / (zoom * qLabel);
+    const w = $('canvasMain').width / zoom;
+    const h = $('canvasMain').height / zoom;
 
     return {
         x: cx - w/2,
@@ -114,6 +115,10 @@ function requestRender() {
     const isDual = $('chkDualViewport').checked;
     const gpuCanvas = $('gpuCanvas');
     
+    // Send quality setting to engine
+    const qLabel = parseFloat($('selQuality') ? $('selQuality').value : "1") || 1;
+    if (engine.set_render_quality) engine.set_render_quality(qLabel);
+
     // Resize Viewport 1 Canvas (DOM)
     syncCanvasToViewport();
     
@@ -124,20 +129,22 @@ function requestRender() {
         gpuCanvas.height = canvas1.height;
         engine.resize(canvas1.width, canvas1.height);
     }
+    const activeCam = $('selViewCamera') ? $('selViewCamera').value : "main_cam";
+
     let metricsStr = "";
     if (isEditorMode) {
         const ec = getEditorCam();
         // When scoped into composition, use time=0 for root and pass scope cam
         const renderTime = timelineScope ? 0 : timeSec;
         metricsStr = engine.render_frame_v2(
-            renderTime, "main_cam", true,
+            renderTime, activeCam, true,
             (ec.x !== undefined) ? ec.x : undefined,
             (ec.y !== undefined) ? ec.y : undefined,
             (ec.w !== undefined) ? ec.w : undefined,
             (ec.h !== undefined) ? ec.h : undefined
         );
     } else {
-        metricsStr = engine.render_frame_v2(timelineScope ? 0 : timeSec, "main_cam", false, undefined, undefined, undefined, undefined);
+        metricsStr = engine.render_frame_v2(timelineScope ? 0 : timeSec, activeCam, false, undefined, undefined, undefined, undefined);
     }
     
     try {
@@ -155,14 +162,14 @@ function requestRender() {
 
     // --- Pass 2: Render Viewport 2 (Camera Mode on canvasMain2) ---
     if (isDual) {
-        const qLabel = parseFloat($('selQuality') ? $('selQuality').value : "1") || 1;
         let camW = 1280;
         let camH = 720;
+        const activeCam = $('selViewCamera') ? $('selViewCamera').value : "main_cam";
         if (currentScene && currentScene.entities) {
-            const cam = currentScene.entities.find(e => e.id === "main_cam");
+            const cam = currentScene.entities.find(e => e.id === activeCam);
             if (cam && cam.rect) { 
-                camW = Math.floor(cam.rect.width * qLabel); 
-                camH = Math.floor(cam.rect.height * qLabel); 
+                camW = Math.floor(cam.rect.width); 
+                camH = Math.floor(cam.rect.height); 
             }
         }
         const canvas2 = $('canvasMain2');
@@ -249,6 +256,11 @@ async function initEngine() {
     };
 
     $('selQuality').onchange = (e) => {
+        if (!playing) requestAnimationFrame(requestRender);
+    };
+
+    $('chkPostEffects').onchange = (e) => {
+        if (engine) engine.set_post_effects_enabled(e.target.checked);
         if (!playing) requestAnimationFrame(requestRender);
     };
 
@@ -348,9 +360,63 @@ async function applyJson() {
             }
         }
         
-        // 3. Load scene into ECS (with auto-filled intrinsic)
+        // 2.5 Auto-resolve -1 lifespans (App SDK logic for Track cuts)
+        // Groups entities by (parent_id, layer) to act as timeline tracks
+        if (scene.entities) {
+            const trackGroups = {};
+            // Gather all entities with lifespans
+            for (const ent of scene.entities) {
+                if (!ent.lifespan) continue;
+                const pid = ent.parent_id || 'root';
+                const layer = ent.layer || 0;
+                const trackKey = `${pid}_${layer}`;
+                if (!trackGroups[trackKey]) trackGroups[trackKey] = [];
+                trackGroups[trackKey].push(ent);
+            }
+            
+            // Sort each track and resolve -1
+            for (const trackKey in trackGroups) {
+                const track = trackGroups[trackKey];
+                track.sort((a, b) => a.lifespan.start - b.lifespan.start);
+                
+                for (let i = 0; i < track.length; i++) {
+                    const ent = track[i];
+                    if (ent.lifespan.end === -1) {
+                        if (i + 1 < track.length) {
+                            // Cut exactly when the next entity on the track starts
+                            ent.lifespan.end = track[i+1].lifespan.start;
+                        } else {
+                            // Last entity on track: extend to parent comp duration
+                            ent.lifespan.end = scene.project.duration || 9999.0;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 3. Load scene into ECS (with auto-filled intrinsic and resolved lifespans)
         engine.load_scene_v2(JSON.stringify(scene));
         currentScene = scene;
+        
+        // Update cameras dropdown
+        const selCamera = $('selViewCamera');
+        if (selCamera) {
+            const cameras = scene.entities.filter(e => e.camera !== undefined);
+            const oldVal = selCamera.value;
+            selCamera.innerHTML = '';
+            
+            if (cameras.length === 0) {
+                selCamera.innerHTML = '<option value="main_cam">main_cam</option>';
+            } else {
+                cameras.forEach(c => {
+                    const opt = document.createElement('option');
+                    opt.value = c.id;
+                    opt.textContent = c.id;
+                    if (c.id === oldVal) opt.selected = true;
+                    selCamera.appendChild(opt);
+                });
+            }
+        }
         
         $('lblEntities').textContent = `${currentScene.entities ? currentScene.entities.length : 0} entities`;
         
@@ -415,8 +481,65 @@ function loop(ts) {
 }
 
 // ─── EVENTS ───
+// ─── EVENTS ───
 $('btnInit').onclick = initEngine;
 $('btnUpdateJson').onclick = applyJson;
+
+let liveSyncInterval = null;
+let lastSceneContent = "";
+
+$('btnLiveSync').onclick = () => {
+    if (liveSyncInterval) {
+        clearInterval(liveSyncInterval);
+        liveSyncInterval = null;
+        $('btnLiveSync').textContent = '🔴 Live Sync: OFF';
+        $('btnLiveSync').style.background = '#dc2626';
+    } else {
+        $('btnLiveSync').textContent = '🟢 Live Sync: ON';
+        $('btnLiveSync').style.background = '#16a34a';
+        
+        // Immediate fetch
+        fetchScene();
+        
+        liveSyncInterval = setInterval(fetchScene, 1000);
+    }
+};
+
+async function fetchScene() {
+    try {
+        const res = await fetch('/api/scene');
+        if (res.ok) {
+            const text = await res.text();
+            if (text !== lastSceneContent) {
+                lastSceneContent = text;
+                $('jsonEditor').value = text;
+                applyJson();
+                console.log("[Live Sync] Scene updated automatically.");
+            }
+        }
+    } catch(e) {
+        console.error("[Live Sync] Failed to fetch scene:", e);
+    }
+}
+
+$('btnSaveDisk').onclick = async () => {
+    try {
+        const text = $('jsonEditor').value;
+        const res = await fetch('/api/scene', {
+            method: 'POST',
+            body: text
+        });
+        if (res.ok) {
+            alert('Saved to scene.json!');
+            lastSceneContent = text; // Prevent live-sync from triggering redundant update
+        } else {
+            alert('Failed to save to disk.');
+        }
+    } catch(e) {
+        alert('Failed to connect to Vite Server for saving.');
+    }
+};
+
 $('btnPlay').onclick = () => { 
     playing = true; 
     lastTime = performance.now(); 
@@ -585,9 +708,10 @@ function getEntityColor(ent) {
 
 function getVisibleEntities() {
     if (!currentScene || !currentScene.entities) return [];
+    let visible = [];
     if (timelineScope === null) {
         // Root: show entities without parentId OR whose parentId does NOT have a composition
-        return currentScene.entities.filter(e => {
+        visible = currentScene.entities.filter(e => {
             if (e.parentId) {
                 const parent = currentScene.entities.find(p => p.id === e.parentId);
                 if (parent && parent.composition) return false; // hidden, inside composition
@@ -596,8 +720,51 @@ function getVisibleEntities() {
         });
     } else {
         // Scoped to composition: show children of composition
-        return currentScene.entities.filter(e => e.parentId === timelineScope);
+        visible = currentScene.entities.filter(e => e.parentId === timelineScope);
     }
+    
+    // Sort descending by layer, but ALWAYS pin cameras to the top of the timeline
+    visible.sort((a, b) => {
+        const isCamA = a.camera ? 1 : 0;
+        const isCamB = b.camera ? 1 : 0;
+        if (isCamA !== isCamB) return isCamB - isCamA; // Cameras first
+
+        const layerA = a.layer !== undefined ? a.layer : 0;
+        const layerB = b.layer !== undefined ? b.layer : 0;
+        if (layerA !== layerB) {
+            return layerB - layerA; // Descending layer for content
+        }
+        return 0;
+    });
+    
+    return visible;
+}
+
+// Group sorted entities into visual Timeline Tracks based on their layer
+function getVisibleTracks() {
+    const visible = getVisibleEntities();
+    const tracksMap = new Map();
+    const orderedTracks = [];
+    
+    for (const ent of visible) {
+        const isCam = ent.camera ? 1 : 0;
+        const layer = ent.layer || 0;
+        // Unique track key separating cameras from content, even on the same layer
+        const trackKey = `track_${isCam}_${layer}`;
+        
+        if (!tracksMap.has(trackKey)) {
+            const track = {
+                id: trackKey,
+                layer: layer,
+                isCam: isCam,
+                entities: []
+            };
+            tracksMap.set(trackKey, track);
+            orderedTracks.push(track);
+        }
+        tracksMap.get(trackKey).entities.push(ent);
+    }
+    return orderedTracks;
 }
 
 function getScopeDuration() {
@@ -620,39 +787,33 @@ function getEntityLifespan(ent) {
 function renderTimelineLabels() {
     const container = $('timelineLabelsScroll');
     container.innerHTML = '';
-    const entities = getVisibleEntities();
+    const tracks = getVisibleTracks();
     
-    for (const ent of entities) {
+    for (const track of tracks) {
         const label = document.createElement('div');
         label.className = 'timeline-label';
-        if (ent.composition) label.className += ' composition';
-        if (ent.id === selectedEntityId) label.className += ' selected';
         
-        let icon = '▪';
-        if (ent.camera) icon = '📷';
-        else if (ent.composition) icon = '📁';
-        else if (ent.shapeSource && ent.shapeSource.kind === 'ellipse') icon = '⬤';
-        
-        label.textContent = `${icon} ${ent.id}`;
-        label.title = ent.id;
-        
-        // Click to select
-        label.addEventListener('click', () => {
-            selectedEntityId = ent.id;
-            if(engine) engine.select_entity_v2(ent.id);
-            if(!playing) requestRender();
-        });
-        
-        // Double-click to drill into composition
-        if (ent.composition) {
-            label.addEventListener('dblclick', () => {
-                timelineScopePath.push({ id: timelineScope, label: timelineScope || 'Root' });
-                setRenderScope(ent.id);
-                renderBreadcrumb();
-                renderTimeline();
-            });
+        // If track contains selected entity
+        if (track.entities.some(e => e.id === selectedEntityId)) {
+            label.className += ' selected';
         }
         
+        let icon = '🟦';
+        let displayName = `Layer ${track.layer}`;
+
+        if (track.isCam) {
+            icon = '📹';
+            displayName = `Video Track ${track.layer}`;
+        } else if (track.entities.some(e => e.composition)) {
+            icon = '📦';
+            displayName = `Comp Layer ${track.layer}`;
+        }
+        
+        label.textContent = `${icon} ${displayName}`;
+        label.title = displayName;
+        
+        // Wait, click should select the track or just do nothing? 
+        // We'll let users select exact entities by clicking the canvas instead.
         container.appendChild(label);
     }
 }
@@ -811,19 +972,21 @@ function renderTimeline() {
     
     renderTimelineLabels();
     
+    const tracks = getVisibleTracks();
+    
     // Clip tracks below ruler
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, RULER_HEIGHT, W, H - RULER_HEIGHT);
     ctx.clip();
     
-    for (let i = 0; i < entities.length; i++) {
-        const ent = entities[i];
+    for (let i = 0; i < tracks.length; i++) {
+        const track = tracks[i];
         const y = trackY0 + i * TRACK_HEIGHT - scrollY;
         
         // Track background (alternating)
         ctx.fillStyle = (i % 2 === 0) ? COLORS.trackBg1 : COLORS.trackBg2;
-        if (ent.id === selectedEntityId) ctx.fillStyle = COLORS.trackSelected;
+        if (track.entities.some(e => e.id === selectedEntityId)) ctx.fillStyle = COLORS.trackSelected;
         ctx.fillRect(0, y, W, TRACK_HEIGHT);
         
         // Track separator
@@ -833,59 +996,73 @@ function renderTimeline() {
         ctx.lineTo(W, y + TRACK_HEIGHT);
         ctx.stroke();
         
-        // Lifespan bar
-        const ls = getEntityLifespan(ent);
-        const barX = timeToX(ls.start);
-        const barW = timeToX(ls.end) - barX;
-        const barY = y + 4;
-        const barH = TRACK_HEIGHT - 8;
-        
-        const color = getEntityColor(ent);
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        roundRect(ctx, barX, barY, Math.max(barW, 2), barH, 3);
-        ctx.fill();
-        
-        // Bar border
-        ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        roundRect(ctx, barX, barY, Math.max(barW, 2), barH, 3);
-        ctx.stroke();
-        
-        // Composition icon indicator  
-        if (ent.composition) {
+        // Draw each entity in this track
+        for (const ent of track.entities) {
+            // Lifespan bar
+            const ls = getEntityLifespan(ent);
+            const barX = timeToX(ls.start);
+            const barW = timeToX(ls.end) - barX;
+            const barY = y + 4;
+            const barH = TRACK_HEIGHT - 8;
+            
+            const color = getEntityColor(ent);
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            roundRect(ctx, barX, barY, Math.max(barW, 2), barH, 3);
+            ctx.fill();
+            
+            // Bar border & Label
+            if (ent.id === selectedEntityId) {
+                ctx.strokeStyle = '#00ffaa';
+                ctx.lineWidth = 2;
+            } else {
+                ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+                ctx.lineWidth = 1;
+            }
+            ctx.beginPath();
+            roundRect(ctx, barX, barY, Math.max(barW, 2), barH, 3);
+            ctx.stroke();
+            
+            // Print entity ID on the bar
             ctx.fillStyle = '#fff';
-            ctx.font = 'bold 9px system-ui';
+            ctx.font = '11px system-ui';
             ctx.textAlign = 'left';
-            ctx.fillText('⟳', barX + 3, barY + barH - 2);
-        }
-        
-        // Keyframe diamonds (Animation Component)
-        if (ent.animation && ent.animation.floatTracks) {
-            for (const ft of ent.animation.floatTracks) {
-                if (ft.track && ft.track.keyframes) {
-                    for (const kf of ft.track.keyframes) {
-                        const kx = timeToX(kf.time);
-                        if (kx >= barX && kx <= barX + barW) {
-                            drawKeyframeDiamond(ctx, kx, y + TRACK_HEIGHT / 2, 4);
+            ctx.fillText(ent.id, barX + 5, barY + 12);
+            
+            // Composition icon indicator  
+            if (ent.composition) {
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 9px system-ui';
+                ctx.textAlign = 'right';
+                ctx.fillText('⟳', barX + barW - 3, barY + barH - 2);
+            }
+            
+            // Keyframe diamonds (Animation Component)
+            if (ent.animation && ent.animation.floatTracks) {
+                for (const ft of ent.animation.floatTracks) {
+                    if (ft.track && ft.track.keyframes) {
+                        for (const kf of ft.track.keyframes) {
+                            const kx = timeToX(kf.time);
+                            if (kx >= barX && kx <= barX + barW) {
+                                drawKeyframeDiamond(ctx, kx, y + TRACK_HEIGHT / 2, 4);
+                            }
                         }
                     }
                 }
             }
-        }
-        
-        // Keyframe diamonds (Material Uniforms)
-        if (ent.materials) {
-            for (const mat of ent.materials) {
-                if (mat.float_uniforms) {
-                    for (const key in mat.float_uniforms) {
-                        const track = mat.float_uniforms[key];
-                        if (track && track.keyframes) {
-                            for (const kf of track.keyframes) {
-                                const kx = timeToX(kf.time);
-                                if (kx >= barX && kx <= barX + barW) {
-                                    drawKeyframeDiamond(ctx, kx, y + TRACK_HEIGHT / 2, 4);
+            
+            // Keyframe diamonds (Material Uniforms)
+            if (ent.materials) {
+                for (const mat of ent.materials) {
+                    if (mat.float_uniforms) {
+                        for (const key in mat.float_uniforms) {
+                            const uniTrack = mat.float_uniforms[key];
+                            if (uniTrack && uniTrack.keyframes) {
+                                for (const kf of uniTrack.keyframes) {
+                                    const kx = timeToX(kf.time);
+                                    if (kx >= barX && kx <= barX + barW) {
+                                        drawKeyframeDiamond(ctx, kx, y + TRACK_HEIGHT / 2, 4);
+                                    }
                                 }
                             }
                         }
@@ -1015,33 +1192,53 @@ $('canvasTimeline').addEventListener('mousedown', e => {
     }
     
     // Click on track → select entity
-    const entities = getVisibleEntities();
+    const tracks = getVisibleTracks();
     const trackIdx = Math.floor((cssY - RULER_HEIGHT) / TRACK_HEIGHT);
-    if (trackIdx >= 0 && trackIdx < entities.length) {
-        const ent = entities[trackIdx];
-        selectedEntityId = ent.id;
-        if(engine) engine.select_entity_v2(ent.id);
-        if(!playing) requestRender();
+    if (trackIdx >= 0 && trackIdx < tracks.length) {
+        const track = tracks[trackIdx];
+        let clickedEnt = null;
+        for (const ent of track.entities) {
+            const ls = getEntityLifespan(ent);
+            if (clickTime >= ls.start && clickTime <= ls.end) {
+                clickedEnt = ent; // Last matching wins (top z-index visually)
+            }
+        }
+        if (clickedEnt) {
+            selectedEntityId = clickedEnt.id;
+            if (engine) engine.select_entity_v2(clickedEnt.id);
+            if (!playing) requestRender();
+        }
     }
 });
 
 $('canvasTimeline').addEventListener('dblclick', e => {
     const wrap = $('timelineCanvasWrap');
     const rect = wrap.getBoundingClientRect();
+    const cssX = e.clientX - rect.left;
     const cssY = e.clientY - rect.top;
     
     if (cssY < RULER_HEIGHT) return;
     
-    const entities = getVisibleEntities();
+    // Double click to drill
+    const tracks = getVisibleTracks();
     const trackIdx = Math.floor((cssY - RULER_HEIGHT) / TRACK_HEIGHT);
-    if (trackIdx >= 0 && trackIdx < entities.length) {
-        const ent = entities[trackIdx];
-        if (ent.composition) {
-            // Drill into composition
-            timelineScopePath.push({ id: timelineScope, label: timelineScope || 'Root' });
-            setRenderScope(ent.id);
-            renderBreadcrumb();
-            renderTimeline();
+    if (trackIdx >= 0 && trackIdx < tracks.length) {
+        const track = tracks[trackIdx];
+        const scopeD = getScopeDuration();
+        const clickTime = (cssX / rect.width) * scopeD;
+        
+        for (const ent of track.entities) {
+            const ls = getEntityLifespan(ent);
+            if (clickTime >= ls.start && clickTime <= ls.end) {
+                if (ent.composition) {
+                    // Drill into composition
+                    timelineScopePath.push({ id: timelineScope, label: timelineScope || 'Root' });
+                    setRenderScope(ent.id);
+                    renderBreadcrumb();
+                    renderTimeline();
+                }
+                break;
+            }
         }
     }
 });
@@ -1109,6 +1306,96 @@ const BASE_CAM = {
 $('selTestCase').onchange = async (e) => {
     const testId = e.target.value;
     if (!testId) return;
+
+    // ── Inline TC20 (ShaderScope: Clipped vs Padded) ──
+    if (testId === 'btnTestCase20_shader') {
+        const tc20 = {
+            project: { width: 1280, height: 720, fps: 30, duration: 5, name: "TC20 ShaderScope" },
+            entities: [
+                { id: "main_cam", camera: { resolutionWidth: 1280, resolutionHeight: 720, bgColor: [0.06,0.06,0.1,1] }, rect: { width: 1280, height: 720 }, transform: { x:640,y:360,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5 }, lifespan: { start:0, end:5 }, layer:0 },
+                { id: "bg", shapeSource: { kind:"rectangle", fillColor:[0.06,0.06,0.1,1] }, rect: { width:1280, height:720 }, transform: { x:640,y:360,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5 }, lifespan: { start:0, end:5 }, layer:0 },
+                { id: "padded_circle", shapeSource: { kind:"ellipse", fillColor:[0.2,0.6,1.0,1.0] }, rect: { width:200, height:200 }, transform: { x:400,y:300,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5 },
+                  materials: [{ shader_id:"glow", scope:"padded", float_uniforms:{ u0_radius:{keyframes:[{time:0,value:40}]}, u1_intensity:{keyframes:[{time:0,value:3}]} }, vec4_uniforms:{ u0_color:{keyframes:[{time:0,value:[0.3,0.7,1,1]}]} } }],
+                  lifespan: { start:0, end:5 }, layer:1 },
+                { id: "clipped_rect", shapeSource: { kind:"rectangle", fillColor:[1.0,0.4,0.2,1.0] }, rect: { width:200, height:120 }, transform: { x:850,y:300,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5 },
+                  materials: [{ shader_id:"blur", scope:"clipped", float_uniforms:{ u2_radius:{keyframes:[{time:0,value:20}]} } }],
+                  lifespan: { start:0, end:5 }, layer:1 },
+                { id: "label_padded", textSource: { content:"PADDED (glow overflow ✓)", fontSize:22, color:[0.5,0.9,1,1] }, rect: { width:300, height:40, fitMode:"contain" }, transform: { x:400,y:430,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5 }, lifespan: { start:0, end:5 }, layer:2 },
+                { id: "label_clipped", textSource: { content:"CLIPPED (blur hard edge ✓)", fontSize:22, color:[1,0.6,0.3,1] }, rect: { width:300, height:40, fitMode:"contain" }, transform: { x:850,y:430,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5 }, lifespan: { start:0, end:5 }, layer:2 }
+            ]
+        };
+        $('jsonEditor').value = JSON.stringify(tc20, null, 2);
+        if (engine) applyJson();
+        return;
+    }
+
+    // ── Inline TC21 (Multi-Camera Layer Isolation) ──
+    if (testId === 'btnTestCase21') {
+        const tc21 = {
+            project: { width: 1280, height: 720, fps: 30, duration: 5, name: "TC21 Multi-Camera Layers" },
+            entities: [
+                { id: "main_cam", camera: { resolutionWidth:1280, resolutionHeight:720, bgColor:[0.05,0.05,0.12,1], renderMode:"layers", targetLayers:[0,1,2], renderOrder:0 }, rect: { width:1280, height:720 }, transform: { x:640,y:360,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5 }, lifespan: { start:0, end:5 }, layer:0 },
+                { id: "overlay_cam", camera: { resolutionWidth:1280, resolutionHeight:720, bgColor:[0,0,0,0], renderMode:"layers", targetLayers:[100], renderOrder:1 }, rect: { width:1280, height:720 }, transform: { x:640,y:360,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5 }, lifespan: { start:0, end:5 }, layer:0 },
+                { id: "bg", shapeSource: { kind:"rectangle", fillColor:[0.06,0.06,0.12,1] }, rect: { width:1280, height:720 }, transform: { x:640,y:360,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5 }, lifespan: { start:0,end:5 }, layer:0 },
+                { id: "glow_circle", shapeSource: { kind:"ellipse", fillColor:[0.3,0.6,1,1] }, rect: { width:260,height:260 }, transform: { x:640,y:340,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5 },
+                  materials:[{ shader_id:"glow", scope:"padded", float_uniforms:{ u0_radius:{keyframes:[{time:0,value:50}]}, u1_intensity:{keyframes:[{time:0,value:3}]} }, vec4_uniforms:{ u0_color:{keyframes:[{time:0,value:[0.2,0.5,1,1]}]} } }],
+                  lifespan:{start:0,end:5}, layer:1 },
+                { id: "content_text", textSource:{ content:"Content Camera (Layer 0-2) + Glow", fontSize:24, color:[1,1,1,1] }, rect:{width:500,height:50,fitMode:"contain"}, transform:{x:640,y:590,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5}, lifespan:{start:0,end:5}, layer:2 },
+                { id: "overlay_frame", shapeSource:{ kind:"rectangle", fillColor:[0,0,0,0], strokeColor:[0,1,0.4,1], strokeWidth:5 }, rect:{width:280,height:280}, transform:{x:640,y:340,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5}, lifespan:{start:0,end:5}, layer:100 },
+                { id: "overlay_text", textSource:{ content:"Overlay Camera (Layer 100) — No glow bleed ✓", fontSize:18, color:[0,1,0.4,1] }, rect:{width:700,height:40,fitMode:"contain"}, transform:{x:640,y:60,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5}, lifespan:{start:0,end:5}, layer:100 }
+            ]
+        };
+        $('jsonEditor').value = JSON.stringify(tc21, null, 2);
+        if (engine) applyJson();
+        return;
+    }
+
+    // ── Inline TC22 (Master Camera Compositor) ──
+    if (testId === 'btnTestCase22') {
+        const tc22 = {
+            project: { width: 1280, height: 720, fps: 30, duration: 5, name: "TC22 Master Camera" },
+            entities: [
+                { id: "viewport_master", camera: { resolutionWidth:1280, resolutionHeight:720, renderMode:"cameras", targetCameras:["cam_content","cam_editor"], renderOrder:0 }, rect:{width:1280,height:720}, transform:{x:640,y:360,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5}, lifespan:{start:0,end:5}, layer:0 },
+                { id: "cam_content", camera: { resolutionWidth:1280, resolutionHeight:720, bgColor:[0.05,0.05,0.15,1], renderMode:"layers", targetLayers:[0,1,2], renderOrder:0 }, rect:{width:1280,height:720}, transform:{x:640,y:360,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5}, lifespan:{start:0,end:5}, layer:0 },
+                { id: "cam_editor", camera: { resolutionWidth:1280, resolutionHeight:720, bgColor:[0,0,0,0], renderMode:"layers", targetLayers:[10], renderOrder:1 }, rect:{width:1280,height:720}, transform:{x:640,y:360,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5}, lifespan:{start:0,end:5}, layer:0 },
+                { id: "bg", shapeSource:{ kind:"rectangle", fillColor:[0.08,0.08,0.18,1] }, rect:{width:1280,height:720}, transform:{x:640,y:360,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5}, lifespan:{start:0,end:5}, layer:0 },
+                { id: "glow_ball", shapeSource:{ kind:"ellipse", fillColor:[0.2,0.5,1,1] }, rect:{width:250,height:250}, transform:{x:640,y:350,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5},
+                  materials:[{ shader_id:"glow", scope:"padded", float_uniforms:{ u0_radius:{keyframes:[{time:0,value:50}]}, u1_intensity:{keyframes:[{time:0,value:3}]} }, vec4_uniforms:{ u0_color:{keyframes:[{time:0,value:[0.3,0.6,1,1]}]} } }],
+                  lifespan:{start:0,end:5}, layer:1 },
+                { id: "content_lbl", textSource:{ content:"Content Camera (Layer 0-2) • Glow active", fontSize:24, color:[1,1,1,1] }, rect:{width:550,height:50,fitMode:"contain"}, transform:{x:640,y:580,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5}, lifespan:{start:0,end:5}, layer:2 },
+                { id: "editor_sel", shapeSource:{ kind:"rectangle", fillColor:[0,0,0,0], strokeColor:[0,1,0.4,1], strokeWidth:5 }, rect:{width:266,height:266}, transform:{x:640,y:350,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5}, lifespan:{start:0,end:5}, layer:10 },
+                { id: "editor_lbl", textSource:{ content:"Master Cam → [cam_content, cam_editor] • Editor layer=10", fontSize:18, color:[0,1,0.4,1] }, rect:{width:800,height:40,fitMode:"contain"}, transform:{x:640,y:55,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5}, lifespan:{start:0,end:5}, layer:10 }
+            ]
+        };
+        $('jsonEditor').value = JSON.stringify(tc22, null, 2);
+        if (engine) applyJson();
+        return;
+    }
+    
+    // ── Inline TC23 (Camera Track Cuts) ──
+    if (testId === 'btnTestCase23') {
+        const tc23 = {
+            project: { width: 1280, height: 720, fps: 30, duration: 10, name: "TC23 Camera Cuts" },
+            entities: [
+                { id: "bg", shapeSource:{ kind:"rectangle", fillColor:[0.1,0.1,0.1,1] }, rect:{width:1280,height:720}, transform:{x:640,y:360,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5}, lifespan:{start:0,end:10}, layer:0 },
+                { id: "content_left", shapeSource:{ kind:"rectangle", fillColor:[1,0.2,0.2,1] }, rect:{width:300,height:300}, transform:{x:300,y:360,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5}, lifespan:{start:0,end:10}, layer:1 },
+                { id: "content_right", shapeSource:{ kind:"rectangle", fillColor:[0.2,0.5,1,1] }, rect:{width:300,height:300}, transform:{x:980,y:360,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5}, lifespan:{start:0,end:10}, layer:1 },
+                
+                // Track 1 (Layer 10) - Cameras with lifespan.end = -1
+                { id: "cam_1", camera: { renderMode:"layers", targetLayers:[0,1], renderOrder:0 }, rect:{width:1280,height:720}, transform:{x:300,y:360,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5}, lifespan:{start:0,end:-1}, layer:10 },
+                { id: "cam_2", camera: { renderMode:"layers", targetLayers:[0,1], renderOrder:0 }, rect:{width:1280,height:720}, transform:{x:980,y:360,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5}, lifespan:{start:3.5,end:-1}, layer:10 },
+                { id: "cam_3", camera: { renderMode:"layers", targetLayers:[0,1], renderOrder:0 }, rect:{width:1280,height:720}, transform:{x:640,y:360,rotation:0,scaleX:1.5,scaleY:1.5,anchorX:0.5,anchorY:0.5}, lifespan:{start:7.0,end:-1}, layer:10 },
+                
+                // Master Cam that renders whatever camera is active on Layer 10
+                { id: "master_cam", camera: { renderMode:"cameras", targetCameras:["cam_1", "cam_2", "cam_3"], renderOrder:99 }, rect:{width:1280,height:720}, transform:{x:640,y:360,rotation:0,scaleX:1,scaleY:1,anchorX:0.5,anchorY:0.5}, lifespan:{start:0,end:10}, layer:99 }
+            ]
+        };
+        $('jsonEditor').value = JSON.stringify(tc23, null, 2);
+        if (engine) applyJson();
+        return;
+    }
+
+    // ── Generic: load from /tests/ folder ──
     try {
         const res = await fetch(`/tests/${testId}.json`);
         const jsonText = await res.text();
@@ -1117,6 +1404,10 @@ $('selTestCase').onchange = async (e) => {
     } catch(err) {
         console.error("Failed to load test case", err);
     }
+};
+
+$('selViewCamera').onchange = () => {
+    if (!playing) requestRender();
 };
 
 $('btnTestCase19').onclick = () => {

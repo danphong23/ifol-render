@@ -194,8 +194,8 @@ pub fn build_entity_passes(
 
             let layer = if storages.get_component::<crate::ecs::components::CameraComponent>(&entity.id).is_some() { 9999 } else { entity.resolved.layer };
 
-            local_flat_list.push(FlatEntity {
-                id: 0,
+            let mut fe = FlatEntity {
+                id: 0, content_hash: 0,
                 x: flat_x, y: flat_y,
                 width: w, height: h,
                 rotation: call.rotation,
@@ -208,14 +208,16 @@ pub fn build_entity_passes(
                 fit_mode: match call.fit_mode { crate::ecs::components::FitMode::Contain => 1, crate::ecs::components::FitMode::Cover => 2, _ => 0 },
                 uv_offset, uv_scale,
                 intrinsic_width: iw, intrinsic_height: ih,
-            });
+            };
+            fe.content_hash = fe.calculate_hash();
+            local_flat_list.push(fe);
         }
 
-        let flat_entities = state.comp_lists.entry(target_comp.clone()).or_default();
+        let mut local_entities_to_push = Vec::new();
 
         if has_effects {
             let input_base_key = format!("_ent_src_{}", entity.id);
-            state.passes.push(RenderPass {
+            state.push_pass(RenderPass { pass_hash: 0,
                 output: input_base_key.clone(),
                 pass_type: PassType::Entities { entities: local_flat_list, clear_color: [0.0, 0.0, 0.0, 0.0] },
                 target_width: Some(ew as u32), target_height: Some(eh as u32),
@@ -224,7 +226,7 @@ pub fn build_entity_passes(
             let mut current_key = input_base_key.clone();
             for (i, effect) in padded_effects.iter().enumerate() {
                 let out_key = format!("_ent_fx_{}_{}", entity.id, i);
-                state.passes.push(RenderPass {
+                state.push_pass(RenderPass { pass_hash: 0,
                     output: out_key.clone(),
                     pass_type: PassType::Effect { shader: effect.shader_id.clone(), inputs: vec![current_key], params: effect.params.clone() },
                     target_width: Some(ew as u32), target_height: Some(eh as u32),
@@ -233,7 +235,7 @@ pub fn build_entity_passes(
 
                 if effect.scope == crate::schema::v2::ShaderScope::Masked {
                     let masked_key = format!("_ent_masked_{}_{}", entity.id, i);
-                    state.passes.push(RenderPass {
+                    state.push_pass(RenderPass { pass_hash: 0,
                         output: masked_key.clone(),
                         pass_type: PassType::Effect { shader: "mask_composite".to_string(), inputs: vec![current_key, input_base_key.clone()], params: vec![0.0, 0.0, 0.0, 0.0] },
                         target_width: Some(ew as u32), target_height: Some(eh as u32),
@@ -254,14 +256,14 @@ pub fn build_entity_passes(
                 let acc_key = state.current_acc_key.clone().unwrap_or_else(|| "final_acc".to_string());
 
                 // 1. Snapshot current accumulation → dst for blend math
-                state.passes.push(RenderPass {
+                state.push_pass(RenderPass { pass_hash: 0,
                     output: dst_key.clone(),
                     pass_type: PassType::Snapshot { source_key: acc_key },
                     target_width: Some(state.screen_width), target_height: Some(state.screen_height),
                 });
 
                 // 2. Run blend_composite: src=entity texture, dst=snapshot → blended output
-                state.passes.push(RenderPass {
+                state.push_pass(RenderPass { pass_hash: 0,
                     output: bout_key.clone(),
                     pass_type: PassType::Effect {
                         shader: "blend_composite".to_string(),
@@ -285,8 +287,8 @@ pub fn build_entity_passes(
                 (r.opacity, blend_id)
             };
 
-            flat_entities.push(FlatEntity {
-                id: 0,
+            let mut fe = FlatEntity {
+                id: 0, content_hash: 0,
                 x: (r.x - local_cam_x) * local_sx - ew * 0.5,
                 y: (r.y - local_cam_y) * local_sy - eh * 0.5,
                 width: ew, height: eh,
@@ -299,7 +301,9 @@ pub fn build_entity_passes(
                 layer, z_index: layer as f32,
                 fit_mode: 0, uv_offset: [0.0, 0.0], uv_scale: [1.0, 1.0],
                 intrinsic_width: ew, intrinsic_height: eh,
-            });
+            };
+            fe.content_hash = fe.calculate_hash();
+            local_entities_to_push.push(fe);
 
         } else {
             // No effects — entities go directly into the accumulation list.
@@ -311,7 +315,7 @@ pub fn build_entity_passes(
                     let blend_id = fe.blend_mode;
                     if blend_id == 0 || blend_id == 11 || blend_id == 12 {
                         // Normal or mask — push directly
-                        flat_entities.push(fe);
+                        local_entities_to_push.push(fe);
                     } else {
                         // T2.4b: non-Normal blend without effects — inject 2-pass blend
                         let src_key = format!("_bsrc_{}_{}", entity.id, blend_id);
@@ -326,21 +330,21 @@ pub fn build_entity_passes(
                         // Position in isolated pass (same origin as entity center)
                         let iso_w = fe.width.max(1.0).ceil() as u32;
                         let iso_h = fe.height.max(1.0).ceil() as u32;
-                        state.passes.push(RenderPass {
+                        state.push_pass(RenderPass { pass_hash: 0,
                             output: src_key.clone(),
                             pass_type: PassType::Entities { entities: vec![src_fe], clear_color: [0.0, 0.0, 0.0, 0.0] },
                             target_width: Some(iso_w), target_height: Some(iso_h),
                         });
 
                         // Snapshot accumulation
-                        state.passes.push(RenderPass {
+                        state.push_pass(RenderPass { pass_hash: 0,
                             output: dst_key.clone(),
                             pass_type: PassType::Snapshot { source_key: acc_key },
                             target_width: Some(state.screen_width), target_height: Some(state.screen_height),
                         });
 
                         // blend_composite
-                        state.passes.push(RenderPass {
+                        state.push_pass(RenderPass { pass_hash: 0,
                             output: bout_key.clone(),
                             pass_type: PassType::Effect {
                                 shader: "blend_composite".to_string(),
@@ -350,9 +354,8 @@ pub fn build_entity_passes(
                             target_width: Some(state.screen_width), target_height: Some(state.screen_height),
                         });
 
-                        // Composite blended result at full size with Normal blend
-                        flat_entities.push(FlatEntity {
-                            id: 0,
+                        let mut fe_composite = FlatEntity {
+                            id: 0, content_hash: 0,
                             x: 0.0, y: 0.0,
                             width: state.screen_width as f32, height: state.screen_height as f32,
                             rotation: 0.0, opacity: 1.0, blend_mode: 0,
@@ -362,33 +365,39 @@ pub fn build_entity_passes(
                             layer: fe.layer, z_index: fe.z_index,
                             fit_mode: 0, uv_offset: [0.0, 0.0], uv_scale: [1.0, 1.0],
                             intrinsic_width: 0.0, intrinsic_height: 0.0,
-                        });
+                        };
+                        fe_composite.content_hash = fe_composite.calculate_hash();
+                        local_entities_to_push.push(fe_composite);
                     }
                 }
             } else {
-                flat_entities.extend(local_flat_list);
+                local_entities_to_push.extend(local_flat_list);
             }
         }
 
+
+        if !local_entities_to_push.is_empty() {
+            state.comp_lists.entry(target_comp.clone()).or_default().extend(local_entities_to_push);
+        }
 
         // ── Handle Adjustment Layer Effects ──
         if let Some(layer_fx) = layer_effects_map.get(&entity.id) {
             let fw = if target_comp == "main" { state.screen_width } else { state.comp_cameras.get(&target_comp).unwrap().2 as u32 };
             let fh = if target_comp == "main" { state.screen_height } else { state.comp_cameras.get(&target_comp).unwrap().3 as u32 };
 
-            let flat_entities = state.comp_lists.entry(target_comp.clone()).or_default();
-            if !flat_entities.is_empty() {
+            let taken_entities = std::mem::take(state.comp_lists.entry(target_comp.clone()).or_default());
+            if !taken_entities.is_empty() {
                 let src_key = format!("_layer_src_{}", entity.id);
-                state.passes.push(RenderPass {
+                state.push_pass(RenderPass { pass_hash: 0,
                     output: src_key.clone(),
-                    pass_type: PassType::Entities { entities: std::mem::take(flat_entities), clear_color: [0.0, 0.0, 0.0, 0.0] },
+                    pass_type: PassType::Entities { entities: taken_entities, clear_color: [0.0, 0.0, 0.0, 0.0] },
                     target_width: Some(fw), target_height: Some(fh),
                 });
 
                 let mut current_key = src_key;
                 for (i, effect) in layer_fx.iter().enumerate() {
                     let out_key = format!("_layer_fx_{}_{}", entity.id, i);
-                    state.passes.push(RenderPass {
+                    state.push_pass(RenderPass { pass_hash: 0,
                         output: out_key.clone(),
                         pass_type: PassType::Effect { shader: effect.shader_id.clone(), inputs: vec![current_key], params: effect.params.clone() },
                         target_width: Some(fw), target_height: Some(fh),
@@ -396,8 +405,8 @@ pub fn build_entity_passes(
                     current_key = out_key;
                 }
 
-                flat_entities.push(FlatEntity {
-                    id: 0, x: 0.0, y: 0.0,
+                let mut fe = FlatEntity {
+                    id: 0, content_hash: 0, x: 0.0, y: 0.0,
                     width: fw as f32, height: fh as f32,
                     rotation: 0.0, opacity: 1.0, blend_mode: 0,
                     color: [1.0, 1.0, 1.0, 1.0],
@@ -406,7 +415,9 @@ pub fn build_entity_passes(
                     layer: entity.resolved.layer, z_index: entity.resolved.layer as f32,
                     fit_mode: 0, uv_offset: [0.0, 0.0], uv_scale: [1.0, 1.0],
                     intrinsic_width: 0.0, intrinsic_height: 0.0,
-                });
+                };
+                fe.content_hash = fe.calculate_hash();
+                state.comp_lists.entry(target_comp.clone()).or_default().push(fe);
             }
         }
     }
