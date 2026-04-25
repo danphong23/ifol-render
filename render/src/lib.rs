@@ -1194,7 +1194,7 @@ impl Renderer {
                     label: Some("Direct Frame Encoder"),
                 });
 
-        let surface_frame = self.render_frame_to(&mut encoder, commands, clear_color, None, w, h);
+        let surface_frame = self.render_frame_to(&mut encoder, commands, Some(clear_color), None, w, h);
 
         self.engine.queue.submit(std::iter::once(encoder.finish()));
 
@@ -1216,7 +1216,7 @@ impl Renderer {
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         commands: &[DrawCommand],
-        clear_color: [f32; 4],
+        clear_color: Option<[f32; 4]>,
         output_key: Option<&str>,
         target_width: u32,
         target_height: u32,
@@ -1430,18 +1430,24 @@ impl Renderer {
 
         // Phase 3: Single render pass, minimize pipeline switches
         {
+            let load_op = if let Some(c) = clear_color {
+                wgpu::LoadOp::Clear(wgpu::Color {
+                    r: c[0] as f64,
+                    g: c[1] as f64,
+                    b: c[2] as f64,
+                    a: c[3] as f64,
+                })
+            } else {
+                wgpu::LoadOp::Load
+            };
+
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &output_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: clear_color[0] as f64,
-                            g: clear_color[1] as f64,
-                            b: clear_color[2] as f64,
-                            a: clear_color[3] as f64,
-                        }),
+                        load: load_op,
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -1514,7 +1520,7 @@ impl Renderer {
         let surface_frame = self.render_frame_to(
             &mut master_encoder,
             commands,
-            [0.0, 0.0, 0.0, 1.0],
+            Some([0.0, 0.0, 0.0, 1.0]),
             Some("effect_input_temp"),
             w,
             h,

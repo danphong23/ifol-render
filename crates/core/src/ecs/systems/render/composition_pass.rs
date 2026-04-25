@@ -55,7 +55,7 @@ pub fn compile_composition_buffers(
 
         state.push_pass(RenderPass { pass_hash: 0,
             output: comp_tex_key.clone(),
-            pass_type: PassType::Entities { entities: list, clear_color: [0.0, 0.0, 0.0, 0.0] },
+            pass_type: PassType::Entities { entities: list, clear_color: Some([0.0, 0.0, 0.0, 0.0]) },
             target_width: Some(cw as u32), target_height: Some(ch as u32),
         });
 

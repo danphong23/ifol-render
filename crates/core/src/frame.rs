@@ -289,7 +289,12 @@ impl RenderPass {
         match &self.pass_type {
             PassType::Entities { entities, clear_color } => {
                 hasher.write_u8(0);
-                for c in clear_color { hasher.write_u32(c.to_bits()); }
+                if let Some(c) = clear_color {
+                    hasher.write_u8(1);
+                    for ch in c { hasher.write_u32(ch.to_bits()); }
+                } else {
+                    hasher.write_u8(0);
+                }
                 for e in entities { hasher.write_u64(e.content_hash); }
             }
             PassType::Effect { shader, inputs, params } => {
@@ -322,7 +327,7 @@ pub enum PassType {
         entities: Vec<FlatEntity>,
         /// Background color for this pass (RGBA).
         #[serde(default)]
-        clear_color: [f32; 4],
+        clear_color: Option<[f32; 4]>,
     },
     /// Apply a fullscreen shader effect on input texture(s).
     Effect {

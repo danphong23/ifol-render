@@ -239,7 +239,7 @@ fn build_single_camera_pass(
         output: base_output.clone(),
         pass_type: PassType::Entities {
             entities: flat_entities,
-            clear_color: [0.0, 0.0, 0.0, 0.0],
+            clear_color: Some([0.0, 0.0, 0.0, 0.0]),
         },
         target_width: if state.camera_effects.is_empty() { None } else { Some(screen_width) },
         target_height: if state.camera_effects.is_empty() { None } else { Some(screen_height) },
@@ -313,15 +313,81 @@ fn build_multi_camera_passes(
             format!("{}_src", cam_key)
         };
 
-        state.push_pass(RenderPass { pass_hash: 0,
-            output: src_key.clone(),
-            pass_type: PassType::Entities {
-                entities: cam_entities,
-                clear_color: [0.0, 0.0, 0.0, 0.0],
-            },
-            target_width: Some(scaled_width),
-            target_height: Some(scaled_height),
-        });
+        state.current_acc_key = Some(src_key.clone());
+
+        let mut current_batch = Vec::new();
+        let mut is_first_batch = true;
+
+        for fe in cam_entities {
+            let blend_id = fe.blend_mode;
+            // 0 = Normal, 11 = MaskIn, 12 = MaskOut
+            if blend_id == 0 || blend_id == 11 || blend_id == 12 {
+                current_batch.push(fe);
+            } else {
+                // Photoshop blend mode: 2-pass blending required
+                // 1. Flush current batch
+                if !current_batch.is_empty() || is_first_batch {
+                    let clear_color = if is_first_batch { Some([0.0, 0.0, 0.0, 0.0]) } else { None };
+                    state.push_pass(RenderPass { pass_hash: 0,
+                        output: src_key.clone(),
+                        pass_type: PassType::Entities {
+                            entities: std::mem::take(&mut current_batch),
+                            clear_color,
+                        },
+                        target_width: Some(scaled_width),
+                        target_height: Some(scaled_height),
+                    });
+                    is_first_batch = false;
+                }
+
+                // 2. Snapshot the current camera target
+                let dst_key = format!("_bdst_{}_{}", cam_info.entity_id, fe.id);
+                state.push_pass(RenderPass { pass_hash: 0,
+                    output: dst_key.clone(),
+                    pass_type: PassType::Snapshot { source_key: src_key.clone() },
+                    target_width: Some(scaled_width), target_height: Some(scaled_height),
+                });
+
+                // 3. Render the entity isolated
+                let iso_key = format!("_bsrc_{}_{}", cam_info.entity_id, fe.id);
+                let mut iso_fe = fe.clone();
+                iso_fe.blend_mode = 0; // Normal blend in isolated buffer
+                iso_fe.opacity = 1.0;
+                state.push_pass(RenderPass { pass_hash: 0,
+                    output: iso_key.clone(),
+                    pass_type: PassType::Entities {
+                        entities: vec![iso_fe],
+                        clear_color: Some([0.0, 0.0, 0.0, 0.0]),
+                    },
+                    target_width: Some(scaled_width), target_height: Some(scaled_height),
+                });
+
+                // 4. Composite them directly back to the camera target
+                state.push_pass(RenderPass { pass_hash: 0,
+                    output: src_key.clone(),
+                    pass_type: PassType::Effect {
+                        shader: "blend_composite".to_string(),
+                        inputs: vec![iso_key, dst_key],
+                        params: vec![blend_id as f32, fe.opacity, 0.0, 0.0],
+                    },
+                    target_width: Some(scaled_width), target_height: Some(scaled_height),
+                });
+            }
+        }
+
+        // Flush any remaining normal entities
+        if !current_batch.is_empty() || is_first_batch {
+            let clear_color = if is_first_batch { Some([0.0, 0.0, 0.0, 0.0]) } else { None };
+            state.push_pass(RenderPass { pass_hash: 0,
+                output: src_key.clone(),
+                pass_type: PassType::Entities {
+                    entities: current_batch,
+                    clear_color,
+                },
+                target_width: Some(scaled_width),
+                target_height: Some(scaled_height),
+            });
+        }
 
         // Apply this camera's post_effects chain
         let mut current_key = src_key;

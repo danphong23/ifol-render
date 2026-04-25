@@ -222,7 +222,7 @@ pub fn build_entity_passes(
             let input_base_key = format!("_ent_src_{}", entity.id);
             state.push_pass(RenderPass { pass_hash: 0,
                 output: input_base_key.clone(),
-                pass_type: PassType::Entities { entities: local_flat_list, clear_color: [0.0, 0.0, 0.0, 0.0] },
+                pass_type: PassType::Entities { entities: local_flat_list, clear_color: Some([0.0, 0.0, 0.0, 0.0]) },
                 target_width: Some(ew as u32), target_height: Some(eh as u32),
             });
 
@@ -248,47 +248,7 @@ pub fn build_entity_passes(
             }
 
             let layer = if storages.get_component::<crate::ecs::components::CameraComponent>(&entity.id).is_some() { 9999 } else { entity.resolved.layer };
-            let blend_id = r.blend_mode.as_u32();
-
-            // T2.4: If blend mode requires reading the destination (Multiply/Screen/Overlay/etc.),
-            // inject a snapshot pass + blend_composite pass for accurate per-pixel blending.
-            // Modes 0 (Normal), 11 (mask_in), 12 (mask_out) use hardware blending — skip.
-            let composite_tex = if blend_id != 0 && blend_id != 11 && blend_id != 12 {
-                let dst_key = format!("_bdst_{}", entity.id);
-                let bout_key = format!("_bout_{}", entity.id);
-                let acc_key = state.current_acc_key.clone().unwrap_or_else(|| "final_acc".to_string());
-
-                // 1. Snapshot current accumulation → dst for blend math
-                state.push_pass(RenderPass { pass_hash: 0,
-                    output: dst_key.clone(),
-                    pass_type: PassType::Snapshot { source_key: acc_key },
-                    target_width: Some(state.screen_width), target_height: Some(state.screen_height),
-                });
-
-                // 2. Run blend_composite: src=entity texture, dst=snapshot → blended output
-                state.push_pass(RenderPass { pass_hash: 0,
-                    output: bout_key.clone(),
-                    pass_type: PassType::Effect {
-                        shader: "blend_composite".to_string(),
-                        inputs: vec![current_key.clone(), dst_key],
-                        params: vec![blend_id as f32, r.opacity, 0.0, 0.0],
-                    },
-                    target_width: Some(state.screen_width), target_height: Some(state.screen_height),
-                });
-
-                bout_key
-            } else {
-                current_key.clone()
-            };
-
-            // 3. Add Normal-blend entity compositing the final texture into accumulation.
-            // For blend modes: opacity is already baked into blend_composite output — use 1.0.
-            // For Normal/Mask modes: use actual opacity.
-            let (final_opacity, final_blend) = if blend_id != 0 && blend_id != 11 && blend_id != 12 {
-                (1.0, 0u32) // Blend math baked in — composite with Normal at full opacity
-            } else {
-                (r.opacity, blend_id)
-            };
+            let final_blend = r.blend_mode.as_u32();
 
             let mut fe = FlatEntity {
                 id: 0, content_hash: 0,
@@ -296,11 +256,11 @@ pub fn build_entity_passes(
                 y: (r.y - local_cam_y) * local_sy - eh * 0.5,
                 width: ew, height: eh,
                 rotation: 0.0,
-                opacity: final_opacity,
+                opacity: r.opacity,
                 blend_mode: final_blend,
                 color: [1.0, 1.0, 1.0, 1.0],
                 shader: if final_blend == 11 { "composite_mask_in".to_string() } else if final_blend == 12 { "composite_mask_out".to_string() } else { "composite".to_string() },
-                textures: vec![composite_tex], params: vec![],
+                textures: vec![current_key], params: vec![],
                 layer, z_index: layer as f32,
                 fit_mode: 0, uv_offset: [0.0, 0.0], uv_scale: [1.0, 1.0],
                 intrinsic_width: ew, intrinsic_height: eh,
@@ -310,72 +270,7 @@ pub fn build_entity_passes(
 
         } else {
             // No effects — entities go directly into the accumulation list.
-            // For non-Normal blend modes without effects, inject 2-pass blend for each draw call
-            // that has a non-Normal blend mode. Most entities only have 1 draw call.
-            let has_non_normal = local_flat_list.iter().any(|e| e.blend_mode != 0 && e.blend_mode != 11 && e.blend_mode != 12);
-            if has_non_normal {
-                for fe in local_flat_list {
-                    let blend_id = fe.blend_mode;
-                    if blend_id == 0 || blend_id == 11 || blend_id == 12 {
-                        // Normal or mask — push directly
-                        local_entities_to_push.push(fe);
-                    } else {
-                        // T2.4b: non-Normal blend without effects — inject 2-pass blend
-                        let src_key = format!("_bsrc_{}_{}", entity.id, blend_id);
-                        let dst_key = format!("_bdst_{}_{}", entity.id, blend_id);
-                        let bout_key = format!("_bout_{}_{}", entity.id, blend_id);
-                        let acc_key = state.current_acc_key.clone().unwrap_or_else(|| "final_acc".to_string());
-
-                        // Render isolated into src
-                        let mut src_fe = fe.clone();
-                        src_fe.blend_mode = 0; // Render as Normal into isolated buffer
-                        src_fe.opacity = 1.0;
-                        // Position in isolated pass (same origin as entity center)
-                        let iso_w = fe.width.max(1.0).ceil() as u32;
-                        let iso_h = fe.height.max(1.0).ceil() as u32;
-                        state.push_pass(RenderPass { pass_hash: 0,
-                            output: src_key.clone(),
-                            pass_type: PassType::Entities { entities: vec![src_fe], clear_color: [0.0, 0.0, 0.0, 0.0] },
-                            target_width: Some(iso_w), target_height: Some(iso_h),
-                        });
-
-                        // Snapshot accumulation
-                        state.push_pass(RenderPass { pass_hash: 0,
-                            output: dst_key.clone(),
-                            pass_type: PassType::Snapshot { source_key: acc_key },
-                            target_width: Some(state.screen_width), target_height: Some(state.screen_height),
-                        });
-
-                        // blend_composite
-                        state.push_pass(RenderPass { pass_hash: 0,
-                            output: bout_key.clone(),
-                            pass_type: PassType::Effect {
-                                shader: "blend_composite".to_string(),
-                                inputs: vec![src_key, dst_key],
-                                params: vec![blend_id as f32, fe.opacity, 0.0, 0.0],
-                            },
-                            target_width: Some(state.screen_width), target_height: Some(state.screen_height),
-                        });
-
-                        let mut fe_composite = FlatEntity {
-                            id: 0, content_hash: 0,
-                            x: 0.0, y: 0.0,
-                            width: state.screen_width as f32, height: state.screen_height as f32,
-                            rotation: 0.0, opacity: 1.0, blend_mode: 0,
-                            color: [1.0, 1.0, 1.0, 1.0],
-                            shader: "composite".to_string(),
-                            textures: vec![bout_key], params: vec![],
-                            layer: fe.layer, z_index: fe.z_index,
-                            fit_mode: 0, uv_offset: [0.0, 0.0], uv_scale: [1.0, 1.0],
-                            intrinsic_width: 0.0, intrinsic_height: 0.0,
-                        };
-                        fe_composite.content_hash = fe_composite.calculate_hash();
-                        local_entities_to_push.push(fe_composite);
-                    }
-                }
-            } else {
-                local_entities_to_push.extend(local_flat_list);
-            }
+            local_entities_to_push.extend(local_flat_list);
         }
 
 
@@ -393,7 +288,7 @@ pub fn build_entity_passes(
                 let src_key = format!("_layer_src_{}", entity.id);
                 state.push_pass(RenderPass { pass_hash: 0,
                     output: src_key.clone(),
-                    pass_type: PassType::Entities { entities: taken_entities, clear_color: [0.0, 0.0, 0.0, 0.0] },
+                    pass_type: PassType::Entities { entities: taken_entities, clear_color: Some([0.0, 0.0, 0.0, 0.0]) },
                     target_width: Some(fw), target_height: Some(fh),
                 });
 

@@ -492,7 +492,7 @@ impl CoreEngine {
                     self.renderer.render_frame_to(
                         &mut encoder,
                         &commands,
-                        [0.0, 0.0, 0.0, 0.0],
+                        Some([0.0, 0.0, 0.0, 0.0]),
                         Some(&pass.output),
                         target_w,
                         target_h,
@@ -514,7 +514,7 @@ impl CoreEngine {
                     surface_frame_res = self.renderer.render_frame_to(
                         &mut encoder,
                         &commands,
-                        [0.0, 0.0, 0.0, 1.0],
+                        Some([0.0, 0.0, 0.0, 1.0]),
                         None,
                         target_w,
                         target_h,
@@ -761,7 +761,7 @@ impl CoreEngine {
                                 self.renderer.render_frame_to(
                                     &mut encoder,
                                     &commands,
-                                    [0.0; 4],
+                                    Some([0.0; 4]),
                                     Some(&pass.output),
                                     target_w,
                                     target_h,
@@ -783,7 +783,7 @@ impl CoreEngine {
                                 self.renderer.render_frame_to(
                                     &mut encoder,
                                     &commands,
-                                    [0.0, 0.0, 0.0, 1.0],
+                                    Some([0.0, 0.0, 0.0, 1.0]),
                                     None,
                                     target_w,
                                     target_h,
