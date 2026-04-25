@@ -1,11 +1,10 @@
 pub mod state;
 pub mod effect_pass;
 pub mod composition_pass;
-pub mod gizmo_overlay;
-
-pub use gizmo_overlay::*;
 
 use crate::ecs::{World, ContextView};
+use crate::ecs::components::camera::CameraRenderMode;
+use crate::ecs::systems::render::state::SceneCameraInfo;
 use crate::frame::{Frame, PassType, RenderPass};
 use state::RenderState;
 
@@ -16,10 +15,6 @@ pub fn render_to_frame(
     screen_width: u32,
     screen_height: u32,
     _time_secs: f64,
-    custom_cam_x: Option<f32>,
-    custom_cam_y: Option<f32>,
-    custom_cam_w: Option<f32>,
-    custom_cam_h: Option<f32>,
     context: &ContextView,
 ) -> Frame {
     let mut state = RenderState::new(screen_width, screen_height);
@@ -30,24 +25,23 @@ pub fn render_to_frame(
     let cam_top_left_x = cam.map(|c| c.resolved.x - c.resolved.width * 0.5).unwrap_or(0.0);
     let cam_top_left_y = cam.map(|c| c.resolved.y - c.resolved.height * 0.5).unwrap_or(0.0);
 
-    state.root_cam_x = custom_cam_x.unwrap_or(cam_top_left_x);
-    state.root_cam_y = custom_cam_y.unwrap_or(cam_top_left_y);
-    state.root_cam_w = custom_cam_w
-        .unwrap_or_else(|| cam.map(|c| c.resolved.width).unwrap_or(1280.0))
-        .max(1.0);
-    state.root_cam_h = custom_cam_h
-        .unwrap_or_else(|| cam.map(|c| c.resolved.height).unwrap_or(720.0))
-        .max(1.0);
-        
+    state.root_cam_x = cam_top_left_x;
+    state.root_cam_y = cam_top_left_y;
+    state.root_cam_w = cam.map(|c| c.resolved.width).unwrap_or(1280.0).max(1.0);
+    state.root_cam_h = cam.map(|c| c.resolved.height).unwrap_or(720.0).max(1.0);
+
     state.root_sx = screen_width as f32 / state.root_cam_w;
     state.root_sy = screen_height as f32 / state.root_cam_h;
 
-    state.root_cam_mask = cam
-        .and_then(|c| storages.get_component::<crate::ecs::components::CameraComponent>(&c.id))
+    let root_cam_component = cam
+        .and_then(|c| storages.get_component::<crate::ecs::components::CameraComponent>(&c.id));
+
+    state.root_cam_mask = root_cam_component
         .map(|c| c.culling_mask)
         .unwrap_or(crate::ecs::RENDER_MASK_ALL);
 
     // ── Pre-discover Composition Cameras ──
+    // Compute sorted entity list ONCE — reused by camera discovery and effect_pass.
     let sorted = world.sorted_by_layer();
     for entity in &sorted {
         if !entity.resolved.visible { continue; }
@@ -73,30 +67,168 @@ pub fn render_to_frame(
                     .map(|cam| cam.culling_mask)
                     .unwrap_or(crate::ecs::RENDER_MASK_DEFAULT);
 
-                // The inner cam's VIEW origin in world space:
-                // fixed: visually top-left relative
                 let inner_cam_x = c.resolved.x - cw * 0.5;
                 let inner_cam_y = c.resolved.y - ch * 0.5;
                 state.comp_cameras.insert(entity.id.clone(), (inner_cam_x, inner_cam_y, cw, ch, mask));
             } else {
-                log::warn!("Composition '{}' has no direct child CameraComponent, skipping render", entity.id);
+                // Fallback virtual camera matching the composition's own bounds!
+                // This prevents the composition from disappearing if the user forgets to add a camera.
+                let cw = entity.resolved.width.max(1.0);
+                let ch = entity.resolved.height.max(1.0);
+                let inner_cam_x = entity.resolved.x - cw * 0.5;
+                let inner_cam_y = entity.resolved.y - ch * 0.5;
+                state.comp_cameras.insert(entity.id.clone(), (inner_cam_x, inner_cam_y, cw, ch, crate::ecs::RENDER_MASK_DEFAULT));
             }
         }
     }
 
+    // ── Phase 5: Discover all root-level scene cameras ──
+    // A "root-level" camera is one that is NOT a child of a Composition entity
+    // and is not scoped into one. These drive multi-camera compositing.
+    {
+        let mut root_cameras: Vec<SceneCameraInfo> = Vec::new();
+
+        for entity in &sorted {
+            if !entity.resolved.visible { continue; }
+            if !context.active_entities.contains(&entity.id) { continue; }
+            let cam_comp = match storages.get_component::<crate::ecs::components::CameraComponent>(&entity.id) {
+                Some(c) => c,
+                None => continue,
+            };
+
+            // Skip cameras that are children of a Composition (those are nested cams)
+            let is_root_cam = {
+                let mut is_root = true;
+                let mut cur = entity.id.clone();
+                for _ in 0..32 {
+                    if let Some(pid) = storages.get_component::<crate::ecs::components::meta::ParentId>(&cur) {
+                        if storages.get_component::<crate::ecs::components::Composition>(&pid.0).is_some() {
+                            is_root = false;
+                            break;
+                        }
+                        cur = pid.0.clone();
+                    } else { break; }
+                }
+                is_root
+            };
+            if !is_root_cam { continue; }
+
+            // Evaluate post_effects for this camera via material_sys
+            let eval_post_fx = |mat_list: &Vec<crate::scene::MaterialV2>, scope_time: f64|
+                -> Vec<crate::ecs::components::draw::EffectPassDef> {
+                mat_list.iter().map(|mat| {
+                    let (effect, _) = crate::ecs::systems::material_sys::evaluate_material_pub(
+                        mat,
+                        scope_time,
+                        Some(crate::schema::v2::ShaderScope::Camera),
+                    );
+                    effect
+                }).collect()
+            };
+
+            match cam_comp.render_mode {
+                CameraRenderMode::Cameras => {
+                    // Master compositor camera: defines an ORDERED list of sub-cameras.
+                    // We delay processing until after all Layers cameras have been collected,
+                    // so we can look them up by entity_id. Mark with a sentinel for now.
+                    // (Handled in the second pass below)
+                }
+                CameraRenderMode::Layers => {
+                    let post_fx = eval_post_fx(&cam_comp.post_effects, entity.resolved.scope_time);
+                    root_cameras.push(SceneCameraInfo {
+                        entity_id: entity.id.clone(),
+                        render_order: cam_comp.render_order,
+                        target_layers: cam_comp.target_layers.clone(),
+                        culling_mask: cam_comp.culling_mask,
+                        cam_x: entity.resolved.x - entity.resolved.width * 0.5,
+                        cam_y: entity.resolved.y - entity.resolved.height * 0.5,
+                        cam_w: entity.resolved.width.max(1.0),
+                        cam_h: entity.resolved.height.max(1.0),
+                        render_scale: cam_comp.render_scale,
+                        post_effects: post_fx,
+                    });
+                }
+            }
+        }
+
+        // Second pass: resolve CameraRenderMode::Cameras master cameras.
+        // A master camera's target_cameras list OVERRIDES the auto-discovered order.
+        // If any master camera exists, use its ordered sub-camera list instead.
+        let master_cam = sorted.iter().find(|e| {
+            if !e.resolved.visible { return false; }
+            if !context.active_entities.contains(&e.id) { return false; }
+            storages.get_component::<crate::ecs::components::CameraComponent>(&e.id)
+                .map(|c| c.render_mode == CameraRenderMode::Cameras)
+                .unwrap_or(false)
+        });
+
+        if let Some(master) = master_cam {
+            if let Some(master_comp) = storages.get_component::<crate::ecs::components::CameraComponent>(&master.id) {
+                if !master_comp.target_cameras.is_empty() {
+                    // Re-order root_cameras to match master's target_cameras order
+                    let ordered: Vec<SceneCameraInfo> = master_comp.target_cameras.iter()
+                        .filter_map(|target_id| {
+                            root_cameras.iter().find(|c| &c.entity_id == target_id).cloned()
+                        })
+                        .collect();
+
+                    if !ordered.is_empty() {
+                        // Use the master camera's ordered list
+                        root_cameras = ordered;
+                        log::debug!(
+                            "Multi-cam: master '{}' compositing {} sub-cameras in order: {:?}",
+                            master.id,
+                            root_cameras.len(),
+                            root_cameras.iter().map(|c| &c.entity_id).collect::<Vec<_>>()
+                        );
+                    }
+                }
+            }
+        } else {
+            // No master camera: sort all Layers cameras by render_order (auto composite)
+            root_cameras.sort_by_key(|c| c.render_order);
+        }
+
+        state.scene_cameras = root_cameras;
+    }
+
     // ── Phase 1: Compile Entities & Effects ──
-    effect_pass::build_entity_passes(world, context, &mut state);
+    effect_pass::build_entity_passes(world, context, &mut state, &sorted);
 
     // ── Phase 2: Compile Nested Compositions ──
     composition_pass::compile_composition_buffers(world, context, &mut state);
 
     // Everything implicitly bubbled up to "main" (the Root)
-    let mut flat_entities = state.comp_lists.remove("main").unwrap_or_default();
-    
-    // Sort main to ensure synthesized composition proxies are perfectly layered
+    let flat_entities_all = state.comp_lists.remove("main").unwrap_or_default();
+
+    // ── Phase 5: Multi-Camera Compositing ──
+    // If multiple root cameras discovered, partition entities by each camera's target_layers
+    // and composite them in order. Otherwise fall back to legacy single-pass.
+    let has_multi_cameras = state.scene_cameras.len() > 1;
+
+    if has_multi_cameras {
+        build_multi_camera_passes(&mut state, flat_entities_all, screen_width, screen_height);
+    } else {
+        // Legacy single-camera path (backward compatible)
+        build_single_camera_pass(&mut state, flat_entities_all, screen_width, screen_height);
+    }
+
+    Frame {
+        passes: state.passes,
+        texture_updates: state.texture_updates,
+        audio_calls: state.audio_calls,
+    }
+}
+
+/// Legacy single-camera pass (Phase 4.1 behavior, backward compatible).
+fn build_single_camera_pass(
+    state: &mut RenderState,
+    mut flat_entities: Vec<crate::frame::FlatEntity>,
+    screen_width: u32,
+    screen_height: u32,
+) {
     flat_entities.sort_by(|a, b| a.layer.cmp(&b.layer).then(a.z_index.partial_cmp(&b.z_index).unwrap()));
 
-    // ── Build Main Screen RenderPass ──
     let base_output = if state.camera_effects.is_empty() {
         "main".to_string()
     } else {
@@ -113,7 +245,7 @@ pub fn render_to_frame(
         target_height: if state.camera_effects.is_empty() { None } else { Some(screen_height) },
     });
 
-    // ── Post-processing: Camera Effects ──
+    // Post-processing: Camera Effects
     let mut current_cam_key = base_output;
     for (i, effect) in state.camera_effects.iter().enumerate() {
         let out_key = format!("_camera_fx_{}", i);
@@ -132,17 +264,123 @@ pub fn render_to_frame(
 
     state.passes.push(RenderPass {
         output: "final".into(),
-        pass_type: PassType::Output { 
+        pass_type: PassType::Output {
             input: if state.camera_effects.is_empty() { "main".into() } else { current_cam_key },
             entities: vec![],
         },
         target_width: Some(screen_width),
         target_height: None,
     });
+}
 
-    Frame {
-        passes: state.passes,
-        texture_updates: state.texture_updates,
-        audio_calls: state.audio_calls,
+/// Phase 5: Multi-Camera compositing pass.
+/// Each camera renders its own subset of entities (filtered by target_layers),
+/// applies its own post_effects, then all cameras are composited in render_order.
+fn build_multi_camera_passes(
+    state: &mut RenderState,
+    flat_entities_all: Vec<crate::frame::FlatEntity>,
+    screen_width: u32,
+    screen_height: u32,
+) {
+    // Sort all entities once
+    let mut sorted_entities = flat_entities_all;
+    sorted_entities.sort_by(|a, b| a.layer.cmp(&b.layer).then(a.z_index.partial_cmp(&b.z_index).unwrap()));
+
+    let mut camera_output_keys: Vec<String> = Vec::new();
+
+    // Clone scene_cameras to avoid borrow conflict
+    let cameras = state.scene_cameras.clone();
+
+    for cam_info in &cameras {
+        let cam_key = format!("_cam_{}", cam_info.entity_id);
+        
+        let scaled_width = (screen_width as f32 * cam_info.render_scale).max(1.0) as u32;
+        let scaled_height = (screen_height as f32 * cam_info.render_scale).max(1.0) as u32;
+
+        // Filter entities by this camera's target_layers
+        let cam_entities: Vec<_> = sorted_entities.iter().filter(|e| {
+            match &cam_info.target_layers {
+                None => true,
+                Some(layers) => layers.contains(&e.layer),
+            }
+        }).cloned().collect();
+
+        // Render entities for this camera
+        let src_key = if cam_info.post_effects.is_empty() {
+            cam_key.clone()
+        } else {
+            format!("{}_src", cam_key)
+        };
+
+        state.passes.push(RenderPass {
+            output: src_key.clone(),
+            pass_type: PassType::Entities {
+                entities: cam_entities,
+                clear_color: [0.0, 0.0, 0.0, 0.0],
+            },
+            target_width: Some(scaled_width),
+            target_height: Some(scaled_height),
+        });
+
+        // Apply this camera's post_effects chain
+        let mut current_key = src_key;
+        for (i, effect) in cam_info.post_effects.iter().enumerate() {
+            let fx_key = format!("{}_fx_{}", cam_key, i);
+            state.passes.push(RenderPass {
+                output: fx_key.clone(),
+                pass_type: PassType::Effect {
+                    shader: effect.shader_id.clone(),
+                    inputs: vec![current_key],
+                    params: effect.params.clone(),
+                },
+                target_width: Some(scaled_width),
+                target_height: Some(scaled_height),
+            });
+            current_key = fx_key;
+        }
+
+        camera_output_keys.push(current_key);
     }
+
+    // Composite all camera outputs in order using the Output pass.
+    // The first camera is the "background" (input to Output), subsequent cameras
+    // are composited as overlay entities using the composite shader.
+    let base_input = camera_output_keys.first().cloned().unwrap_or_else(|| "main".to_string());
+
+    let overlay_entities: Vec<crate::frame::FlatEntity> = camera_output_keys
+        .iter()
+        .skip(1) // First camera is base input, rest are overlays
+        .enumerate()
+        .map(|(i, tex_key)| crate::frame::FlatEntity {
+            id: 0,
+            x: 0.0,
+            y: 0.0,
+            width: screen_width as f32,
+            height: screen_height as f32,
+            rotation: 0.0,
+            opacity: 1.0,
+            blend_mode: 0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            shader: "composite".to_string(),
+            textures: vec![tex_key.clone()],
+            params: vec![],
+            layer: (i as i32 + 1) * 100_000,
+            z_index: (i as f32 + 1.0) * 100_000.0,
+            fit_mode: 0,
+            uv_offset: [0.0, 0.0],
+            uv_scale: [1.0, 1.0],
+            intrinsic_width: screen_width as f32,
+            intrinsic_height: screen_height as f32,
+        })
+        .collect();
+
+    state.passes.push(RenderPass {
+        output: "final".into(),
+        pass_type: PassType::Output {
+            input: base_input,
+            entities: overlay_entities,
+        },
+        target_width: Some(screen_width),
+        target_height: None,
+    });
 }

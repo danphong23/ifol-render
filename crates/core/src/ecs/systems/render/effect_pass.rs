@@ -7,12 +7,12 @@ pub fn build_entity_passes(
     world: &World,
     context: &ContextView,
     state: &mut RenderState,
+    sorted: &Vec<&crate::ecs::Entity>,
 ) {
-    let sorted = world.sorted_by_layer();
     let storages = &world.storages;
     let mut layer_effects_map = std::collections::HashMap::new();
 
-    for entity in &sorted {
+    for entity in sorted {
         if !entity.resolved.visible { continue; }
         if !context.active_entities.contains(&entity.id) { continue; }
 

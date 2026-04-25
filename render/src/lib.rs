@@ -1347,13 +1347,16 @@ impl Renderer {
             h,
         );
 
-        // Init effect context if needed
+        // Init effect context if needed.
+        // Use working_format (not texture_format!) so ping-pong textures match
+        // intermediate render targets. This is critical for HDR (Rgba16Float working
+        // vs Rgba8UnormSrgb surface) — format mismatch would cause copy failures.
         if self.effect_ctx.is_none() {
             self.effect_ctx = Some(EffectContext::new(
                 &self.engine.device,
                 self.width,
                 self.height,
-                self.engine.texture_format,
+                self.engine.working_format,
             ));
         }
 
