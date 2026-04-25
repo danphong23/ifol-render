@@ -249,6 +249,15 @@ pub enum PassType {
         #[serde(default)]
         params: Vec<f32>,
     },
+    /// Copy an existing texture to a new key without rendering.
+    ///
+    /// Used by the blend mode 2-pass system to snapshot the current
+    /// accumulation buffer BEFORE a non-Normal blend entity is composited.
+    /// The snapshot becomes the `dst` input for `blend_composite`.
+    Snapshot {
+        /// Key of the texture to copy FROM.
+        source_key: String,
+    },
     /// Mark a texture as the final output (read back to CPU).
     Output {
         /// Input texture key to read as final pixels.

@@ -128,6 +128,17 @@ pub fn setup_builtins(renderer: &mut Renderer) {
         );
     }
 
+    if !renderer.has_pipeline("blend_composite") {
+        // T2.2: 2-pass accurate blend mode compositor.
+        // Reads t_source (entity isolated) and t_dest (dst snapshot).
+        // alpha_blend=false: blend math is baked into output — do NOT double-apply.
+        renderer.register_pipeline(
+            "blend_composite",
+            include_str!("../../shaders/blend_composite.wgsl"),
+            PipelineConfig::fullscreen_two_textures(),
+        );
+    }
+
     // ── Fullscreen effects ──
 
     if !renderer.has_pipeline("blur") {

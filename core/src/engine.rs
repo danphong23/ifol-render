@@ -433,6 +433,7 @@ impl CoreEngine {
                 match &pass.pass_type {
                     PassType::Entities { entities, .. } => format!("Entities({})", entities.len()),
                     PassType::Effect { shader, inputs, .. } => format!("Effect({}, inputs={:?})", shader, inputs),
+                    PassType::Snapshot { source_key } => format!("Snapshot(src={})", source_key),
                     PassType::Output { input, entities, .. } => format!("Output(input={:?}, entities={})", input, entities.len()),
                 },
                 pass.target_width,
@@ -502,6 +503,30 @@ impl CoreEngine {
                         target_h,
                     );
                     has_output = true;
+                }
+
+                // T2.5: Snapshot — GPU-side texture copy, zero CPU overhead.
+                // Copies source_key texture into pass.output texture (same size).
+                // Used by the blend mode 2-pass system as the dst snapshot.
+                PassType::Snapshot { source_key } => {
+                    // Ensure output texture exists with correct dimensions
+                    let _out_view = self.renderer.get_or_create_render_target_pub(
+                        &pass.output,
+                        target_w,
+                        target_h,
+                    );
+
+                    // Resolve source texture handle
+                    let copy_result = self.renderer.copy_texture_to_key(
+                        &mut encoder,
+                        source_key,
+                        &pass.output,
+                        target_w,
+                        target_h,
+                    );
+                    if let Err(e) = copy_result {
+                        log::warn!("Snapshot pass '{}': {}", pass.output, e);
+                    }
                 }
             }
         }
@@ -733,6 +758,24 @@ impl CoreEngine {
                                     target_w,
                                     target_h,
                                 );
+                            }
+
+                            // T2.5: Snapshot in export loop — identical to preview path.
+                            PassType::Snapshot { source_key } => {
+                                let _out_view = self.renderer.get_or_create_render_target_pub(
+                                    &pass.output,
+                                    target_w,
+                                    target_h,
+                                );
+                                if let Err(e) = self.renderer.copy_texture_to_key(
+                                    &mut encoder,
+                                    source_key,
+                                    &pass.output,
+                                    target_w,
+                                    target_h,
+                                ) {
+                                    log::warn!("Export Snapshot '{}': {}", pass.output, e);
+                                }
                             }
                         }
                     }

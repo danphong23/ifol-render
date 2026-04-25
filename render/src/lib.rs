@@ -1013,6 +1013,7 @@ impl Renderer {
                 dimension: wgpu::TextureDimension::D2,
                 format: self.engine.working_format,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC   // Required for PassType::Snapshot (copy_texture_to_texture)
                     | wgpu::TextureUsages::COPY_DST
                     | wgpu::TextureUsages::RENDER_ATTACHMENT,
                 view_formats: &[],
@@ -1048,6 +1049,83 @@ impl Renderer {
             .map(|(k, v)| (k.clone(), (v.width, v.height)))
             .collect()
     }
+
+    /// Public wrapper for get_or_create_render_target — used by engine.rs for
+    /// PassType::Snapshot output allocation.
+    pub fn get_or_create_render_target_pub(
+        &mut self,
+        key: &str,
+        width: u32,
+        height: u32,
+    ) -> wgpu::TextureView {
+        self.get_or_create_render_target(key, width, height)
+    }
+
+    /// GPU-side texture copy: copies `src_key` into `dst_key` using
+    /// `copy_texture_to_texture` — zero bytes transferred over PCIe.
+    ///
+    /// Used by PassType::Snapshot to snapshot the accumulation buffer before
+    /// a non-Normal blend entity is composited (dst for blend_composite shader).
+    ///
+    /// Returns Err if the source texture is not found in the cache.
+    pub fn copy_texture_to_key(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        src_key: &str,
+        dst_key: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<(), String> {
+        // Source must exist in texture_cache (intermediate render targets live there)
+        let src_texture = self
+            .texture_cache
+            .get(src_key)
+            .map(|e| &e.texture as *const wgpu::Texture)
+            .ok_or_else(|| format!("Snapshot: source key '{}' not found in cache", src_key))?;
+
+        // Ensure dst texture exists and is the right size
+        let _dst_view = self.get_or_create_render_target(dst_key, width, height);
+
+        let dst_texture = self
+            .texture_cache
+            .get(dst_key)
+            .map(|e| &e.texture as *const wgpu::Texture)
+            .ok_or_else(|| format!("Snapshot: dst key '{}' not found after creation", dst_key))?;
+
+        // SAFETY: both pointers are valid for the duration of this call.
+        // They are derived from HashMap entries that are not mutated between
+        // the two get() calls above (no insert/remove between them).
+        let copy_size = wgpu::Extent3d {
+            width: width.min(unsafe { &*src_texture }.size().width),
+            height: height.min(unsafe { &*src_texture }.size().height),
+            depth_or_array_layers: 1,
+        };
+
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: unsafe { &*src_texture },
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: unsafe { &*dst_texture },
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            copy_size,
+        );
+
+        // Update LRU for both
+        let frame = self.frame_number;
+        if let Some(e) = self.texture_cache.get_mut(dst_key) {
+            e.last_used_frame = frame;
+        }
+
+        Ok(())
+    }
+
 
     /// Reset transient frame-scoped resources.
     pub fn begin_frame(&mut self) {
