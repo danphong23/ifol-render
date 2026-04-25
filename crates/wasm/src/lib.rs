@@ -289,11 +289,63 @@ impl IfolRenderWeb {
         Ok(())
     }
 
-    /// Patch the scene with delta changes (drag an entity, change color)
-    /// without reloading the entire heavy JSON graph.
-    pub fn patch_scene_v2(&mut self, _delta_json: &str) -> Result<(), JsValue> {
-        // Future: parse JSON Patch or custom Delta format and update self.v2_world
-        log::info!("V2 Scene patched.");
+    /// Patch the scene with delta changes without reloading the entire scene JSON.
+    ///
+    /// `delta_json` is an array of patch operations:
+    /// ```json
+    /// [
+    ///   {
+    ///     "id": "entity_001",
+    ///     "components": {
+    ///       "Transform": { "x": 100.0, "y": 200.0 }
+    ///     }
+    ///   }
+    /// ]
+    /// ```
+    /// Each entry patches only the listed components for the given entity ID.
+    /// Non-listed components are left unchanged.
+    /// If the entity ID is not found in the world, that entry is silently skipped.
+    pub fn patch_scene_v2(&mut self, delta_json: &str) -> Result<(), JsValue> {
+        let world = match self.v2_world.as_mut() {
+            Some(w) => w,
+            None => return Err(JsValue::from_str("No V2 scene loaded. Call load_scene_v2 first.")),
+        };
+
+        // Parse delta as an array of EntityV2 patches
+        let patches: Vec<ifol_render_ecs::schema::v2::EntityV2> =
+            serde_json::from_str(delta_json)
+                .map_err(|e| JsValue::from_str(&format!("Invalid patch JSON: {}", e)))?;
+
+        let mut patched = 0usize;
+        for patch in &patches {
+            // Check entity exists
+            if world.get(&patch.id).is_none() {
+                log::warn!("patch_scene_v2: entity '{}' not found, skipping", patch.id);
+                continue;
+            }
+
+            // Re-inject each patched component using the existing registry loaders.
+            // This reuses the exact same load path as load_scene — no code duplication.
+            for (comp_key, comp_value) in &patch.components {
+                let loader_opt = world.registry.loaders.get(comp_key.as_str()).copied();
+                if let Some(loader) = loader_opt {
+                    if let Err(e) = loader(world, &patch.id, comp_value) {
+                        log::warn!(
+                            "patch_scene_v2: failed to patch component '{}' for entity '{}': {}",
+                            comp_key, patch.id, e
+                        );
+                    }
+                } else {
+                    log::warn!(
+                        "patch_scene_v2: unknown component '{}' for entity '{}', skipping",
+                        comp_key, patch.id
+                    );
+                }
+            }
+            patched += 1;
+        }
+
+        log::debug!("patch_scene_v2: patched {} entities", patched);
         Ok(())
     }
 
