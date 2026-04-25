@@ -51,13 +51,18 @@ pub fn compile_composition_buffers(
 
         let comp_tex_key = format!("_comp_out_{}", comp_id);
         let mut list = state.comp_lists.remove(&comp_id).unwrap_or_default();
-        list.sort_by(|a, b| a.layer.cmp(&b.layer).then(a.z_index.partial_cmp(&b.z_index).unwrap()));
+        list.sort_by(|a, b| a.layer.cmp(&b.layer)
+            .then(a.z_index.partial_cmp(&b.z_index).unwrap_or(std::cmp::Ordering::Equal)));
 
-        state.push_pass(RenderPass { pass_hash: 0,
-            output: comp_tex_key.clone(),
-            pass_type: PassType::Entities { entities: list, clear_color: Some([0.0, 0.0, 0.0, 0.0]) },
-            target_width: Some(cw as u32), target_height: Some(ch as u32),
-        });
+        // Use shared blend-aware batching (supports 2-pass Photoshop blend modes)
+        super::emit_entities_with_blend(
+            state,
+            list,
+            &comp_tex_key,
+            Some(cw as u32),
+            Some(ch as u32),
+            &comp_id,
+        );
 
         let (parent_cx, parent_cy, p_sx, p_sy) = if target_comp == "main" {
             (state.root_cam_x, state.root_cam_y, state.root_sx, state.root_sy)

@@ -294,18 +294,14 @@ impl World {
             let mut current_id = entity_id.to_string();
             // Traverse up the parent tree
             for _ in 0..20 {
-                if let Some(e) = self.entities.iter().find(|e| e.id == current_id) {
-                    if let Some(pid) = self.storages
-                        .get_component::<crate::ecs::components::meta::ParentId>(&e.id)
-                        .map(|id| &id.0)
-                    {
-                        if pid == scope_str {
-                            return true;
-                        }
-                        current_id = pid.to_string();
-                    } else {
-                        return false;
+                if let Some(pid) = self.storages
+                    .get_component::<crate::ecs::components::meta::ParentId>(&current_id)
+                    .map(|id| &id.0)
+                {
+                    if pid == scope_str {
+                        return true;
                     }
+                    current_id = pid.to_string();
                 } else {
                     return false;
                 }
