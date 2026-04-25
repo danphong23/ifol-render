@@ -36,7 +36,7 @@ pub fn source_system(world: &mut World) {
             anchor_x: r.anchor_x,
             anchor_y: r.anchor_y,
             opacity: r.opacity,
-            blend_mode: "normal".into(), // Will map later if needed
+            blend_mode: r.blend_mode.as_str().to_string(),
             align_x: storages
                 .get_component::<crate::ecs::components::Rect>(&entity.id)
                 .as_ref()

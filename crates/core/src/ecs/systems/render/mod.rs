@@ -220,6 +220,100 @@ pub fn render_to_frame(
     }
 }
 
+/// Shared helper: emit entity passes with 2-pass blend mode support.
+///
+/// Batches Normal/Mask entities together, and when a Photoshop-style blend mode
+/// entity is encountered, flushes the batch, snapshots the current target,
+/// renders the entity in isolation, and composites back via `blend_composite`.
+///
+/// `output_key`: the render target to accumulate into.
+/// `target_width`/`target_height`: dimensions for all passes.
+/// `camera_id`: identifier used for unique snapshot/isolation key names.
+fn emit_entities_with_blend(
+    state: &mut RenderState,
+    entities: Vec<crate::frame::FlatEntity>,
+    output_key: &str,
+    target_width: Option<u32>,
+    target_height: Option<u32>,
+    camera_id: &str,
+) {
+    state.current_acc_key = Some(output_key.to_string());
+
+    let mut current_batch = Vec::new();
+    let mut is_first_batch = true;
+
+    for fe in entities {
+        let blend_id = fe.blend_mode;
+        // 0 = Normal, 11 = MaskIn, 12 = MaskOut — hardware blending, no 2-pass needed
+        if blend_id == 0 || blend_id == 11 || blend_id == 12 {
+            current_batch.push(fe);
+        } else {
+            // Photoshop blend mode: 2-pass blending required
+            // 1. Flush current batch into the target
+            if !current_batch.is_empty() || is_first_batch {
+                let clear_color = if is_first_batch { Some([0.0, 0.0, 0.0, 0.0]) } else { None };
+                state.push_pass(RenderPass { pass_hash: 0,
+                    output: output_key.to_string(),
+                    pass_type: PassType::Entities {
+                        entities: std::mem::take(&mut current_batch),
+                        clear_color,
+                    },
+                    target_width,
+                    target_height,
+                });
+                is_first_batch = false;
+            }
+
+            // 2. Snapshot the current target as the blend destination
+            let dst_key = format!("_bdst_{}_{}", camera_id, fe.id);
+            state.push_pass(RenderPass { pass_hash: 0,
+                output: dst_key.clone(),
+                pass_type: PassType::Snapshot { source_key: output_key.to_string() },
+                target_width, target_height,
+            });
+
+            // 3. Render the entity isolated into a clean buffer
+            let iso_key = format!("_bsrc_{}_{}", camera_id, fe.id);
+            let mut iso_fe = fe.clone();
+            iso_fe.blend_mode = 0; // Normal blend in isolated buffer
+            iso_fe.opacity = 1.0;
+            state.push_pass(RenderPass { pass_hash: 0,
+                output: iso_key.clone(),
+                pass_type: PassType::Entities {
+                    entities: vec![iso_fe],
+                    clear_color: Some([0.0, 0.0, 0.0, 0.0]),
+                },
+                target_width, target_height,
+            });
+
+            // 4. Composite blend result back to the target
+            state.push_pass(RenderPass { pass_hash: 0,
+                output: output_key.to_string(),
+                pass_type: PassType::Effect {
+                    shader: "blend_composite".to_string(),
+                    inputs: vec![iso_key, dst_key],
+                    params: vec![blend_id as f32, fe.opacity, 0.0, 0.0],
+                },
+                target_width, target_height,
+            });
+        }
+    }
+
+    // Flush any remaining normal entities
+    if !current_batch.is_empty() || is_first_batch {
+        let clear_color = if is_first_batch { Some([0.0, 0.0, 0.0, 0.0]) } else { None };
+        state.push_pass(RenderPass { pass_hash: 0,
+            output: output_key.to_string(),
+            pass_type: PassType::Entities {
+                entities: current_batch,
+                clear_color,
+            },
+            target_width,
+            target_height,
+        });
+    }
+}
+
 /// Legacy single-camera pass (Phase 4.1 behavior, backward compatible).
 fn build_single_camera_pass(
     state: &mut RenderState,
@@ -227,7 +321,8 @@ fn build_single_camera_pass(
     screen_width: u32,
     screen_height: u32,
 ) {
-    flat_entities.sort_by(|a, b| a.layer.cmp(&b.layer).then(a.z_index.partial_cmp(&b.z_index).unwrap()));
+    flat_entities.sort_by(|a, b| a.layer.cmp(&b.layer)
+        .then(a.z_index.partial_cmp(&b.z_index).unwrap_or(std::cmp::Ordering::Equal)));
 
     let base_output = if state.camera_effects.is_empty() {
         "main".to_string()
@@ -235,15 +330,11 @@ fn build_single_camera_pass(
         "_camera_src".to_string()
     };
 
-    state.push_pass(RenderPass { pass_hash: 0,
-        output: base_output.clone(),
-        pass_type: PassType::Entities {
-            entities: flat_entities,
-            clear_color: Some([0.0, 0.0, 0.0, 0.0]),
-        },
-        target_width: if state.camera_effects.is_empty() { None } else { Some(screen_width) },
-        target_height: if state.camera_effects.is_empty() { None } else { Some(screen_height) },
-    });
+    let tw = if state.camera_effects.is_empty() { None } else { Some(screen_width) };
+    let th = if state.camera_effects.is_empty() { None } else { Some(screen_height) };
+
+    // Use shared blend-aware batching helper
+    emit_entities_with_blend(state, flat_entities, &base_output, tw, th, "main");
 
     // Post-processing: Camera Effects
     let mut current_cam_key = base_output;
@@ -285,7 +376,8 @@ fn build_multi_camera_passes(
 ) {
     // Sort all entities once
     let mut sorted_entities = flat_entities_all;
-    sorted_entities.sort_by(|a, b| a.layer.cmp(&b.layer).then(a.z_index.partial_cmp(&b.z_index).unwrap()));
+    sorted_entities.sort_by(|a, b| a.layer.cmp(&b.layer)
+        .then(a.z_index.partial_cmp(&b.z_index).unwrap_or(std::cmp::Ordering::Equal)));
 
     let mut camera_output_keys: Vec<String> = Vec::new();
 
@@ -313,81 +405,15 @@ fn build_multi_camera_passes(
             format!("{}_src", cam_key)
         };
 
-        state.current_acc_key = Some(src_key.clone());
-
-        let mut current_batch = Vec::new();
-        let mut is_first_batch = true;
-
-        for fe in cam_entities {
-            let blend_id = fe.blend_mode;
-            // 0 = Normal, 11 = MaskIn, 12 = MaskOut
-            if blend_id == 0 || blend_id == 11 || blend_id == 12 {
-                current_batch.push(fe);
-            } else {
-                // Photoshop blend mode: 2-pass blending required
-                // 1. Flush current batch
-                if !current_batch.is_empty() || is_first_batch {
-                    let clear_color = if is_first_batch { Some([0.0, 0.0, 0.0, 0.0]) } else { None };
-                    state.push_pass(RenderPass { pass_hash: 0,
-                        output: src_key.clone(),
-                        pass_type: PassType::Entities {
-                            entities: std::mem::take(&mut current_batch),
-                            clear_color,
-                        },
-                        target_width: Some(scaled_width),
-                        target_height: Some(scaled_height),
-                    });
-                    is_first_batch = false;
-                }
-
-                // 2. Snapshot the current camera target
-                let dst_key = format!("_bdst_{}_{}", cam_info.entity_id, fe.id);
-                state.push_pass(RenderPass { pass_hash: 0,
-                    output: dst_key.clone(),
-                    pass_type: PassType::Snapshot { source_key: src_key.clone() },
-                    target_width: Some(scaled_width), target_height: Some(scaled_height),
-                });
-
-                // 3. Render the entity isolated
-                let iso_key = format!("_bsrc_{}_{}", cam_info.entity_id, fe.id);
-                let mut iso_fe = fe.clone();
-                iso_fe.blend_mode = 0; // Normal blend in isolated buffer
-                iso_fe.opacity = 1.0;
-                state.push_pass(RenderPass { pass_hash: 0,
-                    output: iso_key.clone(),
-                    pass_type: PassType::Entities {
-                        entities: vec![iso_fe],
-                        clear_color: Some([0.0, 0.0, 0.0, 0.0]),
-                    },
-                    target_width: Some(scaled_width), target_height: Some(scaled_height),
-                });
-
-                // 4. Composite them directly back to the camera target
-                state.push_pass(RenderPass { pass_hash: 0,
-                    output: src_key.clone(),
-                    pass_type: PassType::Effect {
-                        shader: "blend_composite".to_string(),
-                        inputs: vec![iso_key, dst_key],
-                        params: vec![blend_id as f32, fe.opacity, 0.0, 0.0],
-                    },
-                    target_width: Some(scaled_width), target_height: Some(scaled_height),
-                });
-            }
-        }
-
-        // Flush any remaining normal entities
-        if !current_batch.is_empty() || is_first_batch {
-            let clear_color = if is_first_batch { Some([0.0, 0.0, 0.0, 0.0]) } else { None };
-            state.push_pass(RenderPass { pass_hash: 0,
-                output: src_key.clone(),
-                pass_type: PassType::Entities {
-                    entities: current_batch,
-                    clear_color,
-                },
-                target_width: Some(scaled_width),
-                target_height: Some(scaled_height),
-            });
-        }
+        // Use shared blend-aware batching helper
+        emit_entities_with_blend(
+            state,
+            cam_entities,
+            &src_key,
+            Some(scaled_width),
+            Some(scaled_height),
+            &cam_info.entity_id,
+        );
 
         // Apply this camera's post_effects chain
         let mut current_key = src_key;

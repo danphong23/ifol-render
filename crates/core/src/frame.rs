@@ -428,13 +428,19 @@ pub mod text_align {
 
 /// Blend mode values for `FlatEntity.blend_mode`.
 ///
-/// These map 1:1 to the composite shader's blend logic.
+/// These map 1:1 to `BlendMode::as_u32()` and the `blend_composite.wgsl` shader.
 pub mod blend {
     pub const NORMAL: u32 = 0;
     pub const MULTIPLY: u32 = 1;
     pub const SCREEN: u32 = 2;
     pub const OVERLAY: u32 = 3;
-    pub const SOFT_LIGHT: u32 = 4;
-    pub const ADD: u32 = 5;
-    pub const DIFFERENCE: u32 = 6;
+    pub const ADD: u32 = 4;
+    pub const SUBTRACT: u32 = 5;
+    pub const DARKEN: u32 = 6;
+    pub const LIGHTEN: u32 = 7;
+    pub const SOFT_LIGHT: u32 = 8;
+    pub const HARD_LIGHT: u32 = 9;
+    pub const DIFFERENCE: u32 = 10;
+    pub const MASK_IN: u32 = 11;
+    pub const MASK_OUT: u32 = 12;
 }

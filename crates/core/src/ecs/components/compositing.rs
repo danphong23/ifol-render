@@ -61,4 +61,22 @@ impl BlendMode {
             Self::MaskOut => 12,
         }
     }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Multiply => "multiply",
+            Self::Screen => "screen",
+            Self::Overlay => "overlay",
+            Self::Add => "add",
+            Self::Subtract => "subtract",
+            Self::Darken => "darken",
+            Self::Lighten => "lighten",
+            Self::SoftLight => "soft_light",
+            Self::HardLight => "hard_light",
+            Self::Difference => "difference",
+            Self::MaskIn => "mask_in",
+            Self::MaskOut => "mask_out",
+        }
+    }
 }
