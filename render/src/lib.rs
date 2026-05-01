@@ -232,11 +232,17 @@ pub struct RenderGraphNode {
 
 pub struct RenderGraphState {
     pub nodes: HashMap<String, RenderGraphNode>,
+    /// Tracks the latest content hash (version) of each texture key.
+    /// Used to invalidate passes when their input dependencies change.
+    pub texture_versions: HashMap<String, u64>,
 }
 
 impl Default for RenderGraphState {
     fn default() -> Self {
-        Self { nodes: HashMap::new() }
+        Self { 
+            nodes: HashMap::new(),
+            texture_versions: HashMap::new(),
+        }
     }
 }
 

@@ -541,13 +541,22 @@ $('btnSaveDisk').onclick = async () => {
 };
 
 $('btnPlay').onclick = () => { 
-    playing = true; 
-    lastTime = performance.now(); 
-    if (engine) engine.set_playing(true);
+    if (playing) {
+        playing = false;
+        $('btnPlay').innerText = '▶ Play';
+        if (engine) engine.set_playing(false);
+        requestRender(); // Flush paused state to WASM
+    } else {
+        playing = true; 
+        lastTime = performance.now(); 
+        $('btnPlay').innerText = '⏸ Pause';
+        if (engine) engine.set_playing(true);
+    }
 };
 $('btnStop').onclick = () => { 
     playing = false; 
     timeSec = 0; 
+    $('btnPlay').innerText = '▶ Play';
     if (engine) engine.set_playing(false);
     requestRender(); 
 };

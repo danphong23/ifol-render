@@ -442,10 +442,37 @@ impl CoreEngine {
             let target_w = pass.target_width.unwrap_or(self.settings.width);
             let target_h = pass.target_height.unwrap_or(self.settings.height);
 
+            // Mix in input texture versions to compute actual hash
+            let actual_hash = {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                hasher.write_u64(pass.pass_hash);
+                
+                // Collect input keys
+                let mut input_keys = Vec::new();
+                match &pass.pass_type {
+                    PassType::Effect { inputs, .. } => input_keys.extend(inputs.clone()),
+                    PassType::Output { input, entities } => {
+                        input_keys.push(input.clone());
+                        for e in entities { input_keys.extend(e.textures.clone()); }
+                    },
+                    PassType::Snapshot { source_key } => input_keys.push(source_key.clone()),
+                    PassType::Entities { entities, .. } => {
+                        for e in entities { input_keys.extend(e.textures.clone()); }
+                    }
+                }
+                for key in input_keys {
+                    if let Some(v) = self.renderer.graph_state.texture_versions.get(&key) {
+                        hasher.write_u64(*v);
+                    }
+                }
+                hasher.finish()
+            };
+
             // Phase 4: Explicit RenderGraph Dirty Tracking
             let mut is_dirty = true;
             if let Some(node) = self.renderer.graph_state.nodes.get(&pass.output) {
-                if node.pass_hash == pass.pass_hash {
+                if node.pass_hash == actual_hash {
                     is_dirty = false;
                 }
             }
@@ -555,9 +582,14 @@ impl CoreEngine {
             self.renderer.graph_state.nodes.insert(
                 pass.output.clone(),
                 ifol_render::RenderGraphNode {
-                    pass_hash: pass.pass_hash,
+                    pass_hash: actual_hash,
                     last_used_frame: self.renderer.get_frame_number(),
                 }
+            );
+            // Record the output version so downstream passes can detect it
+            self.renderer.graph_state.texture_versions.insert(
+                pass.output.clone(),
+                actual_hash,
             );
         }
 
@@ -972,6 +1004,7 @@ impl CoreEngine {
                     height,
                 } => {
                     self.renderer.load_rgba(key, data, *width, *height);
+                    self.renderer.graph_state.texture_versions.insert(key.clone(), self.renderer.get_frame_number());
                 }
                 TextureUpdate::LoadFont { key, path } => {
                     if let Err(e) = self.load_font(key, path) {
@@ -1011,7 +1044,11 @@ impl CoreEngine {
                     if let Err(e) = self.rasterize_text(key, content, &opts, font_key.as_deref()) {
                         log::warn!("Failed to rasterize text: {}", e);
                     } else {
-                        self.text_cache.insert(key.clone(), cache_sig);
+                        self.text_cache.insert(key.clone(), cache_sig.clone());
+                        use std::hash::{Hash, Hasher};
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        cache_sig.hash(&mut hasher);
+                        self.renderer.graph_state.texture_versions.insert(key.clone(), hasher.finish());
                     }
                 }
                 TextureUpdate::DecodeVideoFrame {
@@ -1031,6 +1068,8 @@ impl CoreEngine {
                             timestamp_secs,
                             e
                         );
+                    } else {
+                        self.renderer.graph_state.texture_versions.insert(key.clone(), timestamp_secs.to_bits());
                     }
                 }
                 TextureUpdate::Evict { key } => {

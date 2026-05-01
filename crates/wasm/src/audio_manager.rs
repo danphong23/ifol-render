@@ -16,6 +16,7 @@ pub struct AudioEntry {
     playing: bool,
     last_volume: f32,
     last_ecs_time: f64,
+    last_global_time: f64,
     // Store closures so they are securely dropped when AudioEntry is dropped
     _on_ready: Option<Closure<dyn FnMut(web_sys::Event)>>,
 }
@@ -99,13 +100,23 @@ impl WasmAudioManager {
 
             // Sync time + playback
             let ecs_time = entity.resolved.playback_time;
+            let current_global_time = entity.resolved.time.global_time;
 
             // Determine if the entity's time is actually advancing
             let time_delta = ecs_time - entry.last_ecs_time;
+            let global_time_delta = current_global_time - entry.last_global_time;
+            
             entry.last_ecs_time = ecs_time;
+            entry.last_global_time = current_global_time;
 
-            // If the time hasn't changed (or moved backward), the entity is "paused" mechanically.
-            let entity_is_playing = is_engine_playing && time_delta > 0.0;
+            // If the global time hasn't changed (e.g. rapid UI re-renders during dragging),
+            // we should NOT pause the audio just because time_delta is 0.0.
+            // We only pause mechanically if global time ADVANCES but ecs_time does NOT (e.g. freeze frame).
+            let entity_is_playing = if global_time_delta == 0.0 {
+                is_engine_playing && entry.playing
+            } else {
+                is_engine_playing && time_delta > 0.0
+            };
 
             if entity_is_playing {
                 let diff = (el.current_time() - ecs_time).abs();
@@ -165,6 +176,7 @@ impl WasmAudioManager {
             playing: false,
             last_volume: -1.0,
             last_ecs_time: -1.0,
+            last_global_time: -1.0,
             _on_ready: None,
         }));
 
