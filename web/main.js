@@ -398,25 +398,8 @@ async function applyJson() {
         engine.load_scene_v2(JSON.stringify(scene));
         currentScene = scene;
         
-        // Update cameras dropdown
-        const selCamera = $('selViewCamera');
-        if (selCamera) {
-            const cameras = scene.entities.filter(e => e.camera !== undefined);
-            const oldVal = selCamera.value;
-            selCamera.innerHTML = '';
-            
-            if (cameras.length === 0) {
-                selCamera.innerHTML = '<option value="main_cam">main_cam</option>';
-            } else {
-                cameras.forEach(c => {
-                    const opt = document.createElement('option');
-                    opt.value = c.id;
-                    opt.textContent = c.id;
-                    if (c.id === oldVal) opt.selected = true;
-                    selCamera.appendChild(opt);
-                });
-            }
-        }
+        // Update cameras dropdown (filtered by scope)
+        updateCameraList();
         
         $('lblEntities').textContent = `${currentScene.entities ? currentScene.entities.length : 0} entities`;
         
@@ -827,6 +810,47 @@ function renderTimelineLabels() {
     }
 }
 
+// Update camera dropdown filtered by current scope
+function updateCameraList() {
+    if (!currentScene || !currentScene.entities) return;
+    const selCamera = $('selViewCamera');
+    if (!selCamera) return;
+    
+    let cameras;
+    if (timelineScope) {
+        // Scoped into a comp: only show cameras that are direct children of this comp
+        cameras = currentScene.entities.filter(e => 
+            e.camera !== undefined && e.parentId === timelineScope
+        );
+    } else {
+        // Root: show cameras without a composition parent (root-level cameras)
+        cameras = currentScene.entities.filter(e => {
+            if (e.camera === undefined) return false;
+            // Exclude cameras that are children of a composition
+            if (e.parentId) {
+                const parent = currentScene.entities.find(p => p.id === e.parentId);
+                if (parent && parent.composition) return false;
+            }
+            return true;
+        });
+    }
+    
+    const oldVal = selCamera.value;
+    selCamera.innerHTML = '';
+    
+    if (cameras.length === 0) {
+        selCamera.innerHTML = '<option value="main_cam">main_cam</option>';
+    } else {
+        cameras.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c.id;
+            opt.textContent = c.id;
+            if (c.id === oldVal) opt.selected = true;
+            selCamera.appendChild(opt);
+        });
+    }
+}
+
 function setRenderScope(scopeId) {
     timelineScope = scopeId;
     timeSec = 0; // Reset to start of local timeline
@@ -854,6 +878,7 @@ function setRenderScope(scopeId) {
             cam_y = 360;
         }
 
+        updateCameraList();
         requestRender();
     }
 }
