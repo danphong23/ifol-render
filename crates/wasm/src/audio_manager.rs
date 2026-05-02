@@ -100,37 +100,40 @@ impl WasmAudioManager {
 
             // Sync time + playback
             let ecs_time = entity.resolved.playback_time;
-            let current_global_time = entity.resolved.time.global_time;
 
-            // Determine if the entity's time is actually advancing
-            let time_delta = ecs_time - entry.last_ecs_time;
-            let global_time_delta = current_global_time - entry.last_global_time;
-            
             entry.last_ecs_time = ecs_time;
-            entry.last_global_time = current_global_time;
+            entry.last_global_time = entity.resolved.time.global_time;
 
-            // If the global time hasn't changed (e.g. rapid UI re-renders during dragging),
-            // we should NOT pause the audio just because time_delta is 0.0.
-            // We only pause mechanically if global time ADVANCES but ecs_time does NOT (e.g. freeze frame).
-            let entity_is_playing = if global_time_delta == 0.0 {
-                is_engine_playing && entry.playing
-            } else {
-                is_engine_playing && time_delta > 0.0
-            };
+            // Trust the engine's global playing flag. DO NOT use time_delta to gate play/pause.
+            // When the user interacts (select/drag) during playback, JS fires extra render calls
+            // with identical timestamps, causing time_delta=0. Using that to pause the audio
+            // creates a race condition that kills sound on every interaction.
+            let entity_is_playing = is_engine_playing;
+
+            let diff = (el.current_time() - ecs_time).abs();
 
             if entity_is_playing {
-                let diff = (el.current_time() - ecs_time).abs();
-
-                if diff > SYNC_TOLERANCE_PLAY {
-                    el.set_current_time(ecs_time);
-                }
-
                 if !entry.playing {
                     let _ = el.play();
                     entry.playing = true;
                 }
+
+                // Soft Sync via playbackRate to prevent continuous seeking (which mutes audio)
+                if diff > 1.0 {
+                    // Extreme drift: force seek
+                    el.set_current_time(ecs_time);
+                } else if diff > 0.1 {
+                    // Minor drift: adjust playback speed
+                    if ecs_time > el.current_time() {
+                        el.set_playback_rate(1.1);
+                    } else {
+                        el.set_playback_rate(0.9);
+                    }
+                } else {
+                    el.set_playback_rate(1.0);
+                }
             } else {
-                let diff = (el.current_time() - ecs_time).abs();
+                el.set_playback_rate(1.0);
                 if diff > SYNC_TOLERANCE_SCRUB {
                     el.set_current_time(ecs_time);
                 }

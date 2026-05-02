@@ -131,9 +131,12 @@ impl WasmMediaManager {
 
         let el = entry.el.clone();
 
-        let time_delta = time - entry.last_ecs_time;
         entry.last_ecs_time = time;
-        let entity_is_playing = is_engine_playing && time_delta > 0.0;
+        // Trust the engine's global playing flag. DO NOT use time_delta to gate play/pause.
+        // When the user interacts (select/drag) during playback, JS fires extra render calls
+        // with identical timestamps, causing time_delta=0. Using that to pause the video
+        // creates a race condition that freezes playback on every interaction.
+        let entity_is_playing = is_engine_playing;
         let diff = (el.current_time() - rounded_time).abs();
 
         if entity_is_playing {
