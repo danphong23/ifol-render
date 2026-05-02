@@ -434,6 +434,7 @@ impl IfolRenderWeb {
         let mut buffering_assets = Vec::new();
         let mut preload_assets = Vec::new();
         let mut active_video_entities = std::collections::HashSet::new();
+        let mut has_pending_video = false; // Track if any visible video entity has no frame ready
         let preload_window = 3.0; // 3 seconds lookahead
         let mut intrinsic_updates: Vec<(String, f32, f32)> = Vec::new();
 
@@ -509,6 +510,9 @@ impl IfolRenderWeb {
                         {
                             intrinsic_updates.push((entity.id.clone(), w as f32, h as f32));
                         }
+                    } else {
+                        // Video entity is visible but frame not ready (async seek pending)
+                        has_pending_video = true;
                     }
                 }
 
@@ -791,8 +795,16 @@ impl IfolRenderWeb {
 
         self.v2_world = Some(world);
 
-        // 4. Send to WGPU engine
-        self.engine.render_frame(&frame);
+        // 4. Send to WGPU engine — Frame Readiness Gate
+        // When paused/scrubbing: if ANY visible video entity doesn't have its frame
+        // decoded yet, HOLD the previous frame. This prevents partial frames where
+        // entities appear without their video content.
+        // When playing: render progressively (stale video is acceptable to keep
+        // the scene moving — matches CapCut/Premiere behavior).
+        let frame_complete = !has_pending_video;
+        if frame_complete || self.is_playing {
+            self.engine.render_frame(&frame);
+        }
 
         // 5. Build and return the EngineStatus JSON manually
         let mut json = String::from("{");
@@ -803,6 +815,7 @@ impl IfolRenderWeb {
             "\"buffering\""
         };
         json.push_str(&format!("\"status\":{},", status_str));
+        json.push_str(&format!("\"frame_complete\":{},", frame_complete));
 
         let buff_join = buffering_assets
             .iter()

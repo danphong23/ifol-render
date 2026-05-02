@@ -147,6 +147,7 @@ function requestRender() {
         metricsStr = engine.render_frame_v2(timelineScope ? 0 : timeSec, activeCam, false, undefined, undefined, undefined, undefined);
     }
     
+    let frameComplete = true;
     try {
         const metrics = JSON.parse(metricsStr);
         if (metrics.vram_bytes !== undefined) {
@@ -154,11 +155,20 @@ function requestRender() {
             $('lblVram').textContent = `VRAM: ${d} MB (${metrics.vram_count} Tex)`;
             if (isDual) $('lblVram2').textContent = `VRAM: ${d} MB (${metrics.vram_count} Tex)`;
         }
+        if (metrics.frame_complete !== undefined) {
+            frameComplete = metrics.frame_complete;
+        }
     } catch(e) {}
     
-    const ctx1 = canvas1.getContext('2d');
-    ctx1.clearRect(0, 0, canvas1.width, canvas1.height);
-    ctx1.drawImage(gpuCanvas, 0, 0);
+    // Frame Readiness: only blit when the frame is fully rendered (all video
+    // textures decoded). When frame_complete=false, the GPU canvas still holds
+    // the previous complete frame — we keep it visible instead of showing a
+    // partial frame with missing video content.
+    if (frameComplete) {
+        const ctx1 = canvas1.getContext('2d');
+        ctx1.clearRect(0, 0, canvas1.width, canvas1.height);
+        ctx1.drawImage(gpuCanvas, 0, 0);
+    }
 
     // --- Pass 2: Render Viewport 2 (Camera Mode on canvasMain2) ---
     if (isDual) {
