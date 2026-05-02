@@ -267,6 +267,15 @@ impl CoreEngine {
         width: u32,
         height: u32,
     ) {
+        // Hash using the engine's deterministic frame number rather than video.current_time().
+        // Since video.current_time() updates asynchronously, it can be identical across two WebGPU frames
+        // even when the underlying video pixel buffer has advanced, causing the RenderGraph to freeze.
+        // Using frame_number guarantees we NEVER cache a stale frame when actively streaming.
+        self.renderer.graph_state.texture_versions.insert(
+            key.to_string(), 
+            self.renderer.get_frame_number() as u64
+        );
+
         self.renderer
             .load_video_texture_web(key, video, width, height);
     }
@@ -390,6 +399,16 @@ impl CoreEngine {
         // Clear transient texture pool — all in-flight offscreen targets are stale
         self.renderer.texture_pool.clear();
         log::info!("Scope changed: evicted intermediate render targets");
+    }
+
+    /// Invalidate the RenderGraph node cache.
+    ///
+    /// Forces ALL passes to re-execute on the next frame regardless of whether
+    /// their content hash has changed. Use this when the logical time context
+    /// shifts (e.g. scope_time scrub) but the pass structure may look identical
+    /// to the cache from a previous frame at the same time.
+    pub fn invalidate_render_graph(&mut self) {
+        self.renderer.graph_state.nodes.clear();
     }
 
     /// Kill all persistent FFmpeg VideoStream processes and clear the cache.

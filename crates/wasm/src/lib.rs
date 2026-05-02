@@ -38,6 +38,8 @@ pub struct IfolRenderWeb {
     previous_scope: Option<String>,
     /// Scope time override: local time for scoped composition (bypasses speed/loop/trim)
     scope_time: Option<f64>,
+    /// Last effective render time — used to detect time changes for graph invalidation
+    last_render_time: f64,
     /// Visual style for selected entities ("rect" or "content")
     select_mode: String,
 
@@ -94,6 +96,7 @@ impl IfolRenderWeb {
             render_scope: None,
             previous_scope: None,
             scope_time: None,
+            last_render_time: -1.0,
             select_mode: "rect".to_string(),
             on_event_callback: None,
             post_effects_enabled: true,
@@ -403,6 +406,18 @@ impl IfolRenderWeb {
         if world.override_time != Some(time_sec) {
             world.editor_overrides.clear();
             world.override_time = Some(time_sec);
+        }
+
+        // ── Time-change detection: invalidate RenderGraph cache ──
+        // The effective render time is determined by scope_time (for scoped comps)
+        // or time_sec (for root). When this changes, entity values change via
+        // animation but the RenderGraph may still see identical pass_hashes
+        // (e.g. returning to the same time, or video-only changes).
+        // Clearing the graph nodes forces a full re-render.
+        let effective_time = self.scope_time.unwrap_or(time_sec);
+        if (effective_time - self.last_render_time).abs() > 1e-9 {
+            self.engine.invalidate_render_graph();
+            self.last_render_time = effective_time;
         }
 
         ifol_render_ecs::ecs::pipeline::run(
