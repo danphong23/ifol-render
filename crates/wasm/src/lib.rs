@@ -39,7 +39,6 @@ pub struct IfolRenderWeb {
     /// Scope time override: local time for scoped composition (bypasses speed/loop/trim)
     scope_time: Option<f64>,
     /// Last effective render time — used to detect time changes for graph invalidation
-    last_render_time: f64,
     /// Visual style for selected entities ("rect" or "content")
     select_mode: String,
 
@@ -96,7 +95,6 @@ impl IfolRenderWeb {
             render_scope: None,
             previous_scope: None,
             scope_time: None,
-            last_render_time: -1.0,
             select_mode: "rect".to_string(),
             on_event_callback: None,
             post_effects_enabled: true,
@@ -289,6 +287,18 @@ impl IfolRenderWeb {
             world.entities.len()
         );
         self.v2_world = Some(world);
+
+        // Full state cleanup on scene change to prevent stale GPU artifacts
+        self.engine.invalidate_render_graph();
+        self.engine.evict_scope_textures();
+        self.media_manager.clear();
+        self.audio_manager.clear();
+        self.render_scope = None;
+        self.previous_scope = None;
+        self.scope_time = None;
+        self.selected_entity_ids.clear();
+        self.is_playing = false;
+
         Ok(())
     }
 
@@ -408,17 +418,13 @@ impl IfolRenderWeb {
             world.override_time = Some(time_sec);
         }
 
-        // ── Time-change detection: invalidate RenderGraph cache ──
-        // The effective render time is determined by scope_time (for scoped comps)
-        // or time_sec (for root). When this changes, entity values change via
-        // animation but the RenderGraph may still see identical pass_hashes
-        // (e.g. returning to the same time, or video-only changes).
-        // Clearing the graph nodes forces a full re-render.
-        let effective_time = self.scope_time.unwrap_or(time_sec);
-        if (effective_time - self.last_render_time).abs() > 1e-9 {
-            self.engine.invalidate_render_graph();
-            self.last_render_time = effective_time;
-        }
+        // ── RenderGraph cache invalidation ──
+        // Always clear graph node cache on every render call. The per-pass
+        // hash system (actual_hash in engine.render_frame) will still skip
+        // unchanged GPU work — this only ensures we never serve stale cached
+        // nodes from a previous frame (which caused composition freezing
+        // on backward seeks where effective_time matched a previously-rendered time).
+        self.engine.invalidate_render_graph();
 
         ifol_render_ecs::ecs::pipeline::run(
             &mut world,
@@ -618,8 +624,8 @@ impl IfolRenderWeb {
         if is_editor_mode {
             let gizmo_layer = editor_gizmo_layer;
             
-            // Create __editor_cam__ virtual camera
-            world.add_entity(ifol_render_ecs::ecs::Entity {
+            // Upsert __editor_cam__ virtual camera (persistent across frames)
+            world.upsert_entity(ifol_render_ecs::ecs::Entity {
                 id: "__editor_cam__".to_string(),
                 resolved: {
                     let mut r = ifol_render_ecs::ecs::ResolvedState::default();
@@ -666,7 +672,7 @@ impl IfolRenderWeb {
                 clone_cam = c.clone();
             }
             
-            world.add_entity(ifol_render_ecs::ecs::Entity {
+            world.upsert_entity(ifol_render_ecs::ecs::Entity {
                 id: "__editor_cam_content__".to_string(),
                 resolved: {
                     let mut r = ifol_render_ecs::ecs::ResolvedState::default();
@@ -701,7 +707,7 @@ impl IfolRenderWeb {
             });
             
             // Setup gizmo sub-camera pointing to gizmo_layer
-            world.add_entity(ifol_render_ecs::ecs::Entity {
+            world.upsert_entity(ifol_render_ecs::ecs::Entity {
                 id: "__gizmo_cam__".to_string(),
                 resolved: {
                     let mut r = ifol_render_ecs::ecs::ResolvedState::default();
@@ -793,18 +799,19 @@ impl IfolRenderWeb {
             }
         }
 
+        // Editor entities are now persistent (upsert_entity) — no cleanup needed.
+
         self.v2_world = Some(world);
 
-        // 4. Send to WGPU engine — Frame Readiness Gate
-        // When paused/scrubbing: if ANY visible video entity doesn't have its frame
-        // decoded yet, HOLD the previous frame. This prevents partial frames where
-        // entities appear without their video content.
-        // When playing: render progressively (stale video is acceptable to keep
-        // the scene moving — matches CapCut/Premiere behavior).
+        // 4. Send to WGPU engine — ALWAYS render
+        // Previously this had a "Frame Readiness Gate" that would SKIP
+        // engine.render_frame() when has_pending_video was true and not playing.
+        // That caused ALL compositions to freeze when ANY single video entity
+        // was pending (e.g. after leaving/re-entering a comp's lifespan).
+        // Now we always render: non-video entities render immediately,
+        // video entities show stale/placeholder until their frame arrives.
         let frame_complete = !has_pending_video;
-        if frame_complete || self.is_playing {
-            self.engine.render_frame(&frame);
-        }
+        self.engine.render_frame(&frame);
 
         // 5. Build and return the EngineStatus JSON manually
         let mut json = String::from("{");

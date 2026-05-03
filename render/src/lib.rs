@@ -1182,10 +1182,17 @@ impl Renderer {
             .filter(|(_, v)| current > v.last_used_frame + max_age)
             .map(|(k, _)| k.clone())
             .collect();
-        for key in stale_keys {
-            if let Some(entry) = self.texture_cache.remove(&key) {
+        for key in &stale_keys {
+            if let Some(entry) = self.texture_cache.remove(key) {
                 self.texture_cache_bytes -= entry.size_bytes;
             }
+            // Evict any cached bind groups that reference the destroyed texture.
+            // Bind group cache key = (pipeline, tex0_key, tex1_key).
+            // A stale bind group pointing to a destroyed GPU texture causes
+            // rendering to show frozen/garbage frames (the "scrub freeze" bug).
+            self.bind_group_cache.retain(|(_pipe, t0, t1), _| {
+                t0 != key && t1 != key
+            });
         }
     }
 

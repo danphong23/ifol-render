@@ -24,7 +24,7 @@ pub fn audio_system(world: &mut World) {
         if let Some(video) = storages.get_component::<VideoSource>(&entity.id) {
             has_audio = true;
             // Volume is intrinsically linked to opacity/fades in V4 design for simplicity unless overridden.
-            base_volume = entity.resolved.opacity;
+            base_volume = entity.resolved.volume;
             asset_url = world
                 .assets
                 .get(&video.asset_id)
@@ -39,7 +39,7 @@ pub fn audio_system(world: &mut World) {
         // Check if AudioSource exists
         if let Some(audio) = storages.get_component::<AudioSource>(&entity.id) {
             has_audio = true;
-            base_volume = entity.resolved.opacity;
+            base_volume = entity.resolved.volume;
             asset_url = world
                 .assets
                 .get(&audio.asset_id)

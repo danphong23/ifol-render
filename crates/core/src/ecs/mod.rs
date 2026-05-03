@@ -176,6 +176,29 @@ impl World {
         self.entities.push(entity);
     }
 
+    /// Insert or update an entity. If an entity with the same ID already exists,
+    /// update its resolved state and draw data in-place (no vector growth).
+    /// If not, append a new entity. Components are managed separately via add_component.
+    pub fn upsert_entity(&mut self, entity: Entity) {
+        if let Some(&idx) = self.id_index.get(&entity.id) {
+            if let Some(existing) = self.entities.get_mut(idx) {
+                existing.resolved = entity.resolved;
+                existing.draw = entity.draw;
+            }
+        } else {
+            let idx = self.entities.len();
+            self.id_index.insert(entity.id.clone(), idx);
+            self.entities.push(entity);
+        }
+    }
+
+    /// Remove all entities whose ID starts with the given prefix and rebuild index.
+    /// Component data in storages is left as-is (keyed by ID, overwritten on re-add).
+    pub fn remove_entities_by_prefix(&mut self, prefix: &str) {
+        self.entities.retain(|e| !e.id.starts_with(prefix));
+        self.rebuild_index();
+    }
+
     pub fn get(&self, id: &str) -> Option<&Entity> {
         self.id_index
             .get(id)

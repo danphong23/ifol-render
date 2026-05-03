@@ -26,8 +26,11 @@ pub fn compile_composition_buffers(
     state.comp_entities.sort_by_key(|id| std::cmp::Reverse(get_depth(id)));
 
     let comp_entities = state.comp_entities.clone();
+    log::debug!("[COMP_PASS] Processing {} compositions: {:?}", comp_entities.len(), comp_entities);
     for comp_id in comp_entities {
         let comp_ent = world.get(&comp_id).unwrap();
+        let list_count = state.comp_lists.get(&comp_id).map(|l| l.len()).unwrap_or(0);
+        log::debug!("[COMP_PASS] {} has {} flat entities", comp_id, list_count);
         let (cw, ch) = {
             let (_, _, cw, ch, _) = state.comp_cameras.get(&comp_id).unwrap();
             (*cw, *ch)

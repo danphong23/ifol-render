@@ -44,9 +44,15 @@ pub fn render_to_frame(
     // Compute sorted entity list ONCE — reused by camera discovery and effect_pass.
     let sorted = world.sorted_by_layer();
     for entity in &sorted {
-        if !entity.resolved.visible { continue; }
+        if !entity.resolved.visible {
+            if storages.get_component::<crate::ecs::components::Composition>(&entity.id).is_some() {
+                log::debug!("[COMP] {} INVISIBLE at scope_time={:.3}", entity.id, entity.resolved.scope_time);
+            }
+            continue;
+        }
         if !context.active_entities.contains(&entity.id) { continue; }
         if storages.get_component::<crate::ecs::components::Composition>(&entity.id).is_some() {
+            log::debug!("[COMP] {} VISIBLE at scope_time={:.3}, content_time={:.3}", entity.id, entity.resolved.scope_time, entity.resolved.content_time);
             let mut cam_ent = None;
             for c_ent in &sorted {
                 if !c_ent.resolved.visible { continue; }
@@ -212,6 +218,10 @@ pub fn render_to_frame(
         // Legacy single-camera path (backward compatible)
         build_single_camera_pass(&mut state, flat_entities_all, screen_width, screen_height);
     }
+
+    log::debug!("[RENDER] Frame compiled: {} passes, {} tex_updates, {} audio_calls, comp_cameras: {:?}",
+        state.passes.len(), state.texture_updates.len(), state.audio_calls.len(),
+        state.comp_cameras.keys().collect::<Vec<_>>());
 
     Frame {
         passes: state.passes,

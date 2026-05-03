@@ -160,11 +160,10 @@ function requestRender() {
         }
     } catch(e) {}
     
-    // Frame Readiness: only blit when the frame is fully rendered (all video
-    // textures decoded). When frame_complete=false, the GPU canvas still holds
-    // the previous complete frame — we keep it visible instead of showing a
-    // partial frame with missing video content.
-    if (frameComplete) {
+    // Always blit GPU canvas to display canvas. frame_complete is tracked
+    // as a metric but does NOT gate display — blocking blit caused the entire
+    // viewport to freeze when any single video entity was still seeking.
+    {
         const ctx1 = canvas1.getContext('2d');
         ctx1.clearRect(0, 0, canvas1.width, canvas1.height);
         ctx1.drawImage(gpuCanvas, 0, 0);
@@ -1287,8 +1286,11 @@ $('canvasTimeline').addEventListener('dblclick', e => {
     }
 });
 
-// Timeline scrub drag
+// Timeline scrub drag — RAF-debounced to prevent multiple WebGPU
+// surface present() calls within a single browser frame.
 let isScrubbing = false;
+let scrubRAF = null;
+
 $('canvasTimeline').addEventListener('mousedown', e => {
     const wrap = $('timelineCanvasWrap');
     const rect = wrap.getBoundingClientRect();
@@ -1304,15 +1306,30 @@ window.addEventListener('mousemove', e => {
     const rect = wrap.getBoundingClientRect();
     const cssX = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
     const scopeD = getScopeDuration();
-    const clickTime = (cssX / rect.width) * scopeD;
-    // When scoped, set local time directly
-    timeSec = clickTime;
+    // Update time immediately (timeline UI stays responsive)
+    timeSec = (cssX / rect.width) * scopeD;
     playing = false;
     if (engine) engine.set_playing(false);
-    requestRender();
+    // Render only once per animation frame
+    if (!scrubRAF) {
+        scrubRAF = requestAnimationFrame(() => {
+            requestRender();
+            scrubRAF = null;
+        });
+    }
 });
 
-window.addEventListener('mouseup', () => { isScrubbing = false; });
+window.addEventListener('mouseup', () => {
+    if (isScrubbing) {
+        isScrubbing = false;
+        // Final render at exact drop position
+        if (scrubRAF) {
+            cancelAnimationFrame(scrubRAF);
+            scrubRAF = null;
+        }
+        requestRender();
+    }
+});
 
 // Listen for Wasm Native Video async decode completion
 window.addEventListener('ifol_video_seeked', () => {
