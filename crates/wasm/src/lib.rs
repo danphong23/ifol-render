@@ -434,7 +434,7 @@ impl IfolRenderWeb {
         );
 
         // Sync HTML5 <audio> tags with ECS time and volume
-        self.audio_manager.sync_audio(&world, self.is_playing);
+        self.audio_manager.sync_audio(&world, self.is_playing, self.render_scope.as_deref());
 
         // ---- Asset Discovery Scans (Buffering & Preload) ----
         let mut buffering_assets = Vec::new();

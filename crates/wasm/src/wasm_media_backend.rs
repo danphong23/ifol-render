@@ -66,8 +66,8 @@ impl MediaBackend for WasmMediaBackendImpl {
         self.video.cleanup_orphaned(active_entity_ids);
     }
 
-    fn sync_audio(&mut self, world: &World, is_playing: bool) {
-        self.audio.sync_audio(world, is_playing);
+    fn sync_audio(&mut self, world: &World, is_playing: bool, render_scope: Option<&str>) {
+        self.audio.sync_audio(world, is_playing, render_scope);
     }
 
     fn clear(&mut self) {

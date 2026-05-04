@@ -42,7 +42,7 @@ impl WasmAudioManager {
         }
     }
 
-    pub fn sync_audio(&mut self, world: &World, is_engine_playing: bool) {
+    pub fn sync_audio(&mut self, world: &World, is_engine_playing: bool, render_scope: Option<&str>) {
         let storages = &world.storages;
 
         // Track which entity paths we actively touched this frame.
@@ -72,6 +72,21 @@ impl WasmAudioManager {
             // Check if visible and volume > 0
             if !entity.resolved.visible {
                 continue;
+            }
+
+            // Audio scope filtering: only play audio from entities in the current scope.
+            // When scoped into a composition, root-level audio must be silenced.
+            let entity_parent = storages
+                .get_component::<ifol_render_ecs::ecs::components::meta::ParentId>(&entity.id)
+                .map(|p| p.0.as_str());
+            match (render_scope, entity_parent) {
+                // Root scope: only play root entities (no parent)
+                (None, Some(_)) => continue,
+                // Comp scope: only play children of that comp
+                (Some(scope_id), Some(parent)) if parent != scope_id => continue,
+                // Comp scope but entity has no parent: skip root entities
+                (Some(_), None) => continue,
+                _ => {} // match: entity belongs to current scope
             }
 
             let volume = entity.resolved.volume;
