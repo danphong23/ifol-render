@@ -57,8 +57,7 @@ pub trait MediaBackend {
     fn cleanup_orphaned_videos(&mut self, active_entity_ids: &std::collections::HashSet<String>);
 
     /// Synchronize audio playback with ECS world state.
-    /// `render_scope` filters audio to only the current editing scope.
-    fn sync_audio(&mut self, world: &World, is_playing: bool, render_scope: Option<&str>);
+    fn sync_audio(&mut self, world: &World, is_playing: bool);
 
     /// Clear all media resources.
     fn clear(&mut self);

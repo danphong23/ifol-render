@@ -160,19 +160,13 @@ function requestRender() {
         }
     } catch(e) {}
     
-    // Always blit GPU canvas to display canvas immediately.
-    // This ensures non-video entities appear instantly even while video is still seeking.
+    // Always blit GPU canvas to display canvas. frame_complete is tracked
+    // as a metric but does NOT gate display — blocking blit caused the entire
+    // viewport to freeze when any single video entity was still seeking.
     {
         const ctx1 = canvas1.getContext('2d');
         ctx1.clearRect(0, 0, canvas1.width, canvas1.height);
         ctx1.drawImage(gpuCanvas, 0, 0);
-    }
-
-    // Progressive rendering: if video frames are still pending (async seek),
-    // schedule a follow-up render on next animation frame to pick them up.
-    // This replaces the old "block blit until complete" approach which froze the viewport.
-    if (!frameComplete && !playing) {
-        requestAnimationFrame(requestRender);
     }
 
     // --- Pass 2: Render Viewport 2 (Camera Mode on canvasMain2) ---
