@@ -661,9 +661,8 @@ window.addEventListener('mousemove', e => {
             cam_y = timelineScope ? 0 : 360;
             cam_zoom = cam_zoom || 1.0;
         }
-        const qLabel = parseFloat($('selQuality') ? $('selQuality').value : '1') || 1;
-        cam_x -= dx / ((cam_zoom || 1) * qLabel);
-        cam_y -= dy / ((cam_zoom || 1) * qLabel);
+        cam_x -= dx / (cam_zoom || 1);
+        cam_y -= dy / (cam_zoom || 1);
         if (!playing) requestRender();
     }
 });
