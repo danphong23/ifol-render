@@ -429,6 +429,11 @@ fn build_multi_camera_passes(
                 // DO NOT scale fe.params! Shaders like shapes.wgsl and dashed_rect.wgsl 
                 // use normalized coordinates (0.0 to 1.0) relative to UV space.
                 // Their physical pixel size scales automatically with fe.width and fe.height.
+                
+                // CRITICAL: We modified the spatial properties, so we MUST recalculate 
+                // the content hash! Otherwise RenderGraph caching will fail to detect 
+                // changes when panning/zooming at lower render qualities.
+                fe.content_hash = fe.calculate_hash();
             }
         }
 

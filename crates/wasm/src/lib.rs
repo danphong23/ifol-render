@@ -24,7 +24,7 @@ pub struct IfolRenderWeb {
 
     // ── V2 Stateful ECS ──
     v2_world: Option<ifol_render_ecs::ecs::World>,
-    v2_asset_mgr: Option<ifol_render_ecs::assets::AssetManager>,
+    _v2_asset_mgr: Option<ifol_render_ecs::assets::AssetManager>,
 
     media_manager: WasmMediaManager,
     audio_manager: WasmAudioManager,
@@ -56,8 +56,7 @@ pub struct IfolRenderWeb {
 impl IfolRenderWeb {
     /// Create a new renderer attached to a canvas element.
     /// Note: The canvas must already exist in the DOM.
-    #[wasm_bindgen(constructor)]
-    pub async fn new(
+    pub async fn create(
         canvas: HtmlCanvasElement,
         width: u32,
         height: u32,
@@ -87,7 +86,7 @@ impl IfolRenderWeb {
             backend,
             frame_buffer: Vec::new(),
             v2_world: None,
-            v2_asset_mgr: Some(ifol_render_ecs::assets::AssetManager::new(2.0)),
+            _v2_asset_mgr: Some(ifol_render_ecs::assets::AssetManager::new(2.0)),
             media_manager: WasmMediaManager::new(),
             audio_manager: WasmAudioManager::new(),
             is_playing: false,
@@ -232,8 +231,10 @@ impl IfolRenderWeb {
 
     /// Render a single pre-calculated `Frame` object natively.
     pub fn render_frame(&mut self, frame_json: &str) -> Result<(), JsValue> {
-        let frame: Frame = serde_json::from_str(frame_json)
+        let mut frame: Frame = serde_json::from_str(frame_json)
             .map_err(|e| JsValue::from_str(&format!("Invalid Frame JSON: {}", e)))?;
+
+        frame.recompute_hashes();
 
         // Process the frame (this bypasses CPU readback and renders directly to the canvas Surface)
         self.engine.render_frame(&frame);
@@ -251,8 +252,10 @@ impl IfolRenderWeb {
         scene_width: u32,
         scene_height: u32,
     ) -> Result<(), JsValue> {
-        let frame: Frame = serde_json::from_str(frame_json)
+        let mut frame: Frame = serde_json::from_str(frame_json)
             .map_err(|e| JsValue::from_str(&format!("Invalid Frame JSON: {}", e)))?;
+        
+        frame.recompute_hashes();
 
         let rw = self.engine.settings().width;
         let rh = self.engine.settings().height;
@@ -879,7 +882,7 @@ impl IfolRenderWeb {
         let storages = &world.storages;
 
         // Find the comp entity
-        let comp_ent = world.entities.iter().find(|e| e.id == scope_id)?;
+        let _comp_ent = world.entities.iter().find(|e| e.id == scope_id)?;
 
         // Find DIRECT child camera  
         let cam_ent = world.entities.iter().find(|c| {
@@ -1015,7 +1018,7 @@ impl IfolRenderWeb {
                 }) {
                     let inner_cw = cam_ent.resolved.width.max(1.0);
                     let inner_ch = cam_ent.resolved.height.max(1.0);
-                    let comp_ent = world.entities.iter().find(|e| e.id == hit.entity_id).unwrap();
+                    let _comp_ent = world.entities.iter().find(|e| e.id == hit.entity_id).unwrap();
                     // Fix: The inner camera offset must subtract half the Camera's size to get top-left
                     let inner_cam_x = cam_ent.resolved.x - inner_cw * 0.5;
                     let inner_cam_y = cam_ent.resolved.y - inner_ch * 0.5;

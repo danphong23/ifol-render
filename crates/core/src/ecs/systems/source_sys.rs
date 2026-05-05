@@ -1,5 +1,5 @@
 use crate::ecs::World;
-use crate::ecs::components::FitMode;
+
 use crate::ecs::components::draw::{DrawCall, DrawKind, TextureRequest};
 
 /// Generates DrawCalls from pure data components and resolved state.

@@ -5,6 +5,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::process::{Command, Stdio};
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::clip::AudioConfig;
 
 /// Decode an audio file to raw PCM f32 samples using FFmpeg.

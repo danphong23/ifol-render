@@ -463,7 +463,7 @@ impl CoreEngine {
 
             // Mix in input texture versions to compute actual hash
             let actual_hash = {
-                use std::hash::{Hash, Hasher};
+                use std::hash::Hasher;
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 hasher.write_u64(pass.pass_hash);
                 
@@ -483,6 +483,9 @@ impl CoreEngine {
                 for key in input_keys {
                     if let Some(v) = self.renderer.graph_state.texture_versions.get(&key) {
                         hasher.write_u64(*v);
+                    }
+                    if let Some(node) = self.renderer.graph_state.nodes.get(&key) {
+                        hasher.write_u64(node.pass_hash);
                     }
                 }
                 hasher.finish()

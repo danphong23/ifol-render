@@ -218,7 +218,7 @@ impl Frame {
     pub fn scaled(&self, sx: f64, sy: f64) -> Frame {
         let sx = sx as f32;
         let sy = sy as f32;
-        Frame {
+        let mut res = Frame {
             passes: self
                 .passes
                 .iter()
@@ -249,6 +249,30 @@ impl Frame {
                 .collect(),
             texture_updates: self.texture_updates.clone(),
             audio_calls: self.audio_calls.clone(),
+        };
+        res.recompute_hashes();
+        res
+    }
+
+    /// Recomputes all entity and pass hashes.
+    /// This is required when a Frame is instantiated from JSON because the JS
+    /// SDK does not calculate hashes (and `serde(default)` yields 0).
+    pub fn recompute_hashes(&mut self) {
+        for pass in &mut self.passes {
+            match &mut pass.pass_type {
+                PassType::Entities { entities, .. } => {
+                    for e in entities {
+                        e.content_hash = e.calculate_hash();
+                    }
+                }
+                PassType::Output { entities, .. } => {
+                    for e in entities {
+                        e.content_hash = e.calculate_hash();
+                    }
+                }
+                _ => {}
+            }
+            pass.pass_hash = pass.calculate_hash();
         }
     }
 }

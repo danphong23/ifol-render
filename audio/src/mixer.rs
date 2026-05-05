@@ -1,5 +1,6 @@
 //! PCM audio mixer — combines multiple decoded clips into a single buffer.
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::clip::{AudioClip, AudioConfig};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::decoder::decode_audio;

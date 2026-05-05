@@ -7,7 +7,7 @@ use wasm_bindgen::prelude::*;
 use web_sys::HtmlAudioElement;
 
 // ── Configuration Constants ──
-const SYNC_TOLERANCE_PLAY: f64 = 0.25; // 250ms drift tolerance when playing (avoids stutter but keeps sync)
+
 const SYNC_TOLERANCE_SCRUB: f64 = 0.05; // 50ms snap when scrubbing audio
 
 pub struct AudioEntry {
@@ -17,6 +17,7 @@ pub struct AudioEntry {
     last_volume: f32,
     last_ecs_time: f64,
     last_global_time: f64,
+    pub last_seen_frame: u64,
     // Store closures so they are securely dropped when AudioEntry is dropped
     _on_ready: Option<Closure<dyn FnMut(web_sys::Event)>>,
 }
@@ -33,12 +34,14 @@ impl Drop for AudioEntry {
 pub struct WasmAudioManager {
     // Keyed by Entity ID independently
     audios: HashMap<String, Rc<RefCell<AudioEntry>>>,
+    pub current_frame: u64,
 }
 
 impl WasmAudioManager {
     pub fn new() -> Self {
         Self {
             audios: HashMap::new(),
+            current_frame: 0,
         }
     }
 
@@ -85,6 +88,7 @@ impl WasmAudioManager {
 
             let entry_rc = self.get_audio_by_entity(&entity_id, &url);
             let mut entry = entry_rc.borrow_mut();
+            entry.last_seen_frame = self.current_frame;
 
             if !entry.ready {
                 continue;
@@ -145,8 +149,13 @@ impl WasmAudioManager {
             }
         }
 
+        self.current_frame += 1;
         // Cleanup: remove and drop anything in cache that wasn't active this frame
-        self.audios.retain(|id, _| active_urls.contains(id));
+        // Delay eviction by 30 frames
+        let cur_frame = self.current_frame;
+        self.audios.retain(|id, entry| {
+            active_urls.contains(id) || (cur_frame.saturating_sub(entry.borrow().last_seen_frame) < 30)
+        });
     }
 
     fn get_audio_by_entity(&mut self, entity_id: &str, url: &str) -> Rc<RefCell<AudioEntry>> {
@@ -180,6 +189,7 @@ impl WasmAudioManager {
             last_volume: -1.0,
             last_ecs_time: -1.0,
             last_global_time: -1.0,
+            last_seen_frame: self.current_frame,
             _on_ready: None,
         }));
 

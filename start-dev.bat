@@ -13,4 +13,4 @@ echo.
 echo [2/2] Starting Development Server...
 echo The browser will open automatically.
 cd /d "%SCRIPT_DIR%web"
-call npm run dev
+call npm run dev -- --force

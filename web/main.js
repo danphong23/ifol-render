@@ -1,5 +1,4 @@
 import init, { IfolRenderWeb } from 'ifol-render-wasm';
-import { createTC19Json } from './tc19_super_stress.js';
 
 let engine = null;
 let playing = false;
@@ -216,7 +215,7 @@ async function initEngine() {
     await init();
     // Use the hidden gpuCanvas to initialize WebGPU context!
     const canvas = $('gpuCanvas');
-    engine = await new IfolRenderWeb(canvas, 1280, 720, 60);
+    engine = await IfolRenderWeb.create(canvas, 1280, 720, 60);
     window.engine = engine; // Expose globally for DevTools debugging
     engine.set_select_mode($('selSelectMode').value);
     engine.setup_builtins();
@@ -1521,17 +1520,6 @@ $('selTestCase').onchange = async (e) => {
 
 $('selViewCamera').onchange = () => {
     if (!playing) requestRender();
-};
-
-$('btnTestCase19').onclick = () => {
-    // Exact duration extracted from ffprobe (353.639683 seconds)
-    const v_dur = 353.639683;
-    
-    // Generate the big JSON representing the stress test
-    const jsonObj = createTC19Json(v_dur);
-    
-    $('jsonEditor').value = JSON.stringify(jsonObj, null, 2);
-    if(engine) applyJson();
 };
 
 // ════════════════════════════════════════════════════════════════════

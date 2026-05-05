@@ -1,5 +1,6 @@
 //! Audio encoder — exports PCM samples to WAV using FFmpeg.
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::clip::AudioConfig;
 
 /// Export mixed PCM audio to a WAV file using FFmpeg.

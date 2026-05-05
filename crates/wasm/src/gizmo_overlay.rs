@@ -14,10 +14,10 @@ pub fn editor_gizmo_system(
     cam_y: f32,
     sx: f32,
     sy: f32,
-    screen_width: u32,
+    _screen_width: u32,
     _screen_height: u32,
     context: &ContextView,
-    gizmo_base_layer: i32,
+    _gizmo_base_layer: i32,
 ) -> Vec<FlatEntity> {
     let mut gizmos = Vec::new();
     let storages = &world.storages;

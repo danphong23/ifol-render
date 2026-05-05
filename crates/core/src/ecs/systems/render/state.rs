@@ -1,4 +1,4 @@
-use crate::frame::{FlatEntity, PassType, RenderPass, TextureUpdate, AudioCall};
+use crate::frame::{FlatEntity, RenderPass, TextureUpdate, AudioCall};
 use crate::ecs::components::draw::EffectPassDef;
 use std::collections::HashMap;
 

@@ -78,7 +78,7 @@ pub fn build_entity_passes(
             }
         }
 
-        let (local_cam_x, local_cam_y, local_cam_w, local_cam_h, local_mask) = if target_comp == "main" {
+        let (local_cam_x, local_cam_y, _local_cam_w, _local_cam_h, local_mask) = if target_comp == "main" {
             (state.root_cam_x, state.root_cam_y, state.root_cam_w, state.root_cam_h, state.root_cam_mask)
         } else {
             let (cx, cy, cw, ch, mask) = state.comp_cameras.get(&target_comp).unwrap();

@@ -1,4 +1,4 @@
-use ifol_render_ecs::ecs::World;
+
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -7,7 +7,7 @@ use wasm_bindgen::prelude::*;
 use web_sys::HtmlVideoElement;
 
 // ── Configuration Constants ──
-const SYNC_TOLERANCE_PLAY: f64 = 0.3; // 300ms drift tolerance when playing (avoids stutter but keeps sync)
+
 const SYNC_TOLERANCE_SCRUB: f64 = 0.02; // 20ms frame-perfect snap when scrubbing
 
 pub struct VideoEntry {
@@ -16,6 +16,7 @@ pub struct VideoEntry {
     playing: bool,
     last_ecs_time: f64,
     last_seek_target: f64,
+    last_seen_frame: u64,
     // Store closures so they are safely dropped when VideoEntry is dropped (no more memory leaks)
     _on_ready: Option<Closure<dyn FnMut(web_sys::Event)>>,
     _on_seeked: Option<Closure<dyn FnMut(web_sys::Event)>>,
@@ -33,12 +34,14 @@ impl Drop for VideoEntry {
 pub struct WasmMediaManager {
     // Key is now the Entity ID, NOT the URL, so entities can share URLs freely.
     videos: HashMap<String, Rc<RefCell<VideoEntry>>>,
+    current_frame: u64,
 }
 
 impl WasmMediaManager {
     pub fn new() -> Self {
         Self {
             videos: HashMap::new(),
+            current_frame: 0,
         }
     }
 
@@ -76,6 +79,7 @@ impl WasmMediaManager {
             playing: false,
             last_ecs_time: -1.0,
             last_seek_target: -1.0,
+            last_seen_frame: self.current_frame,
             _on_ready: None,
             _on_seeked: None,
         }));
@@ -126,6 +130,7 @@ impl WasmMediaManager {
 
         let entry_rc = self.get_video(entity_id, url);
         let mut entry = entry_rc.borrow_mut();
+        entry.last_seen_frame = self.current_frame;
 
         if !entry.ready {
             return None;
@@ -192,7 +197,8 @@ impl WasmMediaManager {
     /// Check if a video has enough data loaded for a specific timestamp WITHOUT altering playback state.
     pub fn is_video_ready(&mut self, entity_id: &str, url: &str, _time: f64) -> bool {
         let entry_rc = self.get_video(entity_id, url);
-        let entry = entry_rc.borrow();
+        let mut entry = entry_rc.borrow_mut();
+        entry.last_seen_frame = self.current_frame;
 
         if !entry.ready {
             return false;
@@ -216,7 +222,8 @@ impl WasmMediaManager {
     pub fn preload_video(&mut self, entity_id: &str, url: &str, target_time: f64) {
         // Just calling get_video forces the creation of the <video> DOM element with preload="auto"
         let entry_rc = self.get_video(entity_id, url);
-        let entry = entry_rc.borrow();
+        let mut entry = entry_rc.borrow_mut();
+        entry.last_seen_frame = self.current_frame;
 
         // Optionally, if not playing, we can seek to the target_time to force buffer loading around that area.
         if entry.ready && !entry.playing {
@@ -230,8 +237,13 @@ impl WasmMediaManager {
 
     /// Evict videos not found in active entities set.
     pub fn cleanup_orphaned(&mut self, active_entity_ids: &HashSet<String>) {
+        self.current_frame += 1;
         // `retain` automatically calls `Drop` on removed items (which removes them from the DOM)
-        self.videos.retain(|id, _| active_entity_ids.contains(id));
+        // Delay eviction by 30 frames to handle multi-pass rendering setups (like dual view)
+        let cur_frame = self.current_frame;
+        self.videos.retain(|id, entry| {
+            active_entity_ids.contains(id) || (cur_frame.saturating_sub(entry.borrow().last_seen_frame) < 30)
+        });
     }
 
     /// Clear entirely. Drops all VideoEntry, triggering DOM remove.
