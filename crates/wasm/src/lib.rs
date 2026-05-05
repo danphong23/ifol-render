@@ -577,7 +577,7 @@ impl IfolRenderWeb {
         for s in &self.selected_entity_ids {
             selected_ids.insert(s.clone());
         }
-        let context = world.build_context(self.render_scope.as_deref(), selected_ids, self.select_mode.clone());
+        let mut context = world.build_context(self.render_scope.as_deref(), selected_ids, self.select_mode.clone());
 
         let cam_ids: Vec<String> = world.entities.iter()
             .filter(|e| world.storages.get_component::<ifol_render_ecs::ecs::components::CameraComponent>(&e.id).is_some())
@@ -641,10 +641,10 @@ impl IfolRenderWeb {
             editor_cam.target_cameras = vec!["__editor_cam_content__".to_string(), "__gizmo_cam__".to_string()];
             world.add_component("__editor_cam__", editor_cam);
             
-            let (mut center_x, mut center_y, mut width, mut height) = if let Some(c) = world.find_camera(camera_id) {
-                (c.resolved.x, c.resolved.y, c.resolved.width, c.resolved.height)
+            let (mut center_x, mut center_y, mut width, mut height, cam_time, cam_scope_time) = if let Some(c) = world.find_camera(camera_id) {
+                (c.resolved.x, c.resolved.y, c.resolved.width, c.resolved.height, c.resolved.time.clone(), c.resolved.scope_time)
             } else {
-                (0.0, 0.0, 1280.0, 720.0)
+                (0.0, 0.0, 1280.0, 720.0, ifol_render_ecs::time::EntityTime::default(), 0.0)
             };
 
             // custom_cam_w and custom_cam_h are provided directly
@@ -679,6 +679,8 @@ impl IfolRenderWeb {
                     r.visible = true;
                     r.x = center_x; r.y = center_y;
                     r.width = width; r.height = height;
+                    r.time = cam_time.clone();
+                    r.scope_time = cam_scope_time;
                     r
                 },
                 draw: Default::default(),
@@ -714,6 +716,8 @@ impl IfolRenderWeb {
                     r.visible = true;
                     r.x = center_x; r.y = center_y;
                     r.width = width; r.height = height;
+                    r.time = cam_time;
+                    r.scope_time = cam_scope_time;
                     r
                 },
                 draw: Default::default(),
@@ -735,8 +739,14 @@ impl IfolRenderWeb {
                 align_x: 0.5, align_y: 0.5,
             });
             
+            
             // Redirect render to use virtual master camera
             actual_camera_id = "__editor_cam__".to_string();
+            
+            // Add virtual cameras to active entities so they are processed by Phase 5
+            context.active_entities.insert("__editor_cam__".to_string());
+            context.active_entities.insert("__editor_cam_content__".to_string());
+            context.active_entities.insert("__gizmo_cam__".to_string());
         }
 
         // 3.3. Core Render Phase
