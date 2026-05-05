@@ -15,6 +15,7 @@ pub struct VideoEntry {
     ready: bool,
     playing: bool,
     last_ecs_time: f64,
+    last_seek_target: f64,
     // Store closures so they are safely dropped when VideoEntry is dropped (no more memory leaks)
     _on_ready: Option<Closure<dyn FnMut(web_sys::Event)>>,
     _on_seeked: Option<Closure<dyn FnMut(web_sys::Event)>>,
@@ -74,6 +75,7 @@ impl WasmMediaManager {
             ready: false,
             playing: false,
             last_ecs_time: -1.0,
+            last_seek_target: -1.0,
             _on_ready: None,
             _on_seeked: None,
         }));
@@ -162,7 +164,13 @@ impl WasmMediaManager {
         } else {
             el.set_playback_rate(1.0);
             if diff > SYNC_TOLERANCE_SCRUB {
-                el.set_current_time(rounded_time);
+                // Prevent repeatedly issuing seeks to the exact same frame while it's still buffering
+                if (entry.last_seek_target - rounded_time).abs() > 0.001 {
+                    el.set_current_time(rounded_time);
+                    entry.last_seek_target = rounded_time;
+                }
+            } else {
+                entry.last_seek_target = -1.0;
             }
             if entry.playing {
                 let _ = el.pause();

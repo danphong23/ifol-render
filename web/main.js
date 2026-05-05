@@ -160,13 +160,18 @@ function requestRender() {
         }
     } catch(e) {}
     
-    // Always blit GPU canvas to display canvas. frame_complete is tracked
-    // as a metric but does NOT gate display — blocking blit caused the entire
-    // viewport to freeze when any single video entity was still seeking.
-    {
+    // Only blit GPU canvas to display canvas if the frame is fully ready.
+    // This prevents tearing and missing videos during scrubbing.
+    if (frameComplete) {
         const ctx1 = canvas1.getContext('2d');
         ctx1.clearRect(0, 0, canvas1.width, canvas1.height);
         ctx1.drawImage(gpuCanvas, 0, 0);
+    } else {
+        // If frame is incomplete and we aren't in the main playback loop, we MUST 
+        // poll again to ensure the frame eventually renders when the video finishes buffering.
+        if (!playing) {
+            requestAnimationFrame(requestRender);
+        }
     }
 
     // --- Pass 2: Render Viewport 2 (Camera Mode on canvasMain2) ---
@@ -195,9 +200,11 @@ function requestRender() {
         
         engine.render_frame_v2(timelineScope ? 0 : timeSec, "main_cam", false, undefined, undefined, undefined, undefined);
         
-        const ctx2 = canvas2.getContext('2d');
-        ctx2.clearRect(0, 0, canvas2.width, canvas2.height);
-        ctx2.drawImage(gpuCanvas, 0, 0);
+        if (frameComplete) {
+            const ctx2 = canvas2.getContext('2d');
+            ctx2.clearRect(0, 0, canvas2.width, canvas2.height);
+            ctx2.drawImage(gpuCanvas, 0, 0);
+        }
     }
     
     renderTimeline();
