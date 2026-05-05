@@ -401,7 +401,7 @@ fn build_multi_camera_passes(
         let scaled_height = (screen_height as f32 * cam_info.render_scale).max(1.0) as u32;
 
         // Filter entities by this camera's target_layers
-        let cam_entities: Vec<_> = sorted_entities.iter().filter(|e| {
+        let mut cam_entities: Vec<_> = sorted_entities.iter().filter(|e| {
             match &cam_info.target_layers {
                 None => true,
                 Some(layers) => layers.contains(&e.layer),
@@ -415,6 +415,26 @@ fn build_multi_camera_passes(
             format!("{}_src", cam_key)
         };
 
+        // Scale FlatEntity spatial properties if render_quality is applied
+        // This ensures the entities mathematically project to the same clip-space 
+        // bounds when drawn into the smaller scaled_width/height render target.
+        if (cam_info.render_scale - 1.0).abs() > 0.001 {
+            for fe in &mut cam_entities {
+                fe.x *= cam_info.render_scale;
+                fe.y *= cam_info.render_scale;
+                fe.width *= cam_info.render_scale;
+                fe.height *= cam_info.render_scale;
+                fe.intrinsic_width *= cam_info.render_scale;
+                fe.intrinsic_height *= cam_info.render_scale;
+                // Scale pixel-based params (stroke width, corner radius, etc.)
+                if fe.shader == "dashed_rect" || fe.shader == "shapes" || fe.shader == "shapes_mask_in" || fe.shader == "shapes_mask_out" || fe.shader == "outline" {
+                    for p in &mut fe.params {
+                        *p *= cam_info.render_scale;
+                    }
+                }
+            }
+        }
+
         // Use shared blend-aware batching helper
         emit_entities_with_blend(
             state,
@@ -427,7 +447,16 @@ fn build_multi_camera_passes(
 
         // Apply this camera's post_effects chain
         let mut current_key = src_key;
-        for (i, effect) in cam_info.post_effects.iter().enumerate() {
+        let mut scaled_effects = cam_info.post_effects.clone();
+        if (cam_info.render_scale - 1.0).abs() > 0.001 {
+            for effect in &mut scaled_effects {
+                for p in &mut effect.params {
+                    *p *= cam_info.render_scale;
+                }
+            }
+        }
+
+        for (i, effect) in scaled_effects.iter().enumerate() {
             let fx_key = format!("{}_fx_{}", cam_key, i);
             state.push_pass(RenderPass { pass_hash: 0,
                 output: fx_key.clone(),
