@@ -539,14 +539,12 @@ impl IfolRenderWeb {
                             intrinsic_updates.push((entity.id.clone(), w as f32, h as f32));
                         }
                     } else {
-                        // Video frame not ready (async seek pending).
-                        // Only block the blit if no texture exists at all (first load).
-                        // If a stale frame from a previous seek is cached, use it —
-                        // this prevents the scrub deadlock where rapid seeks keep
-                        // readyState at 1 and block ALL rendering indefinitely.
-                        if !self.engine.has_texture(url) {
-                            has_pending_video = true;
-                        }
+                        // Video entity is visible but frame not ready (async seek pending).
+                        // Block the blit so only COMPLETE frames are displayed —
+                        // the retry loop (RAF + ifol_video_seeked event) will re-render
+                        // once the seek completes. The bind_group_cache invalidation
+                        // in load_video_texture_web() ensures the new frame renders correctly.
+                        has_pending_video = true;
                     }
                 }
 
