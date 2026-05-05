@@ -426,12 +426,9 @@ fn build_multi_camera_passes(
                 fe.height *= cam_info.render_scale;
                 fe.intrinsic_width *= cam_info.render_scale;
                 fe.intrinsic_height *= cam_info.render_scale;
-                // Scale pixel-based params (stroke width, corner radius, etc.)
-                if fe.shader == "dashed_rect" || fe.shader == "shapes" || fe.shader == "shapes_mask_in" || fe.shader == "shapes_mask_out" || fe.shader == "outline" {
-                    for p in &mut fe.params {
-                        *p *= cam_info.render_scale;
-                    }
-                }
+                // DO NOT scale fe.params! Shaders like shapes.wgsl and dashed_rect.wgsl 
+                // use normalized coordinates (0.0 to 1.0) relative to UV space.
+                // Their physical pixel size scales automatically with fe.width and fe.height.
             }
         }
 
@@ -450,8 +447,34 @@ fn build_multi_camera_passes(
         let mut scaled_effects = cam_info.post_effects.clone();
         if (cam_info.render_scale - 1.0).abs() > 0.001 {
             for effect in &mut scaled_effects {
-                for p in &mut effect.params {
-                    *p *= cam_info.render_scale;
+                match effect.shader_id.as_str() {
+                    "blur" => {
+                        // params: [dir_x, dir_y, radius, texel_size]
+                        if effect.params.len() > 2 {
+                            effect.params[2] *= cam_info.render_scale;
+                        }
+                    }
+                    "drop_shadow" => {
+                        // params: [r, g, b, a, offset_x, offset_y, blur, pad]
+                        if effect.params.len() > 6 {
+                            effect.params[4] *= cam_info.render_scale;
+                            effect.params[5] *= cam_info.render_scale;
+                            effect.params[6] *= cam_info.render_scale;
+                        }
+                    }
+                    "glow" => {
+                        // params: [r, g, b, a, size, intensity, pad, pad]
+                        if effect.params.len() > 4 {
+                            effect.params[4] *= cam_info.render_scale;
+                        }
+                    }
+                    "selection_outline" => {
+                        // params: [thickness, pad, pad, pad]
+                        if effect.params.len() > 0 {
+                            effect.params[0] *= cam_info.render_scale;
+                        }
+                    }
+                    _ => {} // Other effects like color_grade, vignette use unitless values
                 }
             }
         }
