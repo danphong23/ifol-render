@@ -220,6 +220,17 @@ async function initEngine() {
     engine.set_select_mode($('selSelectMode').value);
     engine.setup_builtins();
     
+    // Wake up render loop on async video events
+    window.addEventListener('ifol_video_seeked', () => {
+        if (!isPlaying) requestRender();
+    });
+    window.addEventListener('ifol_video_ready', () => {
+        if (!isPlaying) requestRender();
+    });
+    window.addEventListener('ifol_audio_ready', () => {
+        if (!isPlaying) requestRender();
+    });
+    
     // Wire up the new asynchronous Javascript Event Callback interface
     engine.set_event_listener((evt) => {
         if (window.activeTestCase !== 20) return;

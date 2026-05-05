@@ -200,6 +200,11 @@ impl WasmAudioManager {
                     lock.ready = true;
                 }
             }
+            if let Some(window) = web_sys::window() {
+                if let Ok(event) = web_sys::Event::new("ifol_audio_ready") {
+                    let _ = window.dispatch_event(&event);
+                }
+            }
         }) as Box<dyn FnMut(web_sys::Event)>);
         let _ =
             el.add_event_listener_with_callback("canplay", ready_closure.as_ref().unchecked_ref());
