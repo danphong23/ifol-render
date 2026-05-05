@@ -446,6 +446,14 @@ impl Renderer {
 
     /// Resize the output.
     pub fn resize(&mut self, width: u32, height: u32) {
+        log::info!(
+            "[RESIZE] Renderer: {}x{} → {}x{} | CLEARING: bind_group_cache({}), texture_pool, effect_ctx | KEPT: texture_cache({} entries, {:.1}MB), graph_state({} nodes)",
+            self.width, self.height, width, height,
+            self.bind_group_cache.len(),
+            self.texture_cache.len(),
+            self.texture_cache_bytes as f64 / 1024.0 / 1024.0,
+            self.graph_state.nodes.len()
+        );
         self.width = width;
         self.height = height;
         self.engine.resize(width, height);
@@ -682,6 +690,13 @@ impl Renderer {
                 },
             );
             self.texture_cache_bytes += size_bytes;
+
+            // New texture object created → stale BindGroups that cached the old
+            // TextureView for this key must be dropped so they get recreated
+            // with the new TextureView. Without this, the shader renders the
+            // old/placeholder texture instead of the freshly uploaded video frame.
+            self.bind_group_cache
+                .retain(|(_, k0, k1), _| k0 != key && k1 != key);
         }
 
         let entry = self.texture_cache.get_mut(key).unwrap();

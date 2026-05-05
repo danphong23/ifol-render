@@ -20,6 +20,8 @@ pub struct VideoEntry {
     // Store closures so they are safely dropped when VideoEntry is dropped (no more memory leaks)
     _on_ready: Option<Closure<dyn FnMut(web_sys::Event)>>,
     _on_seeked: Option<Closure<dyn FnMut(web_sys::Event)>>,
+    /// Diagnostic: was last get_video_frame result Some? (suppress spam, only log transitions)
+    _diag_had_frame: bool,
 }
 
 impl Drop for VideoEntry {
@@ -82,6 +84,7 @@ impl WasmMediaManager {
             last_seen_frame: self.current_frame,
             _on_ready: None,
             _on_seeked: None,
+            _diag_had_frame: false,
         }));
 
         // Ready Callback
@@ -138,6 +141,13 @@ impl WasmMediaManager {
         entry.last_seen_frame = self.current_frame;
 
         if !entry.ready {
+            if entry._diag_had_frame {
+                log::info!(
+                    "[VIDEO] get_video_frame({}) -> None (not ready, readyState={})",
+                    entity_id, entry.el.ready_state()
+                );
+                entry._diag_had_frame = false;
+            }
             return None;
         }
 
@@ -192,10 +202,24 @@ impl WasmMediaManager {
             let w = el.video_width();
             let h = el.video_height();
             if w > 0 && h > 0 {
+                if !entry._diag_had_frame {
+                    log::info!(
+                        "[VIDEO] get_video_frame({}) -> Some({}x{}) | readyState={} | curTime={:.3} | target={:.3} | diff={:.4}",
+                        entity_id, w, h, el.ready_state(), el.current_time(), rounded_time, diff
+                    );
+                    entry._diag_had_frame = true;
+                }
                 return Some((el, w, h));
             }
         }
 
+        if entry._diag_had_frame {
+            log::info!(
+                "[VIDEO] get_video_frame({}) -> None (readyState={}, curTime={:.3}, target={:.3}, diff={:.4})",
+                entity_id, el.ready_state(), el.current_time(), rounded_time, diff
+            );
+            entry._diag_had_frame = false;
+        }
         None
     }
 

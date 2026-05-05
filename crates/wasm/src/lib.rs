@@ -50,6 +50,10 @@ pub struct IfolRenderWeb {
     post_effects_enabled: bool,
     /// Global render quality scale (0.0 to 1.0)
     render_quality: f32,
+    /// Diagnostic: last logged time (suppress spam from retry renders at same timestamp)
+    _diag_last_time: f64,
+    /// Diagnostic: last frame_complete value (log on transitions)
+    _diag_last_complete: bool,
 }
 
 #[wasm_bindgen]
@@ -98,6 +102,8 @@ impl IfolRenderWeb {
             on_event_callback: None,
             post_effects_enabled: true,
             render_quality: 1.0,
+            _diag_last_time: -1.0,
+            _diag_last_complete: true,
         })
     }
 
@@ -392,6 +398,19 @@ impl IfolRenderWeb {
 
         // 1. Evaluate ECS timeline and animation systems at `time_sec`
         let scene_fps = self.engine.settings().fps;
+        let render_w = self.engine.settings().width;
+        let render_h = self.engine.settings().height;
+
+        // Diagnostic: only log when time changes or state transitions (suppress retry spam)
+        let diag_should_log = (time_sec - self._diag_last_time).abs() > 0.0001;
+
+        if diag_should_log {
+            log::info!(
+                "[PIPE] ═══ render_frame_v2 ═══ t={:.3}s | cam={} | res={}x{} | editor={} | scope={:?} | scope_time={:?} | playing={}",
+                time_sec, camera_id, render_w, render_h, is_editor_mode,
+                self.render_scope, self.scope_time, self.is_playing
+            );
+        }
         let time_state = ifol_render_ecs::time::TimeState {
             global_time: time_sec,
             delta_time: 1.0 / scene_fps,
@@ -520,8 +539,14 @@ impl IfolRenderWeb {
                             intrinsic_updates.push((entity.id.clone(), w as f32, h as f32));
                         }
                     } else {
-                        // Video entity is visible but frame not ready (async seek pending)
-                        has_pending_video = true;
+                        // Video frame not ready (async seek pending).
+                        // Only block the blit if no texture exists at all (first load).
+                        // If a stale frame from a previous seek is cached, use it —
+                        // this prevents the scrub deadlock where rapid seeks keep
+                        // readyState at 1 and block ALL rendering indefinitely.
+                        if !self.engine.has_texture(url) {
+                            has_pending_video = true;
+                        }
                     }
                 }
 
@@ -544,6 +569,14 @@ impl IfolRenderWeb {
                     }
                 }
             }
+        }
+
+        // ── Pipeline Diagnostic: Video Scan Summary ──
+        if diag_should_log && (!active_video_entities.is_empty() || has_pending_video) {
+            log::info!(
+                "[VIDEO] Scan complete: {} video entities active, pending={}, buffering={:?}",
+                active_video_entities.len(), has_pending_video, buffering_assets
+            );
         }
 
         self.media_manager.cleanup_orphaned(&active_video_entities);
@@ -824,6 +857,16 @@ impl IfolRenderWeb {
         // Now we always render: non-video entities render immediately,
         // video entities show stale/placeholder until their frame arrives.
         let frame_complete = !has_pending_video;
+
+        // Diagnostic: log on time change OR on frame_complete transition
+        if diag_should_log || (frame_complete != self._diag_last_complete) {
+            log::info!(
+                "[PIPE] Frame compiled: {} passes | frame_complete={} | pending_video={} | buffering={}",
+                frame.passes.len(), frame_complete, has_pending_video, buffering_assets.len()
+            );
+        }
+        self._diag_last_time = time_sec;
+        self._diag_last_complete = frame_complete;
         self.engine.render_frame(&frame);
 
         // 5. Build and return the EngineStatus JSON manually
@@ -1336,9 +1379,14 @@ impl IfolRenderWeb {
     /// pixel coordinates are invalid at the new resolution.
     /// After calling resize(), push new frames computed for the new size.
     pub fn resize(&mut self, width: u32, height: u32) {
+        let old_w = self.engine.settings().width;
+        let old_h = self.engine.settings().height;
+        log::info!(
+            "[RESIZE] {}x{} → {}x{}",
+            old_w, old_h, width, height
+        );
         self.engine.resize(width, height);
         // Frame buffer coords are invalid at new resolution → must clear
         self.clear_frames();
-        log::info!("Resized to {}x{}, frame buffer cleared", width, height);
     }
 }

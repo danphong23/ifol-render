@@ -47,6 +47,8 @@ pub struct CoreEngine {
     text_cache: HashMap<String, (String, u32, u32)>,
     /// Polymorphic Media Backend
     pub backend: Arc<Box<dyn MediaBackend>>,
+    /// Diagnostic: last dirty count (suppress spam)
+    _diag_last_dirty: u32,
 }
 
 impl CoreEngine {
@@ -98,6 +100,7 @@ impl CoreEngine {
             ffmpeg_path: None,
             text_cache: HashMap::new(),
             backend: Arc::new(backend), // MediaBackend is not Send+Sync, acceptable for single-threaded use
+            _diag_last_dirty: 0,
         }
     }
 
@@ -125,10 +128,15 @@ impl CoreEngine {
         shaders::setup_builtins(&mut self.renderer);
     }
 
-    /// Change output resolution. Cached textures are preserved.
     pub fn resize(&mut self, width: u32, height: u32) {
+        let old_w = self.settings.width;
+        let old_h = self.settings.height;
         self.settings.width = width;
         self.settings.height = height;
+        log::info!(
+            "[RESIZE] CoreEngine: {}x{} \u{2192} {}x{} | clearing bind_group_cache, texture_pool, effect_ctx",
+            old_w, old_h, width, height
+        );
         self.renderer.resize(width, height);
     }
 
@@ -443,6 +451,8 @@ impl CoreEngine {
 
         let mut surface_frame_res = None;
         let mut has_output = false;
+        let mut diag_dirty_count: u32 = 0;
+        let mut diag_clean_count: u32 = 0;
 
         for (pidx, pass) in frame.passes.iter().enumerate() {
             log::debug!(
@@ -508,6 +518,17 @@ impl CoreEngine {
             }
 
             if is_dirty || pass.output == "final" {
+                diag_dirty_count += 1;
+                log::debug!(
+                    "[GRAPH] pass[{}] '{}' => DIRTY ({}x{}) | type={}",
+                    pidx, pass.output, target_w, target_h,
+                    match &pass.pass_type {
+                        PassType::Entities { entities, .. } => format!("Entities({})", entities.len()),
+                        PassType::Effect { shader, .. } => format!("Effect({})", shader),
+                        PassType::Snapshot { source_key } => format!("Snapshot({})", source_key),
+                        PassType::Output { entities, .. } => format!("Output(gizmos={})", entities.len()),
+                    }
+                );
                 match &pass.pass_type {
                 PassType::Entities {
                     entities,
@@ -596,8 +617,11 @@ impl CoreEngine {
                 }
                 }
             } else {
-                log::debug!("Skipping pass {} (hash match and texture preserved)", pass.output);
-                // TODO (T4.5b): Once full liveness analysis is implemented, we can release transient inputs here.
+                diag_clean_count += 1;
+                log::debug!(
+                    "[GRAPH] pass[{}] '{}' => CLEAN (hash match, texture exists)",
+                    pidx, pass.output
+                );
             }
 
             // Update the graph state
@@ -613,6 +637,15 @@ impl CoreEngine {
                 pass.output.clone(),
                 actual_hash,
             );
+        }
+
+        // Diagnostic: single summary per render_frame call, only when state changes
+        if diag_dirty_count != self._diag_last_dirty {
+            log::info!(
+                "[GRAPH] Frame: {} passes ({} dirty, {} clean)",
+                frame.passes.len(), diag_dirty_count, diag_clean_count
+            );
+            self._diag_last_dirty = diag_dirty_count;
         }
 
         self.renderer

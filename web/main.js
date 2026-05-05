@@ -160,14 +160,13 @@ function requestRender() {
     } catch(e) {}
     
     // Only blit GPU canvas to display canvas if the frame is fully ready.
-    // This prevents tearing and missing videos during scrubbing.
+    // This prevents partial rendering (light entities before heavy ones).
     if (frameComplete) {
         const ctx1 = canvas1.getContext('2d');
         ctx1.clearRect(0, 0, canvas1.width, canvas1.height);
         ctx1.drawImage(gpuCanvas, 0, 0);
     } else {
-        // If frame is incomplete and we aren't in the main playback loop, we MUST 
-        // poll again to ensure the frame eventually renders when the video finishes buffering.
+        // Frame incomplete — poll again to render when video finishes buffering.
         if (!playing) {
             requestAnimationFrame(requestRender);
         }
@@ -222,13 +221,13 @@ async function initEngine() {
     
     // Wake up render loop on async video events
     window.addEventListener('ifol_video_seeked', () => {
-        if (!isPlaying) requestRender();
+        if (!playing) requestRender();
     });
     window.addEventListener('ifol_video_ready', () => {
-        if (!isPlaying) requestRender();
+        if (!playing) requestRender();
     });
     window.addEventListener('ifol_audio_ready', () => {
-        if (!isPlaying) requestRender();
+        if (!playing) requestRender();
     });
     
     // Wire up the new asynchronous Javascript Event Callback interface
