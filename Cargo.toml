@@ -5,7 +5,6 @@ members = [
     "core",
     "crates/core",
     "audio",
-    "crates/wasm",
     "crates/cli",
 ]
 
